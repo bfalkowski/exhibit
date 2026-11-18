@@ -12,6 +12,11 @@ test('exhibit --version prints the version from package.json and exits 0', () =>
   assert.equal(out, pkg.version + '\n');
 });
 
+test('exhibit -v is the short form of --version', () => {
+  const out = execFileSync(process.execPath, [bin, '-v'], { encoding: 'utf8' });
+  assert.equal(out, pkg.version + '\n');
+});
+
 test('package.json names bin/exhibit.js as the exhibit command', () => {
   assert.equal(pkg.bin.exhibit, 'bin/exhibit.js');
 });
