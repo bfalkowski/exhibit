@@ -179,7 +179,7 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 
 What each version fills:
 
-- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. The other fields are absent, and the schema allows them only as null.
+- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. The other fields are absent, and the schema allows them only as null.
 - **S1, second half:** `reviews` and `ci`.
 - **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`.
 

@@ -50,10 +50,8 @@ function parseOptions(argv) {
 
   let since;
   if (values.since !== undefined) {
-    since = new Date(/T/.test(values.since) ? values.since : `${values.since}T00:00:00Z`);
-    if (!DATE.test(values.since) || Number.isNaN(since.getTime())) {
-      throw new ToolError(`--since must be a date like 2026-03-01 (UTC) or an ISO time, not "${values.since}".`);
-    }
+    since = parseSince(values.since);
+    if (!since) throw new ToolError(`--since must be a real date like 2026-03-01 (UTC) or an ISO time, not "${values.since}".`);
   }
 
   let limit;
@@ -65,14 +63,27 @@ function parseOptions(argv) {
   return { repo: values.repo, since, limit, json: values.json === true };
 }
 
+// Returns the Date for a --since value, or null when it is not a real date. new Date() rolls a
+// day that does not exist (2026-02-30) over into the next month, so the calendar date must
+// survive the round trip. The date part of an ISO time is checked only when it is in UTC.
+function parseSince(text) {
+  if (!DATE.test(text)) return null;
+  const isTime = text.includes('T');
+  const since = new Date(isTime ? text : `${text}T00:00:00Z`);
+  if (Number.isNaN(since.getTime())) return null;
+  if ((!isTime || text.endsWith('Z')) && !since.toISOString().startsWith(text.slice(0, 10))) return null;
+  return since;
+}
+
 async function writeAtomically(path, text) {
-  await mkdir(join(path, '..'), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
   try {
+    await mkdir(join(path, '..'), { recursive: true });
     await writeFile(temporary, text);
     await rename(temporary, path);
   } catch (error) {
-    await rm(temporary, { force: true });
+    // Best effort: when the folder itself is the problem, removing the temporary file fails too.
+    await rm(temporary, { force: true }).catch(() => {});
     throw new ToolError(`could not write ${OUTPUT}: ${error.message}`);
   }
 }

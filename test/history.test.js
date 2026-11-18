@@ -65,3 +65,12 @@ test('readHistory keeps a PR merged at exactly the since time', async () => {
   const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch, since: new Date('2026-03-01T09:00:00Z') });
   assert.deepEqual(lines.map((l) => l.number), [7, 4, 5]);
 });
+
+test('readHistory turns a GitHub reply that is not a list into a tool error', async () => {
+  const { ToolError } = await import('../src/tool-error.js');
+  const notJson = async () => new Response('<html>oops</html>', { status: 200 });
+  const notList = async () => new Response('{"message":"hi"}', { status: 200 });
+  for (const fetch of [notJson, notList]) {
+    await assert.rejects(readHistory({ repo: 'acme/widgets', token: 't', fetch }), (error) => error instanceof ToolError && /not a JSON list/.test(error.message));
+  }
+});

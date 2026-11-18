@@ -21,7 +21,16 @@ export function createGitHub({ token, fetch }) {
       throw new ToolError(`could not reach GitHub (${error.message}). Check the network and try again.`);
     }
     if (!response.ok) throw await apiError(response, url);
-    return { items: await response.json(), next: nextLink(response.headers.get('link')) };
+    let items;
+    try {
+      items = await response.json();
+    } catch {
+      items = undefined;
+    }
+    if (!Array.isArray(items)) {
+      throw new ToolError(`GitHub sent a reply that is not a JSON list for ${new URL(url).pathname}. Try again later, and report it as an Exhibit issue if it keeps happening.`);
+    }
+    return { items, next: nextLink(response.headers.get('link')) };
   }
 
   async function getAll(path) {
