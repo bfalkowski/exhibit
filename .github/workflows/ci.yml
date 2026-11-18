@@ -1,0 +1,43 @@
+name: CI
+
+# Pull requests only. Never pull_request_target: that runs with the base repo's secrets on code
+# from the pull request.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its run that is still going, which tested an old commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Every line of every tracked file, not just what the pull request adds, so a secret already on
+  # main is found too. It needs only a checkout and the runner's own Node, no npm ci.
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: node scripts/check-secrets.js --all
+
+  test:
+    name: Lint and test (Node 20)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test

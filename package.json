@@ -1,0 +1,23 @@
+{
+  "name": "exhibit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Every pull request brings its own evidence.",
+  "type": "module",
+  "bin": {
+    "exhibit": "bin/exhibit.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "eslint .",
+    "secrets": "node scripts/check-secrets.js --all"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "globals": "17.14.0"
+  }
+}
