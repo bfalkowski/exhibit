@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bfalkowski/exhibit/schema/history-line.schema.json",
+  "title": "One line of .exhibit/history.jsonl",
+  "description": "One merged PR (spec section 8.3). This version fills the PR fields and files. The fields that later tickets fill may be absent or null.",
+  "type": "object",
+  "required": ["number", "title", "body", "author", "labels", "merged_at", "base_sha", "merge_sha", "files"],
+  "additionalProperties": false,
+  "properties": {
+    "number": { "type": "integer", "minimum": 1 },
+    "title": { "type": "string" },
+    "body": { "type": ["string", "null"], "description": "null when the PR has no description." },
+    "author": { "type": ["string", "null"], "description": "The login. null when the account was deleted." },
+    "labels": { "type": "array", "items": { "type": "string" } },
+    "merged_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "base_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "merge_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "additions", "deletions"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "additions": { "type": "integer", "minimum": 0 },
+          "deletions": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "reviews": { "type": "null", "description": "Filled by a later ticket." },
+    "ci": { "type": "null", "description": "Filled by a later ticket." },
+    "classification": { "type": "null", "description": "Filled by a later ticket." },
+    "evidence_section": { "type": "null", "description": "Filled by a later ticket." },
+    "szz": { "type": "null", "description": "Filled by slice S2." },
+    "exhibit": { "type": "null", "description": "Filled by a later ticket." }
+  }
+}

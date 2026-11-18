@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { history } from '../src/commands/history.js';
+import { ToolError } from '../src/tool-error.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const [arg] = process.argv.slice(2);
+const [command, ...rest] = process.argv.slice(2);
 
-if (arg === '--version' || arg === '-v') {
-  console.log(pkg.version);
-} else {
-  console.error(`exhibit: unknown command ${arg === undefined ? '(none)' : arg}. Only --version exists yet.`);
+try {
+  if (command === '--version' || command === '-v') {
+    console.log(pkg.version);
+  } else if (command === 'history') {
+    await history(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout });
+  } else {
+    throw new ToolError(`unknown command ${command === undefined ? '(none)' : command}. The commands are history and --version.`);
+  }
+} catch (error) {
+  if (!(error instanceof ToolError)) throw error;
+  console.error(`exhibit: ${error.message}`);
   process.exitCode = 2;
 }
