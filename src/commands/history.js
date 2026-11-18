@@ -64,15 +64,15 @@ function parseOptions(argv) {
 }
 
 // Returns the Date for a --since value, or null when it is not a real date. new Date() rolls a
-// day that does not exist (2026-02-30) over into the next month, so the calendar date must
-// survive the round trip. The date part of an ISO time is checked only when it is in UTC.
+// day that does not exist (2026-02-30) over into the next month. Whether a day exists does not
+// depend on the time or the offset, so the date part is checked by itself, for every input.
 function parseSince(text) {
   if (!DATE.test(text)) return null;
-  const isTime = text.includes('T');
-  const since = new Date(isTime ? text : `${text}T00:00:00Z`);
-  if (Number.isNaN(since.getTime())) return null;
-  if ((!isTime || text.endsWith('Z')) && !since.toISOString().startsWith(text.slice(0, 10))) return null;
-  return since;
+  const day = text.slice(0, 10);
+  const midnight = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(midnight.getTime()) || midnight.toISOString().slice(0, 10) !== day) return null;
+  const since = new Date(text.includes('T') ? text : `${day}T00:00:00Z`);
+  return Number.isNaN(since.getTime()) ? null : since;
 }
 
 async function writeAtomically(path, text) {

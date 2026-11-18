@@ -92,6 +92,8 @@ test('bad arguments give exit 2 and say what is wrong', () => {
     [['history', '--repo', 'acme/widgets', '--since', 'last week'], /--since/],
     [['history', '--repo', 'acme/widgets', '--since', '2026-02-30'], /--since/],
     [['history', '--repo', 'acme/widgets', '--since', '2026-04-31T10:00:00Z'], /--since/],
+    [['history', '--repo', 'acme/widgets', '--since', '2026-02-30T10:00:00+01:00'], /--since/],
+    [['history', '--repo', 'acme/widgets', '--since', '2026-13-01'], /--since/],
     [['history', '--repo', 'acme/widgets', '--limit', '0'], /--limit/],
     [['history', '--repo', 'acme/widgets', '--frobnicate'], /frobnicate/]
   ]) {
