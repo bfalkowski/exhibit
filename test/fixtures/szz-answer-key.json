@@ -1,0 +1,38 @@
+{
+  "about": "Answer key for the repo that test/fixtures/szz-repo.js builds. For each fix PR, the introducing PRs that SZZ must find. An empty introducing_prs means SZZ must make no link.",
+  "fixes": [
+    {
+      "fix_pr": 6,
+      "introducing_prs": [1],
+      "case": "lines from one earlier PR",
+      "lines": ["src/cart.js: sum += item.price; (added by PR 1, a merge commit)"]
+    },
+    {
+      "fix_pr": 7,
+      "introducing_prs": [2, 3],
+      "case": "lines from two earlier PRs",
+      "lines": [
+        "src/discount.js: return total - percent; (added by PR 2, a squash merge)",
+        "src/tax.js: return Math.round(total + tax); (added by PR 3, a merge commit, in the first of its two commits)"
+      ]
+    },
+    {
+      "fix_pr": 8,
+      "introducing_prs": [],
+      "case": "whitespace only",
+      "lines": ["src/format.js: the pad body goes from four spaces of indent to two"]
+    },
+    {
+      "fix_pr": 9,
+      "introducing_prs": [],
+      "case": "moved lines only",
+      "lines": ["src/format.js: the receipt function moves to the top of the file"]
+    },
+    {
+      "fix_pr": 10,
+      "introducing_prs": [],
+      "case": "comments only",
+      "lines": ["src/format.js: two comment lines get new words"]
+    }
+  ]
+}
