@@ -2,8 +2,8 @@
 // history lines. Both files come from one list of blocks, so they always hold the same facts.
 
 // The rule for weak history (spec 8.5). The history is weak when it has fewer than `minFixPrs`
-// fix PRs, when SZZ linked none of them, or when fewer than half of the escaped defects have a
-// link with a confidence of `strongConfidence` or more.
+// fix PRs, when SZZ linked none of them or did not run, or when fewer than half of the escaped
+// defects have a link with a confidence of `strongConfidence` or more.
 export const WEAK_HISTORY = { minFixPrs: 10, strongConfidence: 0.5 };
 
 // The most lines the report shows for one link. history.jsonl has them all.
@@ -43,7 +43,7 @@ function reportBlocks(lines, { repo, szzRan, fixSignals }) {
     ));
   }
   blocks.push(paragraph(
-    `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them, ` +
+    `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them or did not run, ` +
     `or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
   ));
 

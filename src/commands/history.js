@@ -24,7 +24,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
-// Then it writes the report of escaped defects, as report.md and report.html (spec 8.5).
+// It also writes the report of escaped defects, as report.md and report.html (spec 8.5). It writes
+// the three files together: when one write fails, none of the three changes.
 // GitHub replies go through the shared reply cache (spec 8.6), unless --no-cache turns it off. At
 // the end it says how many requests went to GitHub and how many got a 304. A run that fails says
 // it too, on stderr.
@@ -74,10 +75,12 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
     throw new ToolError(`GitHub sent data that does not fit the history schema, so ${OUTPUT} was not written:\n  ${shown}${more}\nReport this as an Exhibit issue, with the PR numbers.`);
   }
 
-  await writeAtomically(cwd, OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join(''));
   const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals });
-  await writeAtomically(cwd, REPORT.markdown, report.markdown);
-  await writeAtomically(cwd, REPORT.html, report.html);
+  await writeTogether(cwd, [
+    [OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join('')],
+    [REPORT.markdown, report.markdown],
+    [REPORT.html, report.html]
+  ]);
 
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
@@ -190,17 +193,35 @@ function parseSince(text) {
   return Number.isNaN(since.getTime()) ? null : since;
 }
 
-// Writes `text` to `name` in `cwd`, so a failed write leaves the older file as it was.
-async function writeAtomically(cwd, name, text) {
-  const path = join(cwd, name);
-  const temporary = `${path}.${process.pid}.tmp`;
+// Writes each [name, text] of `files` in `cwd`, so the files keep the same facts. It writes every
+// file to a temporary file first, and renames them only when all the writes worked. So a failed
+// write, as on a full disk, leaves all the older files as they were, and no temporary file.
+async function writeTogether(cwd, files) {
+  const temporaries = [];
   try {
-    await mkdir(join(path, '..'), { recursive: true });
-    await writeFile(temporary, text);
-    await rename(temporary, path);
+    for (const [name, text] of files) {
+      const path = join(cwd, name);
+      const temporary = `${path}.${process.pid}.tmp`;
+      try {
+        await mkdir(join(path, '..'), { recursive: true });
+        temporaries.push(temporary);
+        await writeFile(temporary, text);
+      } catch (error) {
+        throw new ToolError(`could not write ${name}: ${error.message}`);
+      }
+    }
+    for (const [index, [name]] of files.entries()) {
+      try {
+        await rename(temporaries[index], join(cwd, name));
+      } catch (error) {
+        throw new ToolError(`could not write ${name}: ${error.message}`);
+      }
+    }
   } catch (error) {
-    // Best effort: when the folder itself is the problem, removing the temporary file fails too.
-    await rm(temporary, { force: true }).catch(() => {});
-    throw new ToolError(`could not write ${name}: ${error.message}`);
+    // A rename that fails after an earlier one worked still leaves a mix. A rename needs no free
+    // space, so this is rare. Best effort: when the folder itself is the problem, removing a
+    // temporary file fails too.
+    await Promise.all(temporaries.map((temporary) => rm(temporary, { force: true }).catch(() => {})));
+    throw error;
   }
 }

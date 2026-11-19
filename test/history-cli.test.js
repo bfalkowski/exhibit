@@ -14,6 +14,7 @@ import { gitEnv } from './fixtures/git-env.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+const fullDisk = fileURLToPath(new URL('../test-support/preload-full-disk.js', import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/github/${name}.json`, import.meta.url));
 
 // Makes a new empty folder. The folder is removed when test t ends.
@@ -26,11 +27,14 @@ function newFolder(t) {
 // Runs `exhibit ...args` for test t in a new empty folder, with a fetch that replays the named fixture.
 // token: null runs it with no GITHUB_TOKEN at all.
 // fixturePath: a fixture file built by a test, in place of a named one.
+// failWrite: a write to a path that holds this text fails, as on a full disk.
 // history runs git inside a clone, so it gets a clean env: see gitEnv.
-function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t) } = {}) {
+function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t), failWrite } = {}) {
   const env = gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: fixturePath });
   if (token !== null) env.GITHUB_TOKEN = token;
-  const run = spawnSync(process.execPath, ['--import', preload, bin, ...args], { cwd, env, encoding: 'utf8' });
+  const preloads = failWrite === undefined ? ['--import', preload] : ['--import', preload, '--import', fullDisk];
+  if (failWrite !== undefined) env.EXHIBIT_TEST_FULL_DISK = failWrite;
+  const run = spawnSync(process.execPath, [...preloads, bin, ...args], { cwd, env, encoding: 'utf8' });
   return { ...run, cwd, historyPath: join(cwd, '.exhibit', 'history.jsonl') };
 }
 
@@ -334,6 +338,20 @@ test('a folder that cannot be written gives exit 2 and a message, not a stack tr
   assert.equal(run.status, 2);
   assert.match(run.stderr, /could not write \.exhibit\/history\.jsonl/);
   assert.doesNotMatch(run.stderr, /\n\s+at /);
+});
+
+test('when the last write fails, the run keeps all three old files, so they still match', (t) => {
+  const cwd = newFolder(t);
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const names = ['history.jsonl', 'report.md', 'report.html'];
+  const before = names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8'));
+  // The same run with --limit 2 would write new files, but the disk is full when report.html is written.
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets', '--full', '--limit', '2'], { cwd, failWrite: 'report.html' });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /could not write \.exhibit\/report\.html: ENOSPC/);
+  assert.deepEqual(names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8')), before, 'no file changed');
+  assert.deepEqual(readdirSync(join(cwd, '.exhibit')).sort(), [...names].sort(), 'no temporary file is left');
 });
 
 // Writes a copy of the acme-widgets fixture where every 200 reply has an ETag, in `dir`.

@@ -260,7 +260,7 @@ One escaped defect per line, with these fields:
 - The escaped defects found, each with its SZZ evidence.
 - How sure Exhibit is, in plain words. With weak history, the report says so instead of guessing.
 
-`exhibit history` writes the report to `.exhibit/report.md` and `.exhibit/report.html`, after it writes `.exhibit/history.jsonl`. A run that fails writes no report. Both files come from the same content, so they hold the same facts. `--json` names the two files in its `report` field. The report has these parts, in this order:
+`exhibit history` writes the report to `.exhibit/report.md` and `.exhibit/report.html`, together with `.exhibit/history.jsonl`. It writes all three to temporary files first, and renames them only when every write worked. So a run that fails, for example on a full disk, changes none of the three files, and they keep the same facts. Both files come from the same content, so they hold the same facts. `--json` names the two files in its `report` field. `exhibit backtest` must not write to these two paths, or it would write over the history report. Its report paths are not set yet: S8 sets them. The report has these parts, in this order:
 
 1. **The counts.** The number of merged PRs read, the number of fix PRs, and how many of the fix PRs SZZ linked to an introducing PR. Each fix PR with at least one link is an escaped defect. When SZZ skipped a fix PR (section 9.2), the count says so. With no fix PRs, the report says so in one sentence and has no list of defects. Outside a clone, SZZ did not run, and the report says it cannot show escaped defects.
 2. **How sure Exhibit is.** Whether the history is weak, and why, in plain words, then the rule below.
