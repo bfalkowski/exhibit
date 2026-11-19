@@ -23,7 +23,10 @@ export function defectId(fixPr) {
 // Returns the problems with one labels line, or an empty list when it passes the schema.
 export function checkLabelLine(line) {
   const problems = checkSchema(schema, line);
-  if (problems.length === 0 && line.id !== defectId(line.fix_pr)) problems.push(`/id: must be ${defectId(line.fix_pr)}, the id of fix PR ${line.fix_pr}`);
+  if (problems.length > 0) return problems;
+  if (line.id !== defectId(line.fix_pr)) problems.push(`/id: must be ${defectId(line.fix_pr)}, the id of fix PR ${line.fix_pr}`);
+  const rejected = (line.rejected_prs ?? []).length > 0;
+  if (line.szz_link_rejected !== rejected) problems.push(`/szz_link_rejected: must be ${rejected}, because rejected_prs is ${rejected ? 'not empty' : 'empty'}`);
   return problems;
 }
 
@@ -32,9 +35,12 @@ export function checkLabelLine(line) {
  * as soon as it comes, so quitting halfway keeps the work done so far.
  *
  * `ask(defect, { categories, text, position, open })` is the answer source: a person at a
- * keyboard, or a script in a test. `defect` has `id`, `fix_pr` and `introducing_prs`. `text` shows
- * the defect with its SZZ evidence. `categories` are the categories used so far. It returns
- * { code, category, would_have_caught }, or 'skip', or 'quit'.
+ * keyboard, or a script in a test. `defect` has `id`, `fix_pr`, `introducing_prs` and `links`,
+ * which holds `pr` and `confidence` for each SZZ link. `text` shows the defect with its SZZ
+ * evidence. `categories` are the categories used so far. It returns
+ * { code, category, would_have_caught, rejected_prs }, or 'skip', or 'quit'. `rejected_prs` names
+ * the links the person rejected. It can name every link: the defect is then a real bug with no
+ * known introducing PR.
  *
  * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
  */
@@ -43,7 +49,7 @@ export async function labelDefects({ cwd, ask, now = () => new Date() }) {
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
   const categories = [...new Set(labels.map((label) => label.category))];
-  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), fix }));
+  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence }) => ({ pr, confidence })), fix }));
   const open = defects.filter((defect) => !done.has(defect.id));
 
   let shown = 0;
@@ -53,21 +59,25 @@ export async function labelDefects({ cwd, ask, now = () => new Date() }) {
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs }, { categories: [...categories], text, position: shown, open: open.length });
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length });
     if (reply === 'quit') break;
     if (reply === 'skip') {
       skipped += 1;
       continue;
     }
+    const rejected = reply.rejected_prs ?? [];
+    const unknown = rejected.find((pr) => !defect.introducing_prs.includes(pr));
+    if (unknown !== undefined) throw new ToolError(`PR ${unknown} is not a link of ${defect.id}, so it cannot be rejected. Its links are PRs ${defect.introducing_prs.join(', ')}.`);
     const line = {
       id: defect.id,
       fix_pr: defect.fix_pr,
-      introducing_prs: defect.introducing_prs,
+      introducing_prs: defect.introducing_prs.filter((pr) => !rejected.includes(pr)),
+      rejected_prs: defect.introducing_prs.filter((pr) => rejected.includes(pr)),
       code: reply.code,
       category: reply.category,
       would_have_caught: reply.would_have_caught,
       labeled_by: 'person',
-      szz_link_rejected: false,
+      szz_link_rejected: rejected.length > 0,
       labeled_at: now().toISOString()
     };
     const problems = checkLabelLine(line);

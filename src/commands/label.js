@@ -7,9 +7,10 @@ const USAGE = 'Usage: exhibit label [--json]';
 
 // `exhibit label [--json]`
 // Shows each escaped defect in .exhibit/history.jsonl that has no label yet, with its SZZ
-// evidence, and asks the person for a code, a category and the evidence that would have caught
-// it. Each answer goes to .exhibit/labels.jsonl at once (spec 8.4). With --json, the defects and
-// the questions go to stderr, and stdout gets only the summary at the end.
+// evidence. The person keeps or rejects each SZZ link, then gives a code, a category and the
+// evidence that would have caught it. Each answer goes to .exhibit/labels.jsonl at once (spec
+// 8.4). With --json, the defects and the questions go to stderr, and stdout gets only the summary
+// at the end.
 export async function label(argv, { cwd, stdin, stdout, stderr, now }) {
   const options = parseOptions(argv);
   const screen = options.json ? stderr : stdout;
@@ -61,11 +62,21 @@ function createKeyboard({ input, output }) {
 
   async function ask(defect, { categories, text, position, open }) {
     if (!introduced) {
-      output.write(`${open} escaped ${open === 1 ? 'defect has' : 'defects have'} no code yet. For each one, type what went wrong, its category, and the evidence that would have caught it. ` +
+      output.write(`${open} escaped ${open === 1 ? 'defect has' : 'defects have'} no code yet. For each one, keep or reject each SZZ link, then type what went wrong, its category, and the evidence that would have caught it. ` +
         `Each label is saved as soon as you give it. Type s to skip a defect for now, or q at any question to quit.\n`);
       introduced = true;
     }
     output.write(`\n${defect.id}, ${position} of ${open} with no code yet\n${text}\n`);
+    const rejected = [];
+    for (const link of defect.links) {
+      const choice = await keepOrReject(link);
+      if (choice === null) return 'quit';
+      if (choice === 's') return 'skip';
+      if (choice === 'r') rejected.push(link.pr);
+    }
+    if (rejected.length > 0 && rejected.length === defect.links.length) {
+      output.write('You rejected every link, so this bug has no known introducing PR. It is still a real bug: give it a code, or s to skip it.\n');
+    }
     const code = await question('Code: what went wrong, in a few words. Or s to skip.');
     if (code === null) return 'quit';
     if (code.toLowerCase() === 's') return 'skip';
@@ -76,7 +87,18 @@ function createKeyboard({ input, output }) {
     const caught = await question('Would have caught it: the evidence that would have caught this bug.');
     if (caught === null) return 'quit';
     output.write(`Saved ${defect.id}.\n`);
-    return { code, category, would_have_caught: caught };
+    return { code, category, would_have_caught: caught, rejected_prs: rejected };
+  }
+
+  // Returns k to keep the link, r to reject it, s to skip the defect, or null to quit.
+  async function keepOrReject(link) {
+    for (;;) {
+      const answer = await question(`Link to PR ${link.pr}, confidence ${Math.round(link.confidence * 100)}%: k to keep it, or r to reject it as a false link. Or s to skip this defect.`);
+      if (answer === null) return null;
+      const choice = answer.toLowerCase();
+      if (choice === 'k' || choice === 'r' || choice === 's') return choice;
+      output.write('Please type k, r or s.\n');
+    }
   }
 
   return { ask, close: () => reader.close() };
