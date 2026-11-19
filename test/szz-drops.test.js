@@ -175,3 +175,31 @@ test('newer than the bug report: a line whose commit came after the report is dr
   assert.deepEqual(result.dropped, [{ path: 'a.js', line: 3, text: 'line 3', reason: 'newer than the bug report' }]);
   assert.deepEqual(dropNewerLines([older, newer], null), { kept: [older, newer], dropped: [] });
 });
+
+test('whitespace: in Python the indent is code, so a fix that only moves a line out of a block counts', () => {
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 5, deleted: ['        return total'], added: ['    return total'] }] }));
+  assert.deepEqual(counted(result), [['a.py', [5]]]);
+  // Whitespace after the indent still does not count.
+  const inside = countedLines(diff({ path: 'a.py', hunks: [{ at: 5, deleted: ['    x = a+b'], added: ['    x = a + b'] }] }));
+  assert.deepEqual(dropped(inside), [['a.py', 5, 'whitespace']]);
+});
+
+test('whitespace: a line that the same hunk adds back exactly is a moved line, not whitespace', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] }] }));
+  assert.deepEqual(dropped(result), [['a.js', 1, 'moved'], ['a.js', 2, 'moved']]);
+});
+
+test('comments: a code line that starts with the * operator counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty;'], added: ['  * qty * rate;'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5]]]);
+});
+
+test('comments: a * row counts as a comment when the hunk closes the block or the row is a JSDoc tag', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 2, deleted: [' * Pads a label.', ' * @param width the size', ' */'], added: [' * Pads a label on the right.'] },
+    { at: 9, deleted: [' * @returns the label'] },
+    { at: 12, deleted: [' * Old words. */'] }
+  ] }));
+  assert.deepEqual(counted(result), []);
+  assert.ok(result.dropped.every((d) => d.reason === 'comment'));
+});

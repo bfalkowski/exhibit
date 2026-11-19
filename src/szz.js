@@ -221,26 +221,29 @@ export function countedLines(diff) {
   const hunks = parseHunks(diff);
   const added = hunks.flatMap((hunk, at) => {
     const comments = markComments(hunk.added, hunk.newPath);
-    return hunk.added.map((text, i) => ({ at, key: squash(text), comment: comments[i], used: false }));
+    return hunk.added.map((text, i) => ({ at, text, key: squash(text, hunk.newPath), comment: comments[i], used: false }));
   });
   const deleted = hunks.flatMap((hunk, at) => {
     const comments = markComments(hunk.deleted.map((row) => row.text), hunk.oldPath);
-    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text), comment: comments[i], reason: null }));
+    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null }));
   });
 
   // Finds an added line with the same text, give or take whitespace, in the same hunk or in
   // another one, and uses it up.
+  // Returns the matched line, or undefined.
   const pair = (line, sameHunk) => {
     const match = added.find((row) => !row.used && row.key === line.key && (row.at === line.at) === sameHunk);
     if (match) match.used = true;
-    return match !== undefined;
+    return match;
   };
+  // A line that the same hunk adds back with the very same text only changed its place.
   for (const line of deleted) {
-    if (line.key !== '' && pair(line, true)) line.reason = 'whitespace';
+    const match = line.key === '' ? undefined : pair(line, true);
+    if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
   }
   // A blank line that another hunk adds back moved with the block around it.
   for (const line of deleted) {
-    if (line.reason === null && pair(line, false)) line.reason = 'moved';
+    if (line.reason === null && pair(line, false) !== undefined) line.reason = 'moved';
     else if (line.reason === null && line.key === '') line.reason = 'whitespace';
   }
   const code = new Set(added.filter((row) => !row.comment && row.key !== '').map((row) => row.key));
@@ -257,8 +260,13 @@ export function countedLines(diff) {
   return { counted, dropped };
 }
 
-// The text with all whitespace taken out, so two lines that differ only in whitespace match.
-const squash = (text) => text.replace(/\s+/g, '');
+// The text with whitespace taken out, so two lines that differ only in whitespace match. In
+// Python the indent says which block a line is in, so it is code and stays.
+const squash = (text, path) => {
+  const words = text.replace(/\s+/g, '');
+  const indent = words !== '' && commentStyle(path) === 'hash' ? /^\s*/.exec(text)[0] : '';
+  return indent + words;
+};
 
 // The words inside a comment line, without its comment marks.
 const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').replace(/\*+\/$/, '');
@@ -272,20 +280,23 @@ function commentStyle(path) {
 }
 
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
-// changed rows, so a row inside a block comment that opens before the hunk counts only when it
-// starts with "*", as JSDoc rows do.
+// changed rows, so a block comment can open before the hunk. A row that starts with "*" counts
+// as a row of such a block only when the row or a later row of the hunk closes the block with
+// "*/", or when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as
+// "* qty;" after a line that ends in "price".
 function markComments(texts, path) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
   if (style !== 'slash') return texts.map(() => false);
   let inBlock = false;
-  return texts.map((text) => {
+  return texts.map((text, i) => {
     let rest = text.trim();
     if (!inBlock) {
       if (rest.startsWith('//')) return true;
       if (/^\*(\s|\/|$)/.test(rest)) {
         const end = rest.indexOf('*/');
-        return end === -1 || rest.slice(end + 2).trim() === '';
+        if (end !== -1) return rest.slice(end + 2).trim() === '';
+        return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some((later) => later.includes('*/'));
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
