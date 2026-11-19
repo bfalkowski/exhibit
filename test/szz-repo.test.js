@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { checkHistoryLine } from '../src/history-schema.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 
 function git(dir, args) {
@@ -99,7 +100,8 @@ test('the fixture repo and its records match the answer key', async (t) => {
       }
       assert.match(pr.base_sha, /^[0-9a-f]{40}$/);
       assert.match(pr.merge_sha, /^[0-9a-f]{40}$/);
-      assert.equal(typeof pr.classification.is_fix, 'boolean');
+      assert.equal(typeof pr.classification.fix, 'boolean');
+      assert.deepEqual(checkHistoryLine(pr), [], `PR ${pr.number} passes the history schema`);
     }
   });
 
@@ -140,7 +142,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
   });
 
   await t.test('the answer key names every fix PR, and only fix PRs', () => {
-    const fixes = history.filter((pr) => pr.classification.is_fix).map((pr) => pr.number);
+    const fixes = history.filter((pr) => pr.classification.fix).map((pr) => pr.number);
     assert.deepEqual(key.fixes.map((f) => f.fix_pr).sort((a, b) => a - b), fixes);
   });
 

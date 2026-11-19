@@ -11,7 +11,8 @@ const good = () => ({
   merged_at: '2026-03-05T12:00:00Z',
   base_sha: 'b'.repeat(40),
   merge_sha: 'a'.repeat(40),
-  files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }]
+  files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],
+  classification: { fix: false, fix_signal: null }
 });
 
 test('a line with the fields this version fills passes', () => {
@@ -19,8 +20,20 @@ test('a line with the fields this version fills passes', () => {
 });
 
 test('the fields later tickets fill may be absent or null', () => {
-  const line = { ...good(), reviews: null, ci: null, classification: null, evidence_section: null, szz: null, exhibit: null };
+  const line = { ...good(), reviews: null, ci: null, evidence_section: null, szz: null, exhibit: null };
   assert.deepEqual(checkHistoryLine(line), []);
+});
+
+test('classification must say whether the PR is a fix and which signal matched', () => {
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'title:fix' } }), []);
+  const { classification, ...without } = good();
+  assert.ok(classification);
+  assert.deepEqual(checkHistoryLine(without), ['/: misses the field classification']);
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: null }), ['/classification: must be object, not null']);
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: 'yes', fix_signal: 'bug' } }).sort(), [
+    '/classification/fix: must be boolean, not string',
+    '/classification/fix_signal: does not match ^(label|title|branch):.+$'
+  ]);
 });
 
 test('each problem names where it is', () => {

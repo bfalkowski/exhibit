@@ -179,9 +179,10 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 
 What each version fills:
 
-- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. The other fields are absent, and the schema allows them only as null.
+- **S1, first half (done):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. The fields that no version fills yet are absent, and the schema allows them only as null.
+- **S2, fix signals (now):** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`.
 - **S1, second half:** `reviews` and `ci`.
-- **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`.
+- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`.
 
 ### 8.4 `.exhibit/labels.jsonl`
 
@@ -208,7 +209,14 @@ One escaped defect per line, with these fields:
 ### 9.1 Classifying a change
 
 - Kinds are matched by globs on the changed file paths.
-- A PR counts as a fix when any signal in `fix_signals` matches: a label, a title prefix, a branch prefix, or a linked issue with a bug label.
+- A PR counts as a fix when any signal in `fix_signals` matches. A signal is a type and a value, with a colon between them:
+  - `label:bug` matches a label named `bug`. The whole name must match.
+  - `title:fix` matches a title that starts with the word `fix`. It matches "fix: crash", "Fix the crash" and "fix(cli): crash". It does not match "Fixture for tests" or "Add prefix fixer", because a prefix is not "contains", and the word must end where the prefix ends.
+  - `branch:fix/` matches a head branch whose name starts with `fix/`.
+  - All matching ignores case.
+- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads only this one setting from the file, and the other settings are not checked until slice S4.
+- A `fix_signals` that is not a list, is empty, or has a signal that does not start with `label:`, `title:` or `branch:` makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
+- A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
 - A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
 
 ### 9.2 SZZ

@@ -35,7 +35,8 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
       { path: 'src/cache.js', additions: 120, deletions: 0 },
       { path: 'src/widget.js', additions: 8, deletions: 3 },
       { path: 'test/cache.test.js', additions: 64, deletions: 0 }
-    ]
+    ],
+    classification: { fix: false, fix_signal: null }
   });
 });
 
@@ -73,4 +74,24 @@ test('readHistory turns a GitHub reply that is not a list into a tool error', as
   for (const fetch of [notJson, notList]) {
     await assert.rejects(readHistory({ repo: 'acme/widgets', token: 't', fetch }), (error) => error instanceof ToolError && /not a JSON list/.test(error.message));
   }
+});
+
+test('readHistory marks fix PRs with the default signals when it gets none', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.deepEqual(lines.map((l) => [l.number, l.classification]), [
+    [7, { fix: false, fix_signal: null }],
+    [4, { fix: false, fix_signal: null }],
+    [5, { fix: true, fix_signal: 'label:bug' }],
+    [3, { fix: false, fix_signal: null }],
+    [1, { fix: false, fix_signal: null }]
+  ]);
+});
+
+test('readHistory matches a branch signal against the PR head branch', async () => {
+  const fixSignals = ['branch:topic-4', 'title:update'];
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')), fixSignals });
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [
+    [4, 'branch:topic-4'],
+    [3, 'title:update']
+  ]);
 });

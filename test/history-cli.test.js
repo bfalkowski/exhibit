@@ -32,6 +32,33 @@ test('exhibit history writes one schema-valid line for each merged PR, then exit
   assert.match(run.stdout, /5 merged PRs/);
 });
 
+test('history marks fix PRs with the default signals when there is no evidence.yml', () => {
+  const run = exhibit(['history', '--repo', 'acme/widgets']);
+  assert.equal(run.status, 0, run.stderr);
+  const fixes = readLines(run.historyPath).filter((l) => l.classification.fix);
+  assert.deepEqual(fixes.map((l) => [l.number, l.classification.fix_signal]), [[5, 'label:bug']]);
+});
+
+test('a custom fix_signals list in evidence.yml replaces the defaults', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [title:rename]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title:rename']]);
+});
+
+test('a malformed fix_signals gives exit 2 with a message, and writes no file', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [bug]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[0\] is "bug"/);
+  assert.doesNotMatch(run.stderr, /\n\s+at /);
+  assert.ok(!existsSync(run.historyPath));
+});
+
 test('--since keeps PRs merged on or after the date', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets', '--since', '2026-03-01']);
   assert.equal(run.status, 0, run.stderr);
