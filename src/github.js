@@ -2,6 +2,13 @@ import { ToolError } from './tool-error.js';
 
 const API = 'https://api.github.com';
 
+// The token permissions that Exhibit's requests need (spec 8.3). Pass one as `permission`.
+export const PERMISSIONS = {
+  pullRequests: 'Pull requests: read',
+  checks: 'Checks: read',
+  commitStatuses: 'Commit statuses: read'
+};
+
 // When GitHub says to wait, the client waits and asks again, at most this many times.
 const MAX_WAITS = 3;
 // A wait longer than this fails instead, so a run never hangs for most of an hour.
@@ -43,16 +50,20 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
 
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
+  // A reply that is still a rate limit when the waits end does not blame a missing permission.
   async function getJson(url, emptyOn = [], permission) {
     let response = await request(url);
-    for (let waits = 0; !response.ok && waits < MAX_WAITS; waits++) {
-      const ms = await rateLimitWait(response, now(), waits, random);
-      if (ms === null || ms > LONGEST_WAIT_MS) break;
-      await sleep(ms);
+    let limited = false;
+    for (let waits = 0, secondaryWaits = 0; !response.ok; waits++) {
+      const wait = await rateLimitWait(response, now(), secondaryWaits, random);
+      limited = wait !== null;
+      if (!limited || waits === MAX_WAITS || wait.ms > LONGEST_WAIT_MS) break;
+      if (wait.secondary) secondaryWaits++;
+      await sleep(wait.ms);
       response = await request(url);
     }
     if (emptyOn.includes(response.status)) return { reply: [], response };
-    if (!response.ok) throw await apiError(response, url, permission);
+    if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
     try {
       return { reply: await response.json(), response };
     } catch {
@@ -92,27 +103,27 @@ function notShaped(url, shape) {
   return new ToolError(`GitHub sent a reply that is not ${shape} for ${new URL(url).pathname}. Try again later, and report it as an Exhibit issue if it keeps happening.`);
 }
 
-// Returns how many milliseconds GitHub asks us to wait before we ask again, or null when the
-// reply is not a rate limit. GitHub says to wait in one of three ways:
+// Returns how long GitHub asks us to wait before we ask again, or null when the reply is not a
+// rate limit. `ms` is the wait in milliseconds, and `secondary` is true for a secondary limit. GitHub says to wait in one of three ways:
 // - a retry-after header, in whole seconds or as an HTTP date. Any other value counts as no
 //   retry-after: Date.parse reads "1.5" as a date in 2001, which would mean no wait at all;
 // - no requests left until the x-ratelimit-reset time (in Unix seconds);
 // - a message that names a secondary rate limit, with neither header. Then we wait one minute,
-//   twice that after the second limit, and so on, plus a random spread. `waits` is how many
-//   waits this request has had before.
-async function rateLimitWait(response, nowMs, waits, random) {
+//   twice that after the second limit, and so on, plus a random spread. `secondaryWaits` is how
+//   many secondary-limit waits this request has had before.
+async function rateLimitWait(response, nowMs, secondaryWaits, random) {
   if (response.status !== 403 && response.status !== 429) return null;
   const retryAfter = response.headers.get('retry-after');
-  if (retryAfter !== null && /^\d+$/.test(retryAfter)) return Number(retryAfter) * 1000;
-  if (retryAfter !== null && HTTP_DATE.test(retryAfter)) return Math.max(0, Date.parse(retryAfter) - nowMs);
+  if (retryAfter !== null && /^\d+$/.test(retryAfter)) return { ms: Number(retryAfter) * 1000, secondary: false };
+  if (retryAfter !== null && HTTP_DATE.test(retryAfter)) return { ms: Math.max(0, Date.parse(retryAfter) - nowMs), secondary: false };
   const reset = response.headers.get('x-ratelimit-reset');
   if (response.headers.get('x-ratelimit-remaining') === '0' && reset !== null && /^\d+$/.test(reset)) {
     // One second more, so the wait ends after the reset and not just before it.
-    return Math.max(0, Number(reset) * 1000 - nowMs) + 1000;
+    return { ms: Math.max(0, Number(reset) * 1000 - nowMs) + 1000, secondary: false };
   }
   if (/secondary rate limit/i.test(await messageOf(response.clone()))) {
-    const wait = SECONDARY_LIMIT_WAIT_MS * 2 ** waits;
-    return wait + Math.floor(random() * SECONDARY_LIMIT_SPREAD * wait);
+    const wait = SECONDARY_LIMIT_WAIT_MS * 2 ** secondaryWaits;
+    return { ms: wait + Math.floor(random() * SECONDARY_LIMIT_SPREAD * wait), secondary: true };
   }
   return null;
 }
@@ -138,7 +149,8 @@ async function apiError(response, url, permission) {
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
   if (response.status === 401) return new ToolError(`${what}. GITHUB_TOKEN was refused: make a new token and set it.`);
   if (response.status === 403 || response.status === 429) {
-    const needs = permission ? ` A fine-grained GITHUB_TOKEN needs the permission "${permission}" for this request.` : '';
+    // A 429 is always a rate limit, so only a 403 can mean a missing permission.
+    const needs = permission && response.status === 403 ? ` A fine-grained GITHUB_TOKEN needs the permission "${permission}" for this request.` : '';
     return new ToolError(`${what}. The token may lack access, or the rate limit is used up: check the token, or wait and try again.${needs}`);
   }
   if (response.status === 404) return new ToolError(`${what}. Check the repo name, and that GITHUB_TOKEN can read that repo.`);

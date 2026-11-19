@@ -201,7 +201,7 @@ When GitHub says to wait, `exhibit history` waits and asks again, at most three 
 
 - A `retry-after` header. It holds whole seconds, or an HTTP date such as `Thu, 19 Nov 2026 10:00:30 GMT`, and `exhibit history` waits that long or until that time. A value in any other form, such as `1.5`, counts as no `retry-after` header.
 - No requests left until `x-ratelimit-reset`. `exhibit history` waits until one second after that time.
-- A message that names a secondary rate limit, with neither of these headers. GitHub's docs say to wait at least one minute, and longer each time the limit comes back. So the first wait is one minute, the second two minutes, and the third four minutes. Each wait gets a random extra of up to a quarter of it, so the requests that hit the limit together do not all ask again at the same moment. The longest such wait is five minutes.
+- A message that names a secondary rate limit, with neither of these headers. GitHub's docs say to wait at least one minute, and longer each time the limit comes back. So the first wait for a secondary limit is one minute, the second two minutes, and the third four minutes. Waits of the other two kinds do not count here. Each wait gets a random extra of up to a quarter of it, so the requests that hit the limit together do not all ask again at the same moment. The longest such wait is five minutes.
 
 If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too.
 
@@ -209,10 +209,10 @@ If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After th
 
 - Metadata: read. GitHub gives it to every fine-grained token.
 - Pull requests: read, for the PRs, their files, reviews and comments, and for the PRs of a commit (SZZ).
-- Checks: read, for the check runs.
+- Checks: read, for the check runs. GitHub's page of permissions for fine-grained tokens does not list the check-runs request, so this one is not yet confirmed.
 - Commit statuses: read, for the commit statuses.
 
-A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks.
+A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks. A 429, and a rate limit that is still there when the waits end, do not name a permission.
 
 ### 8.4 `.exhibit/labels.jsonl`
 
