@@ -95,8 +95,8 @@ async function askGitHub(github, repo, sha, defaultBranch) {
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
 // not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
-// GitHub fails for one of its requests, gets null and a warning. A shallow clone gives one warning first, because blame there can give
-// old lines to the shallow boundary commit.
+// GitHub fails for one of its requests, gets null and a warning. A shallow clone gives one
+// warning first, because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of `repo`, as cloneRoot returns it.
 export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
   const findPr = createPrFinder({ lines, repo, github });
@@ -126,10 +126,9 @@ export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
   return out;
 }
 
-// A GitHub reply that is a problem with one request, such as a 502. A refused token (401), a
-// missing permission (403) or a rate limit (403 or 429) would fail every later request too, so
-// those stop the run.
-const failsOneRequest = (error) => error instanceof GitHubReplyError && ![401, 403, 429].includes(error.status);
+// A GitHub reply that is a problem with one request, such as a 502. GitHubReplyError says
+// which replies would fail every later request too: those stop the run.
+const failsOneRequest = (error) => error instanceof GitHubReplyError && !error.stopsRun;
 
 async function hasCommit(dir, sha) {
   try {
@@ -211,7 +210,7 @@ function noLinkReason(dropped) {
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
 // "Fixes #12", "closes: #7" or "Fixes https://github.com/owner/name/issues/12". Only issues in
 // `repo` ("owner/name") count.
-export function bugReportNumbers(body, repo = '') {
+export function bugReportNumbers(body, repo) {
   const numbers = [];
   const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
   for (const [, short, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
@@ -267,15 +266,16 @@ export function dropNewerLines(blamedLines, reportedAt) {
 //   In a Python file the indent at the start of a line is code for both rules.
 // - "comment": it is only a comment, and the fix does not turn it back into code. Or only the
 //   comment at its end changed: the same hunk adds a line with the same code.
-// When no line is left, but some lines with words moved inside their own file, those moved
-// lines count: the fix changed only their place, so their place was the bug.
+// When no line is left, but some lines with a letter or a digit moved inside their own file,
+// those lines count: the fix changed only their place, so their place was the bug. A moved
+// line with no letter or digit, such as "}" or a blank line, stays dropped.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
 export function countedLines(diff) {
   const hunks = parseHunks(diff);
   const added = hunks.flatMap((hunk, at) => {
     const comments = markComments(hunk.added, hunk.newPath);
     return hunk.added.map((text, i) => ({ at, text, key: squash(text, hunk.newPath), comment: comments[i], used: false }));
-  });
+  }).map((row, place) => ({ ...row, place }));
   const deleted = hunks.flatMap((hunk, at) => {
     const comments = markComments(hunk.deleted.map((row) => row.text), hunk.oldPath);
     return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null, movedInFile: false }));
@@ -304,7 +304,7 @@ export function countedLines(diff) {
   for (const line of deleted) {
     const match = line.key === '' ? undefined : pair(line, true);
     if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
-    if (line.reason === 'moved') line.movedInFile = true;
+    if (line.reason === 'moved') line.movedInFile = hasWords(line.text);
   }
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
@@ -318,7 +318,7 @@ export function countedLines(diff) {
     const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
       deleted[i + k].reason = 'moved';
-      deleted[i + k].movedInFile = inFile && deleted[i + k].key !== '';
+      deleted[i + k].movedInFile = inFile && hasWords(deleted[i + k].text);
       row.used = true;
     }
     i += block.length;
@@ -376,11 +376,10 @@ export function countedLines(diff) {
 // only at the added lines with its key. A big generated file, such as a lockfile, has thousands
 // of lines, and reading all of them for each deleted line is slow. Each group keeps a cursor
 // past its used lines: a line that is used stays used.
-// Returns Map(key => Map(hunk => { rows, firstUnused() })). Each row gets its place in `added`.
+// Returns Map(key => Map(hunk => { rows, firstUnused() })).
 function indexByKey(added) {
   const index = new Map();
-  for (const [place, row] of added.entries()) {
-    row.place = place;
+  for (const row of added) {
     if (!index.has(row.key)) index.set(row.key, new Map());
     const byHunk = index.get(row.key);
     if (!byHunk.has(row.at)) byHunk.set(row.at, hunkRows());
@@ -441,30 +440,45 @@ const squash = (text, path) => {
   return indent + words;
 };
 
-// Takes the whitespace out of a line of code, except inside a string. A comment after the code,
-// which starts after whitespace as in stripComments, ends the string search, so its whitespace goes. Each line is read alone, so the next line of a
-// string that spans lines, such as a template literal, reads as code. A quote mark that opens no
-// string, such as an apostrophe in JSX text, keeps the whitespace after it.
+// Takes the whitespace out of a line of code, except inside a string. Code inside ${ } in a
+// template literal is code, so its whitespace goes too. A comment after the code, which starts
+// after whitespace as in stripComments, ends the search, so its whitespace goes.
+// Each line is read alone, so the next line of a string that spans lines reads as code. A quote
+// mark that opens no string, such as an apostrophe in JSX text or a quote in a regex, keeps the
+// whitespace after it on that line.
 function squashCode(text, style) {
   const quotes = style === 'slash' ? ['"', "'", '`'] : ['"', "'"];
   const comment = style === 'slash' ? '//' : '#';
   let out = '';
-  let quote = null;
+  // What the scan is inside, innermost last: a quote mark for a string, or, for code inside
+  // ${ } in a template literal, the number of other { still open there.
+  const inside = [];
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    const spaced = i === 0 || /\s/.test(text[i - 1]);
-    if (quote === null && spaced && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
-    if (quote === null && /\s/.test(char)) continue;
-    out += char;
-    if (quote === null && quotes.includes(char)) {
-      quote = char;
-    } else if (quote !== null && char === '\\') {
-      // An escaped character, such as \' or \\, does not end the string.
-      i++;
-      out += text[i] ?? '';
-    } else if (char === quote) {
-      quote = null;
+    const top = inside.at(-1);
+    if (typeof top === 'string') {
+      out += char;
+      if (char === '\\') {
+        // An escaped character, such as \' or \\, does not end the string.
+        i++;
+        out += text[i] ?? '';
+      } else if (char === top) {
+        inside.pop();
+      } else if (top === '`' && text.startsWith('${', i)) {
+        out += '{';
+        i++;
+        inside.push(0);
+      }
+      continue;
     }
+    const spaced = i === 0 || /\s/.test(text[i - 1]);
+    if (spaced && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
+    if (/\s/.test(char)) continue;
+    out += char;
+    if (quotes.includes(char)) inside.push(char);
+    else if (top !== undefined && char === '{') inside[inside.length - 1] += 1;
+    else if (top !== undefined && char === '}' && top > 0) inside[inside.length - 1] -= 1;
+    else if (top !== undefined && char === '}') inside.pop();
   }
   return out;
 }

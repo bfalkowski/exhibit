@@ -130,6 +130,22 @@ test('moved: a fix that only moves lines inside one file counts the moved lines,
   assert.deepEqual(dropped(result), [['index.js', 219, 'moved']]);
 });
 
+test('moved: a line with no letter or digit, such as "});", does not count when it moves inside one file', () => {
+  // The case from the review of PR 99: only "});" moves, and the other line changes whitespace.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: ['});', '  x=1;'], added: ['  x = 1;', '});'] }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'moved'], ['a.js', 3, 'whitespace']]);
+});
+
+test('moved: when lines with words move inside one file, a moved "}" next to them stays dropped', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, added: ['run(a);', 'run(b);', '}'] },
+    { at: 9, deleted: ['run(a);', 'run(b);', '}'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [9, 10]]]);
+  assert.deepEqual(dropped(result), [['a.js', 11, 'moved']]);
+});
+
 test('moved: a move inside one file is still dropped when the fix changes other lines too', () => {
   const block = ['const tax = total * rate;', 'return total + tax;'];
   const result = countedLines(diff({ path: 'a.js', hunks: [
@@ -170,6 +186,19 @@ test('whitespace: a space outside a string, or in a comment after the code, is s
   }] }));
   assert.deepEqual(counted(result), []);
   assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace'], ['a.js', 4, 'whitespace']]);
+});
+
+test('whitespace: whitespace inside ${ } in a template literal is code, not string text', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{
+    at: 3,
+    deleted: ['  s = `${ a }`;', '  t = `x ${ f({ k: 1 }) } y`;'],
+    added: ['  s = `${a}`;', '  t = `x ${f({k: 1})} y`;']
+  }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace'], ['a.js', 4, 'whitespace']]);
+  // The text around ${ } is still string text.
+  const text = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  t = `x ${a}y`;'], added: ['  t = `x ${a} y`;'] }] }));
+  assert.deepEqual(counted(text), [['a.js', [3]]]);
 });
 
 test('whitespace: in a file of another kind, a space inside quotes is whitespace, as before', () => {
@@ -268,10 +297,10 @@ test('a deleted line that starts with "-- " is a line, not a file header', () =>
 });
 
 test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', () => {
-  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30'), [12, 7, 30]);
-  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4'), [4]);
-  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5'), []);
-  assert.deepEqual(bugReportNumbers(null), []);
+  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', 'owner/repo'), [12, 7, 30]);
+  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4', 'owner/repo'), [4]);
+  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', 'owner/repo'), []);
+  assert.deepEqual(bugReportNumbers(null, 'owner/repo'), []);
 });
 
 test('bugReportNumbers reads a full issue URL when it names this repo', () => {

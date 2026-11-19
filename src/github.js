@@ -152,6 +152,12 @@ export class GitHubReplyError extends ToolError {
     super(message);
     this.status = status;
   }
+
+  // True when every later request would fail too: a refused token (401), a missing permission
+  // (403) or a rate limit (403 or 429). Then a caller stops instead of going on.
+  get stopsRun() {
+    return [401, 403, 429].includes(this.status);
+  }
 }
 
 async function apiError(response, url, permission) {
