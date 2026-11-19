@@ -217,6 +217,37 @@ test('a fix that rewrites a big generated file, such as a lockfile, is fast', ()
   assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
 });
 
+test('moved: a long run of a short line with no words, deleted in one hunk and added in another, is fast', () => {
+  const size = 2000;
+  const run = Array.from({ length: size }, () => '  ],');
+  const start = Date.now();
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: run }, { at: 5000, added: run }] }));
+  // No block reaches two lines with words, so no line is moved and each "]," is a real change.
+  assert.equal(result.counted.get('a.js').length, size);
+  // Before the search stopped early, this took about 15 seconds.
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
+});
+
+test('moved: a long run of a short line is fast when two lines with words follow it but are not added back', () => {
+  const size = 2000;
+  const run = Array.from({ length: size }, () => '  ],');
+  const start = Date.now();
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: [...run, 'a();', 'b();'] }, { at: 5000, added: run }] }));
+  assert.equal(result.counted.get('a.js').length, size + 2);
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
+});
+
+test('moved: a line that the same hunk adds back does not split a moved block', () => {
+  const block = ['a();', 'b();', 'c();', 'd();'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 10, deleted: block, added: ['b();'] },
+    { at: 40, added: block },
+    { at: 60, deleted: ['x = 1;'], added: ['x = 2;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [60]]]);
+  assert.deepEqual(dropped(result), [10, 11, 12, 13].map((line) => ['a.js', line, 'moved']));
+});
+
 test('comments: JavaScript and TypeScript line and block comments are dropped', () => {
   for (const path of ['a.js', 'a.ts', 'a.tsx', 'a.mjs']) {
     const result = countedLines(diff({ path, hunks: [

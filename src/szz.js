@@ -331,7 +331,8 @@ export function dropNewerLines(blamedLines, reportedAt) {
 // (spec 9.2, steps 1 and 2):
 // - `counted`: for each old file path, the old line numbers that SZZ blames.
 // - `dropped`: the lines that carry no bug, each with { path, line, text, reason }.
-// A line is dropped for one of three reasons, checked in this order:
+// A line is dropped for one of three reasons, checked in this order, except that moved blocks
+// are found first, so a line that the same hunk adds back does not split a block:
 // - "whitespace": the same hunk adds it back with only whitespace changed.
 // - "moved": the same hunk adds it back with the very same text, or it is in a moved block. A
 //   moved block is lines next to each other that another hunk, in any file, adds back next to
@@ -391,18 +392,26 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     if (match) match.used = true;
     return match;
   };
-  // A line that the same hunk adds back with the very same text only changed its place.
-  for (const line of deleted) {
-    const match = line.key === '' ? undefined : pair(line, true);
-    if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
-    if (line.reason === 'moved') line.movedInFile = hasWords(line.text);
-  }
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
+  // This rule comes before the same-hunk rule below. Otherwise, when the hunk that deletes a
+  // block also adds back one of its lines, that line is used up and splits the block in two.
+  const wordsLeft = wordsToHunkEnd(deleted);
+  // The runs that the last start line found, moved one line on, so the next start line does
+  // not walk them again. A run of the same short line, such as "],", would cost the cube of
+  // its length.
+  let known = new Map();
   for (let i = 0; i < deleted.length;) {
-    const block = movedBlock(deleted, added, index, i);
+    // A block that can not reach two lines with words can not pass, so do not look for one.
+    if (wordsLeft[i] < 2) {
+      known = new Map();
+      i++;
+      continue;
+    }
+    const { block, next } = movedBlock(deleted, added, index, i, known);
     if (block.filter((row) => hasWords(row.text)).length < 2) {
+      known = next;
       i++;
       continue;
     }
@@ -412,7 +421,16 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
       deleted[i + k].movedInFile = inFile && hasWords(deleted[i + k].text);
       row.used = true;
     }
+    known = new Map();
     i += block.length;
+  }
+  // A line that the same hunk adds back with the very same text only changed its place.
+  for (const line of deleted) {
+    if (line.reason !== null || line.key === '') continue;
+    const match = pair(line, true);
+    if (match === undefined) continue;
+    line.reason = match.text === line.text ? 'moved' : 'whitespace';
+    line.movedInFile = line.reason === 'moved' && hasWords(line.text);
   }
   // A blank line outside a moved block that another hunk adds back moved too. Any other blank
   // line is whitespace.
@@ -495,26 +513,49 @@ function hunkRows() {
 // the deleted lines from `start` on, line by line. Each matched line is unused, and each deleted
 // line in the run is in the same hunk and is not dropped yet. Only added lines with the key of
 // the line at `start` can begin a run, so the index gives them.
-// Returns the matched added lines, or [] when no other hunk adds back the line at `start`.
-function movedBlock(deleted, added, index, start) {
+// `known` maps an added line's place to the length of its run from `start`, when the call for
+// the line before `start` found it, and nothing changed since. Those runs are not walked again.
+// Returns { block, next }: block is the matched added lines, or [] when no other hunk adds back
+// the line at `start`. next is `known` for the call at `start + 1`.
+function movedBlock(deleted, added, index, start, known = new Map()) {
   const first = deleted[start];
+  const next = new Map();
   let best = [];
-  if (first.reason !== null) return best;
+  if (first.reason !== null) return { block: best, next };
   for (const [at, { rows }] of index.get(first.key) ?? []) {
     if (at === first.at) continue;
     for (const { place: j } of rows) {
-      let size = 0;
-      while (true) {
-        const from = deleted[start + size];
-        const to = added[j + size];
-        if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
-        if (to.at !== added[j].at || to.used || to.key !== from.key) break;
-        size++;
-      }
+      let size = known.get(j);
+      if (size === undefined) size = walk(deleted, added, start, j);
+      if (size > 1) next.set(j + 1, size - 1);
       if (size > best.length) best = added.slice(j, j + size);
     }
   }
-  return best;
+  return { block: best, next };
+}
+
+// Counts the lines that match, one by one, from the deleted line at `start` and the added line
+// at `j` on. Each deleted line stays in the hunk of the one at `start` and is not dropped yet.
+// Each added line stays in the hunk of the one at `j` and is unused.
+function walk(deleted, added, start, j) {
+  let size = 0;
+  while (true) {
+    const from = deleted[start + size];
+    const to = added[j + size];
+    if (from === undefined || to === undefined || from.at !== deleted[start].at || from.reason !== null) return size;
+    if (to.at !== added[j].at || to.used || to.key !== from.key) return size;
+    size++;
+  }
+}
+
+// For each deleted line, the number of lines with words from it to the end of its hunk.
+function wordsToHunkEnd(deleted) {
+  const left = new Array(deleted.length);
+  for (let i = deleted.length - 1; i >= 0; i--) {
+    const after = i + 1 < deleted.length && deleted[i + 1].at === deleted[i].at ? left[i + 1] : 0;
+    left[i] = after + (hasWords(deleted[i].text) ? 1 : 0);
+  }
+  return left;
 }
 
 // A line holds words when it has a letter or a digit, unlike "}" or "];".
