@@ -10,7 +10,7 @@ try {
   if (command === '--version' || command === '-v') {
     console.log(pkg.version);
   } else if (command === 'history') {
-    await history(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout });
+    await history(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout, stderr: process.stderr });
   } else {
     throw new ToolError(`unknown command ${command === undefined ? '(none)' : command}. The commands are history and --version.`);
   }

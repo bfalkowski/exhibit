@@ -144,3 +144,24 @@ test('readHistory matches a branch signal against the PR head branch', async () 
     [3, 'title:update']
   ]);
 });
+
+test('readHistory warns when a PR changed more files than GitHub listed, and only then asks for the PR', async () => {
+  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
+  const fetch = replayFetch(writeBigFixture());
+  const warnings = [];
+  const lines = await readHistory({ repo: 'acme/big', token: 't', fetch, warn: (text) => warnings.push(text) });
+
+  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+  assert.deepEqual(warnings, ['PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.']);
+  const prCalls = fetch.calls.filter((c) => /\/pulls\/\d+$/.test(c.key)).map((c) => c.key);
+  assert.deepEqual(prCalls.sort(), ['/repos/acme/big/pulls/8', '/repos/acme/big/pulls/9']);
+});
+
+test('getOne turns a reply that is not a JSON object into a tool error', async () => {
+  const { createGitHub } = await import('../src/github.js');
+  const { ToolError } = await import('../src/tool-error.js');
+  for (const text of ['[]', 'null', '<html>oops</html>']) {
+    const github = createGitHub({ token: 't', fetch: async () => new Response(text, { status: 200 }) });
+    await assert.rejects(github.getOne('/repos/acme/big/pulls/9'), (error) => error instanceof ToolError && /not a JSON object/.test(error.message), text);
+  }
+});
