@@ -73,8 +73,8 @@ function checkSignals(signals) {
     if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title: or branch:.`);
     const value = signal.slice(type.length + 1);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
-    // Labels, titles and branches never start or end with a space here, so such a signal
-    // could never match. Refuse it instead of matching nothing with no message.
+    // A space at the start of the value can never match. A space at the end is easy to miss,
+    // and only a title could match it. So refuse both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
   });
 }

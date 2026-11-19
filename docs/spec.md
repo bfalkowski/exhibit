@@ -187,8 +187,8 @@ What each version fills:
   - A comment that starts with an `<!-- office:` marker, such as `<!-- office:dev -->`, is a room note or a Dev's reply, not a review, even when it repeats the verdict.
   - A comment with no verdict is not a review, and is not in `reviews`.
   - The comment reviews and the GitHub reviews are merged into one list by time: `created_at` for a comment, `submitted_at` for a review. At the same time, the review comes first.
-- **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`.
-- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null.
+- **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`. A history file from before S2 has no `classification`, so it fails the schema. Run `exhibit history` again: it writes the whole file new, so the new file has `classification` on every line.
+- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
 
 When GitHub says to wait (a 429 or 403 reply with a `retry-after` header, or with no requests left until `x-ratelimit-reset`), `exhibit history` waits and asks again, at most three times. If GitHub asks for a wait longer than 15 minutes, it stops and exits 2.
 
