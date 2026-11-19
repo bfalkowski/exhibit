@@ -255,6 +255,16 @@ test('comments: a * row with a "*/" later in the hunk that does not close a bloc
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
 });
 
+test('comments: a * row before a line that opens and closes its own comment counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty;', '  foo(); /* note */'], added: ['  * qty * rate;', '  foo(); /* new note */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5]]]);
+});
+
+test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
+});
+
 test('comments: a line where only the trailing comment changed is dropped', () => {
   const result = countedLines(diff(
     { path: 'a.js', hunks: [{ at: 2, deleted: ['x = 1; // old note', 'y = 2; /* old */'], added: ['x = 1;', 'y = 2; /* new */'] }] },
