@@ -305,37 +305,44 @@ test('commit-to-PR mapping across base branches', async (t) => {
   });
 });
 
+// Makes a folder in the system temp folder, and removes it when test t ends.
+function tempDir(t, prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 test('cloneRoot', async (t) => {
-  await t.test('gives the top folder when a remote points at the repo on GitHub, in any URL form', async () => {
+  await t.test('gives the top folder when a remote points at the repo on GitHub, in any URL form', async (t) => {
     for (const url of ['https://github.com/Fixture/Shop.git', 'git@github.com:fixture/shop.git', 'ssh://git@github.com/fixture/shop', 'https://github.com/fixture/shop/']) {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exhibit-clone-')));
+      const dir = realpathSync(tempDir(t, 'exhibit-clone-'));
       git(dir, ['init', '--quiet']);
       git(dir, ['remote', 'add', 'origin', url]);
       assert.equal(await cloneRoot(dir, SHOP_FORGE), dir, url);
     }
   });
 
-  await t.test('gives the top folder from a folder inside the clone', async () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exhibit-clone-')));
+  await t.test('gives the top folder from a folder inside the clone', async (t) => {
+    const dir = realpathSync(tempDir(t, 'exhibit-clone-'));
     git(dir, ['init', '--quiet']);
     git(dir, ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git']);
     mkdirSync(join(dir, 'src'));
     assert.equal(await cloneRoot(join(dir, 'src'), SHOP_FORGE), dir);
   });
 
-  await t.test('gives null for another repo, a repo with no remote, and a folder that is not a repo', async () => {
-    const other = mkdtempSync(join(tmpdir(), 'exhibit-clone-'));
+  await t.test('gives null for another repo, a repo with no remote, and a folder that is not a repo', async (t) => {
+    const other = tempDir(t, 'exhibit-clone-');
     git(other, ['init', '--quiet']);
     assert.equal(await cloneRoot(other, SHOP_FORGE), null);
     git(other, ['remote', 'add', 'origin', 'https://github.com/fixture/shopping.git']);
     assert.equal(await cloneRoot(other, SHOP_FORGE), null);
-    assert.equal(await cloneRoot(mkdtempSync(join(tmpdir(), 'exhibit-plain-')), SHOP_FORGE), null);
+    assert.equal(await cloneRoot(tempDir(t, 'exhibit-plain-'), SHOP_FORGE), null);
   });
 });
 
 // A repo with one commit, then a fix commit that changes a file and moves a submodule pointer.
-function repoWithSubmoduleBump() {
-  const dir = mkdtempSync(join(tmpdir(), 'exhibit-sub-'));
+function repoWithSubmoduleBump(t) {
+  const dir = tempDir(t, 'exhibit-sub-');
   git(dir, ['init', '--quiet', '--initial-branch=main']);
   const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
   writeFileSync(join(dir, 'a.js'), 'one;\ntwo;\n');
@@ -351,8 +358,8 @@ function repoWithSubmoduleBump() {
 
 const noPrs = () => createGitHubForge({ repo: REPO, token: 't', fetch: async () => new Response('{"message":"No commit found"}', { status: 422 }) });
 
-test('a fix that moves a submodule pointer blames only its file lines', async () => {
-  const dir = repoWithSubmoduleBump();
+test('a fix that moves a submodule pointer blames only its file lines', async (t) => {
+  const dir = repoWithSubmoduleBump(t);
   const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
   const warnings = [];
   const [line] = await addSzz([fix], { dir, forge: noPrs(), warn: (text) => warnings.push(text) });
@@ -363,8 +370,7 @@ test('a fix that moves a submodule pointer blames only its file lines', async ()
 test('in a shallow clone, a fix whose parent is missing gets szz: null and a warning, and the run goes on', async (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
-  const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
-  t.after(() => rmSync(shallow, { recursive: true, force: true }));
+  const shallow = tempDir(t, 'exhibit-shallow-');
   git(shallow, ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.']);
   // The newest fix is the clone's one commit, so its parent is missing.
   const newest = repo.history.at(-1);
@@ -391,8 +397,8 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
 // A repo with one commit, then a fix commit that changes a JSDoc text row whose block opens and
 // closes outside the hunk, turns the tabs of a Python function into spaces, and makes one real
 // change in each file. The JavaScript file has a space in its name.
-function repoWithCommentAndIndentFix() {
-  const dir = mkdtempSync(join(tmpdir(), 'exhibit-rules-'));
+function repoWithCommentAndIndentFix(t) {
+  const dir = tempDir(t, 'exhibit-rules-');
   git(dir, ['init', '--quiet', '--initial-branch=main']);
   const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
   const write = (files) => {
@@ -413,8 +419,7 @@ function repoWithCommentAndIndentFix() {
 }
 
 test('SZZ reads the files to drop a JSDoc text row and a Python line that only changed tabs to spaces', async (t) => {
-  const dir = repoWithCommentAndIndentFix();
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = repoWithCommentAndIndentFix(t);
   const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
   const [line] = await addSzz([fix], { dir, forge: noPrs() });
   assert.deepEqual(line.szz.unlinked_lines.map((l) => [l.path, l.line]), [['pad label.js', 4], ['total.py', 4]]);
