@@ -69,6 +69,7 @@ export function writeBigFixture() {
     // No reviews and no check runs: these PRs are here for their files only.
     replies[`/repos/acme/big/pulls/${pull.number}/reviews?per_page=100`] = { status: 200, headers: {}, body: [] };
     replies[`/repos/acme/big/commits/${pull.head.sha}/check-runs?per_page=100`] = { status: 200, headers: {}, body: { total_count: 0, check_runs: [] } };
+    replies[`/repos/acme/big/commits/${pull.head.sha}/status?per_page=100`] = { status: 200, headers: {}, body: { state: 'pending', statuses: [], total_count: 0 } };
     // PR 7 has no reply for itself on purpose: a request for it fails the test.
     if (pull.changed_files >= LISTED_AT_MOST) replies[`/repos/acme/big/pulls/${pull.number}`] = { status: 200, headers: {}, body: pull };
   }
