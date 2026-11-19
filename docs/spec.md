@@ -170,7 +170,7 @@ One merged PR per line, with these fields:
 - `files`: path, additions and deletions for each file
 - `classification`: `kinds` holds the kinds of change under the current policy. `classification.fix` is true when the PR is a fix.
 - `reviews`: `list` holds the `state`, `author` and `source` of each review, oldest first. `source` is `review` for a GitHub review, or `comment` for a review posted as a PR comment. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`, from both sources.
-- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit
+- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state.
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
 - `szz`: for fix PRs, the introducing PRs, the lines, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
@@ -180,7 +180,7 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 What each version fills:
 
 - **S1, first half:** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. When that happens, `exhibit history` prints a warning on stderr that names the PR and both counts, and still exits 0. Only a PR whose list reaches 3,000 files costs one more API request, to read its `changed_files` count. That count is only for the warning. So when that request fails, for example on a rate limit or a 5xx, `exhibit history` does not fail: it warns that the PR's `files` may be cut short and that the count is unknown, and goes on. `base_sha` is GitHub's `base.sha`: the tip of the base branch when the PR was last updated. It is not always the merge-base of the PR.
-- **S1, second half:** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs has an empty `ci` list. A check run that has not finished has a null `conclusion`.
+- **S1, second half:** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs and no commit statuses has an empty `ci` list. A check run that has not finished has a null `conclusion`. Some CI services post commit statuses instead of check runs, so `ci` holds both: check runs first, then commit statuses. For commit statuses, GitHub gives only the newest status for each context. A status `conclusion` is `success`, `failure` or `error`, and a `pending` status has a null `conclusion`, the same as a check run that has not finished.
 - **Reviews posted as PR comments:** some rooms post each review as a PR comment, not as a GitHub review. On Building58 no merged PR has a GitHub review. So `exhibit history` also reads the PR's comments, and a comment that gives a verdict is a review with the `source` `comment`:
   - A verdict is the word `verdict`, then `merge` or `fix`, as in `Verdict: fix` or `**Verdict:** merge`. A colon, spaces, `*` and `_` may come between them. A review heading with the verdict after the commit is a verdict too, as in `## Review of b8ebe79: merge`. Case does not matter.
   - The first verdict in the comment counts. `fix` gives the state `CHANGES_REQUESTED`, so it is a round. `merge` gives the state `APPROVED`.
@@ -190,7 +190,13 @@ What each version fills:
 - **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`. A history file from before S2 has no `classification`, so it fails the schema. Run `exhibit history` again: it writes the whole file new, so the new file has `classification` on every line.
 - **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
 
-When GitHub says to wait (a 429 or 403 reply with a `retry-after` header, or with no requests left until `x-ratelimit-reset`), `exhibit history` waits and asks again, at most three times. If GitHub asks for a wait longer than 15 minutes, it stops and exits 2.
+When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
+
+- A `retry-after` header. It holds whole seconds or an HTTP date, and `exhibit history` waits that long or until that time.
+- No requests left until `x-ratelimit-reset`. `exhibit history` waits until one second after that time.
+- A message that names a secondary rate limit, with neither of these headers. `exhibit history` waits one minute, as GitHub's docs say.
+
+If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too.
 
 ### 8.4 `.exhibit/labels.jsonl`
 

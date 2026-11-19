@@ -107,6 +107,18 @@ test('ci has the check runs from every page, read from the head commit', async (
   assert.ok(fetch.calls.some((c) => c.key === `/repos/acme/widgets/commits/${'c'.repeat(39)}7/check-runs?per_page=100`));
 });
 
+test('ci also has the commit statuses on the head commit, after the check runs', async () => {
+  const fetch = replayFetch(fixture('acme-widgets'));
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch });
+  assert.deepEqual(lines.find((l) => l.number === 4).ci, [
+    { name: 'test', conclusion: 'success' },
+    { name: 'buildkite/widgets', conclusion: 'success' },
+    { name: 'deploy/preview', conclusion: 'error' },
+    { name: 'ci/legacy', conclusion: null }
+  ]);
+  assert.ok(fetch.calls.some((c) => c.key === `/repos/acme/widgets/commits/${'c'.repeat(39)}4/status?per_page=100`));
+});
+
 test('a check run that has not finished has a null conclusion', async () => {
   const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
   assert.deepEqual(lines.find((l) => l.number === 1).ci, [{ name: 'test', conclusion: null }]);

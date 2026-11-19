@@ -64,3 +64,41 @@ test('it does not wait longer than 15 minutes for a reset', async () => {
   await assert.rejects(github.getAll('/x'), (error) => error instanceof ToolError && /rate limit/.test(error.message));
   assert.deepEqual(s.waits, []);
 });
+
+test('a 403 for a secondary rate limit with no wait headers waits one minute, then asks again', async () => {
+  const s = scripted([
+    { status: 403, headers: { 'x-ratelimit-remaining': '4000' }, body: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' } },
+    { status: 200, body: [1] }
+  ]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  assert.deepEqual(await github.getAll('/x'), [1]);
+  assert.deepEqual(s.waits, [60_000]);
+});
+
+test('it stops after three waits for a secondary rate limit', async () => {
+  const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
+  const s = scripted([limited, limited, limited, limited]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(github.getAll('/x'), (error) => error instanceof ToolError && /403/.test(error.message) && /secondary rate limit/.test(error.message));
+  assert.deepEqual(s.waits, [60_000, 60_000, 60_000]);
+});
+
+test('a retry-after given as an HTTP date waits until that time, then asks again', async () => {
+  const s = scripted([
+    { status: 429, headers: { 'retry-after': 'Thu, 19 Nov 2026 10:00:30 GMT' }, body: {} },
+    { status: 200, body: [1] }
+  ]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => Date.parse('2026-11-19T10:00:00Z') });
+  assert.deepEqual(await github.getAll('/x'), [1]);
+  assert.deepEqual(s.waits, [30_000]);
+});
+
+test('a retry-after date that has passed asks again at once', async () => {
+  const s = scripted([
+    { status: 429, headers: { 'retry-after': 'Thu, 19 Nov 2026 09:59:00 GMT' }, body: {} },
+    { status: 200, body: [1] }
+  ]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => Date.parse('2026-11-19T10:00:00Z') });
+  assert.deepEqual(await github.getAll('/x'), [1]);
+  assert.deepEqual(s.waits, [0]);
+});
