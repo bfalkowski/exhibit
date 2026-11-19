@@ -110,7 +110,7 @@ test('with no cache, the client sends no If-None-Match and writes nothing', asyn
 
 test('two tokens get separate entries, and no file in the cache holds a token', async () => {
   const dir = newFolder();
-  const other = 'github_pat_anotherSecretToken5678';
+  const other = 'second-secret-token-5678';
   const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
 
   await client(github.fetch, dir, TOKEN).getOne('/repos/o/r');
