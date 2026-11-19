@@ -242,9 +242,11 @@ export function dropNewerLines(blamedLines, reportedAt) {
 // - `dropped`: the lines that carry no bug, each with { path, line, text, reason }.
 // A line is dropped for one of three reasons, checked in this order:
 // - "whitespace": the same hunk adds it back with only whitespace changed.
-// - "moved": another hunk, in any file, adds it back with at most whitespace changed, or the
-//   same hunk adds it back with the very same text. A blank line that no other hunk adds back
-//   is "whitespace". In a Python file the indent at the start of a line is code for both rules.
+// - "moved": the same hunk adds it back with the very same text, or it is in a moved block. A
+//   moved block is lines next to each other that another hunk, in any file, adds back next to
+//   each other in the same order, with at most whitespace changed. The block needs two or more
+//   lines with a letter or a digit. A blank line that no other hunk adds back is "whitespace".
+//   In a Python file the indent at the start of a line is code for both rules.
 // - "comment": it is only a comment, and the fix does not turn it back into code.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
 export function countedLines(diff) {
@@ -271,10 +273,26 @@ export function countedLines(diff) {
     const match = line.key === '' ? undefined : pair(line, true);
     if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
   }
-  // A blank line that another hunk adds back moved with the block around it.
+  // Lines that another hunk adds back moved only as a block: lines next to each other that
+  // another hunk adds back next to each other, in the same order. A short line such as "}" is
+  // in many places, so one moved line, or a block with only one line of words, still counts.
+  for (let i = 0; i < deleted.length;) {
+    const block = movedBlock(deleted, added, i);
+    if (block.filter((row) => hasWords(row.text)).length < 2) {
+      i++;
+      continue;
+    }
+    for (const [k, row] of block.entries()) {
+      deleted[i + k].reason = 'moved';
+      row.used = true;
+    }
+    i += block.length;
+  }
+  // A blank line outside a moved block that another hunk adds back moved too. Any other blank
+  // line is whitespace.
   for (const line of deleted) {
-    if (line.reason === null && pair(line, false) !== undefined) line.reason = 'moved';
-    else if (line.reason === null && line.key === '') line.reason = 'whitespace';
+    if (line.reason !== null || line.key !== '') continue;
+    line.reason = pair(line, false) === undefined ? 'whitespace' : 'moved';
   }
   // The words of each added code line, with no whitespace at all. A comment's words have no
   // indent, so the indent of a Python line must not count here.
@@ -291,6 +309,32 @@ export function countedLines(diff) {
   }
   return { counted, dropped };
 }
+
+// Finds the longest run of added lines, in one hunk other than the deleted line's, that matches
+// the deleted lines from `start` on, line by line. Each matched line is unused, and each deleted
+// line in the run is in the same hunk and is not dropped yet.
+// Returns the matched added lines, or [] when no other hunk adds back the line at `start`.
+function movedBlock(deleted, added, start) {
+  const first = deleted[start];
+  let best = [];
+  if (first.reason !== null) return best;
+  for (let j = 0; j < added.length; j++) {
+    if (added[j].at === first.at) continue;
+    let size = 0;
+    while (true) {
+      const from = deleted[start + size];
+      const to = added[j + size];
+      if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
+      if (to.at !== added[j].at || to.used || to.key !== from.key) break;
+      size++;
+    }
+    if (size > best.length) best = added.slice(j, j + size);
+  }
+  return best;
+}
+
+// A line holds words when it has a letter or a digit, unlike "}" or "];".
+const hasWords = (text) => /[\p{L}\p{N}]/u.test(text);
 
 // The text with whitespace taken out, so two lines that differ only in whitespace match. In
 // Python the indent says which block a line is in, so it is code and stays.

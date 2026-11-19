@@ -62,13 +62,52 @@ test('moved: a line deleted in one place and added unchanged in another is dropp
   assert.deepEqual(dropped(result), [['f.js', 12, 'moved'], ['f.js', 13, 'moved'], ['f.js', 14, 'moved']]);
 });
 
-test('moved: a line moved to another file, with new indent, is dropped', () => {
+test('moved: a block moved to another file, with new indent, is dropped', () => {
   const result = countedLines(diff(
-    { path: 'a.js', hunks: [{ at: 7, deleted: ['  const tax = total * rate;'] }] },
-    { path: 'b.js', hunks: [{ at: 2, added: ['    const tax = total * rate;'] }] }
+    { path: 'a.js', hunks: [{ at: 7, deleted: ['  const tax = total * rate;', '  return total + tax;'] }] },
+    { path: 'b.js', hunks: [{ at: 2, added: ['    const tax = total * rate;', '    return total + tax;'] }] }
   ));
   assert.deepEqual(counted(result), []);
-  assert.deepEqual(dropped(result), [['a.js', 7, 'moved']]);
+  assert.deepEqual(dropped(result), [['a.js', 7, 'moved'], ['a.js', 8, 'moved']]);
+});
+
+test('moved: one moved line counts, because a real fix can delete it in one place and add it in another', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 2, added: ['  if (rows.length === 0) return null;'] },
+    { at: 9, deleted: ['  return null;'] },
+    { at: 20, added: ['  return null;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [9]]]);
+  assert.deepEqual(result.dropped, []);
+});
+
+test('moved: short lines such as "}" do not pair with the same text in unrelated places', () => {
+  // The case from the real run: eslint-suppressions.json, where "count": 4 and } are in many places.
+  const result = countedLines(diff({ path: 'eslint-suppressions.json', hunks: [
+    { at: 3, deleted: ['    "no-restricted-syntax": {', '      "count": 4', '    }', '  },'] },
+    { at: 30, added: ['    "max-lines": {', '      "count": 4', '    }', '  },'] }
+  ] }));
+  assert.deepEqual(counted(result), [['eslint-suppressions.json', [3, 4, 5, 6]]]);
+  assert.deepEqual(result.dropped, []);
+});
+
+test('moved: lines that other hunks add back, but not next to each other, count', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 2, added: ['  const tax = total * rate;'] },
+    { at: 9, deleted: ['  const tax = total * rate;', '  return total + tax;'] },
+    { at: 20, added: ['  return total + tax;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [9, 10]]]);
+});
+
+test('moved: a moved block keeps its blank lines and closing braces', () => {
+  const block = ['function a() {', '  return 1;', '}', '', 'function b() {', '  return 2;', '}'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, added: block },
+    { at: 40, deleted: ['x = 1;', ...block] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [40]]]);
+  assert.deepEqual(dropped(result).map(([, line, reason]) => [line, reason]), [41, 42, 43, 44, 45, 46, 47].map((line) => [line, 'moved']));
 });
 
 test('moved: a line that is added back changed is not moved', () => {
