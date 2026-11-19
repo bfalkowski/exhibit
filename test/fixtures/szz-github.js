@@ -50,7 +50,7 @@ export function commitPullsFetch(built, repo) {
 
 /**
  * Writes a replay file (the format of test-support/replay-fetch.js) that serves the whole
- * fixture repo as GitHub would: the PR list, each PR's files, reviews and check runs, and
+ * fixture repo as GitHub would: the PR list, each PR's files, reviews, comments and check runs, and
  * "pull requests for a commit". Returns its path.
  */
 export function writeHistoryReplay(built, repo) {
@@ -79,6 +79,7 @@ export function writeHistoryReplay(built, repo) {
       body: pr.files.map((file) => ({ filename: file.path, additions: file.additions, deletions: file.deletions }))
     };
     replies[`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`] = { status: 200, headers: {}, body: [] };
+    replies[`/repos/${repo}/issues/${pr.number}/comments?per_page=100`] = { status: 200, headers: {}, body: [] };
     replies[`/repos/${repo}/commits/${head}/check-runs?per_page=100`] = { status: 200, headers: {}, body: { total_count: 0, check_runs: [] } };
   }
   const path = join(mkdtempSync(join(tmpdir(), 'exhibit-replay-')), 'shop.json');
