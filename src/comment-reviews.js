@@ -22,9 +22,10 @@ const VERDICT = new RegExp(
 // way: a blank line, a heading, a code fence, a list item or a thematic break ("---") ends it.
 // And a lazy line goes on a quote only when the quote's last line is text: after a blank quote
 // line (">"), a heading, a code fence or a thematic break in the quote, the next line is not in it.
+// A backtick fence has no backtick after its marks, so "```x``` said" is text with inline code.
 const QUOTE = /^\s*>/;
 const THEMATIC_BREAK = String.raw`(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`;
-const NOT_TEXT = String.raw`#{1,6}(?:\s|$)|\`\`\`|~~~|${THEMATIC_BREAK}`;
+const NOT_TEXT = String.raw`#{1,6}(?:\s|$)|\`\`\`[^\`]*$|~~~|${THEMATIC_BREAK}`;
 const ENDS_QUOTE = new RegExp(String.raw`^ {0,3}(?:${NOT_TEXT}|[-+*][ \t]|\d+[.)][ \t])`);
 const ENDS_TEXT = new RegExp(String.raw`^\s*$|^ {0,3}(?:${NOT_TEXT})`);
 const QUOTE_MARKS = /^(?:\s*> ?)+/;

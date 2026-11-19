@@ -138,4 +138,9 @@ test('a lazy line goes on a quote only when the quote ends in a paragraph', () =
   assert.equal(commentVerdict('> [!NOTE]\n> > - item\n> Verdict: fix'), null);
   // A "> >" line is in the nested quote, even after a blank "> >" line.
   assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> >\n> > Verdict: fix'), null);
+  // A backtick fence has no backtick after its marks, so "```x```" is inline code in the text.
+  assert.equal(commentVerdict('> ```x``` is a quoted word\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > ```x``` said\n> Verdict: fix'), null);
+  assert.equal(commentVerdict('> quoted\n```x``` Verdict: fix'), null);
+  assert.equal(commentVerdict('> ```js\n> code\n> ```\nVerdict: fix'), 'fix');
 });
