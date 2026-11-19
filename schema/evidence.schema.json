@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bfalkowski/exhibit/schema/evidence.schema.json",
   "title": "The policy file evidence.yml",
-  "description": "Says what evidence each kind of change must show (spec section 8.1). Every key is optional, so an empty file is a valid policy. Exhibit refuses to run on a file that does not pass this schema.",
+  "description": "Says what evidence each kind of change must show (spec section 8.1). Every key is optional, so an empty file is a valid policy. A key with nothing under it, such as kinds:, is the same as no key. Exhibit refuses to run on a file that does not pass this schema.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -13,7 +13,10 @@
       "description": "The format of the file. This Exhibit reads format 3 only."
     },
     "settings": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
         "test_command": {
@@ -46,7 +49,10 @@
       }
     },
     "kinds": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Each key names a kind of change, such as relay-core.",
       "additionalProperties": {
         "type": "object",
@@ -93,12 +99,18 @@
                 "additionalProperties": false,
                 "properties": {
                   "tests-before-after": {
-                    "type": "object",
+                    "type": [
+                      "object",
+                      "null"
+                    ],
                     "additionalProperties": false,
                     "description": "The tests ran on the base and on the head, and pass on the head (spec 9.3)."
                   },
                   "failing-before": {
-                    "type": "object",
+                    "type": [
+                      "object",
+                      "null"
+                    ],
                     "additionalProperties": false,
                     "description": "A test the PR added or changed fails on the base and passes on the head (spec 9.4).",
                     "properties": {
@@ -184,7 +196,10 @@
       }
     },
     "default": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "The rules for a PR that matches no kind.",
       "required": [
         "risk",
@@ -219,12 +234,18 @@
               "additionalProperties": false,
               "properties": {
                 "tests-before-after": {
-                  "type": "object",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
                   "additionalProperties": false,
                   "description": "The tests ran on the base and on the head, and pass on the head (spec 9.3)."
                 },
                 "failing-before": {
-                  "type": "object",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
                   "additionalProperties": false,
                   "description": "A test the PR added or changed fails on the base and passes on the head (spec 9.4).",
                   "properties": {

@@ -43,13 +43,16 @@ export async function readPolicy(cwd) {
   return withDefaults(policy);
 }
 
+// A key with nothing under it, such as "kinds:", is YAML null. It means the same as no key.
 function withDefaults(policy) {
   const settings = policy.settings ?? {};
-  return {
+  const result = {
     ...policy,
     settings: { ...settings, fix_signals: settings.fix_signals ?? [...DEFAULT_FIX_SIGNALS] },
     kinds: policy.kinds ?? {}
   };
+  if (result.default === null) delete result.default;
+  return result;
 }
 
 // Turns one schema problem into a sentence that names the field, such as
@@ -88,6 +91,7 @@ function checkSignals(signals) {
     const type = signal.slice(0, signal.indexOf(':'));
     if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key: or branch:.`);
     const value = signal.slice(type.length + 1);
+    if (/[\r\n]/.test(value)) throw new ToolError(`${at} is ${JSON.stringify(signal)}. A signal must be on one line.`);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
     // A space at the start of the value can never match. A space at the end is easy to miss,
     // and only a title could match it: GitHub trims the spaces from a label name when it

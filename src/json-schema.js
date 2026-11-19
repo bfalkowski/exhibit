@@ -80,5 +80,9 @@ function typeOf(value) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   if (Number.isInteger(value)) return 'integer';
+  // YAML can give NaN (.nan) and infinity (.inf). Compares with NaN are always false, so a range
+  // check would let it through. Neither is a number a schema means.
+  if (Number.isNaN(value)) return 'NaN';
+  if (value === Infinity || value === -Infinity) return 'infinity';
   return typeof value;
 }

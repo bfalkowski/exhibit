@@ -31,3 +31,9 @@ test('schemaProblems gives the path as a list of keys and list places', () => {
   const schema = { type: 'object', properties: { needs: { type: 'array', items: { type: 'string' } } } };
   assert.deepEqual(schemaProblems(schema, { needs: ['a', 7] }), [{ path: ['needs', 1], what: 'must be string, not integer' }]);
 });
+
+test('NaN and infinity are not numbers, so a range check cannot miss them', () => {
+  const schema = { type: 'number', minimum: 0, maximum: 1 };
+  assert.deepEqual(checkSchema(schema, Number.NaN), ['/: must be number, not NaN']);
+  assert.deepEqual(checkSchema(schema, -Infinity), ['/: must be number, not infinity']);
+});

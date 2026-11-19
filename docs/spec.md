@@ -120,18 +120,18 @@ Rules:
 - `merge_without_reading: allowed` holds only if every matched kind allows it.
 - `source` lists the defect IDs a rule came from. The backtest uses it to find leaks (section 9.9).
 - Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
-  - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. Any other key is an error.
+  - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
   - `version` must be 3, the only format this Exhibit reads.
   - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) and `mutation_budget_seconds` (a whole number, 1 or more).
   - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
   - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
-  - `needs` is a list of evidence items. An item is a bare name (`tests-before-after` or `failing-before`), or a mapping with one key: the item type, with its fields.
+  - `needs` is a list of evidence items, and it may be empty. An item is a bare name (`tests-before-after` or `failing-before`), or a mapping with one key: the item type, with its fields. `- failing-before:` with nothing after the colon is the same as the bare name.
   - `failing-before` may have `when`: a list of `fix` and `feature`.
-  - `mutation` must have `min`, a number from 0 to 1.
+  - `mutation` must have `min`, a number from 0 to 1. NaN (`.nan`) and infinity (`.inf`) are not numbers here.
   - `probe` must have `name` and `run`. It may have `artifacts` (a list of paths) and `author: hidden`.
   - An item type that is not one of the four is an error.
-- An invalid policy makes the command exit 2. The message names each bad field and says what is wrong, one field on each line, for example `evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".` A file that is not valid YAML gives exit 2 too.
+- An invalid policy makes the command exit 2. The message names each bad field and says what is wrong, one field on each line, for example `evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".` A file that is not valid YAML gives exit 2 too. A bad `fix_signals` is the one exception: Exhibit checks it first, and its message shows only that problem, as it did before the whole file was checked.
 
 Evidence item types in version 1:
 

@@ -139,7 +139,7 @@ test('readPolicy accepts title_after_key: like the other types', async (t) => {
 test('readPolicy now checks the rest of the file too, not only fix_signals', async (t) => {
   await refuses(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n', /^evidence\.yml version must be 3, not "banana"\.$/);
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\n  mutation_budget_seconds: soon\n', /^evidence\.yml settings\.mutation_budget_seconds must be integer, not string\.$/);
-  await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\nkinds: 7\n', /^evidence\.yml kinds must be object, not integer\.$/);
+  await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\nkinds: 7\n', /^evidence\.yml kinds must be object or null, not integer\.$/);
 });
 
 test('readPolicy refuses a malformed fix_signals with a tool error that says what is wrong', async (t) => {
@@ -159,4 +159,26 @@ test('readPolicy refuses a malformed fix_signals with a tool error that says wha
   for (const [text, message] of cases) {
     await assert.rejects(readPolicy(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
   }
+});
+
+test('readPolicy refuses a mutation min of NaN or infinity', async (t) => {
+  await refuses(t, kind('    needs:\n      - mutation: { min: .nan }\n'), /^evidence\.yml kinds\.relay-core\.needs\[0\]\.mutation\.min must be number, not NaN\.$/);
+  await refuses(t, kind('    needs:\n      - mutation: { min: .inf }\n'), /^evidence\.yml kinds\.relay-core\.needs\[0\]\.mutation\.min must be number, not infinity\.$/);
+});
+
+test('a key with nothing under it is the same as no key', async (t) => {
+  assert.deepEqual(await readPolicy(folderWith(t, 'settings:\nkinds:\ndefault:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
+  const policy = await readPolicy(folderWith(t, kind('    needs:\n      - failing-before:\n      - tests-before-after:\n')));
+  assert.deepEqual(policy.kinds['relay-core'].needs, [{ 'failing-before': null }, { 'tests-before-after': null }]);
+});
+
+test('readPolicy refuses a fix signal with a line break, without showing the schema regex', async (t) => {
+  await refuses(t, 'settings:\n  fix_signals: ["title:fix\\nmore"]\n', /^evidence\.yml settings\.fix_signals\[0\] is "title:fix\\nmore"\. A signal must be on one line\.$/);
+});
+
+test('the evidence item rules are the same under kinds and under default', () => {
+  const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
+  const underKinds = schema.properties.kinds.additionalProperties.properties.needs;
+  const underDefault = schema.properties.default.properties.needs;
+  assert.deepEqual(underDefault, underKinds);
 });
