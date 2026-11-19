@@ -1,47 +1,36 @@
 import { commentReviews, quotedVerdictWarnings } from './comment-reviews.js';
 import { classifyFix, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
-import { createGitHub, PERMISSIONS } from './github.js';
 import { ToolError } from './tool-error.js';
 
-// How many PRs ask for their files, reviews, comments, check runs and commit statuses at the same
-// time.
+// How many PRs ask for their files, reviews, comments and CI results at the same time.
 const PRS_AT_ONCE = 8;
 
-// GitHub lists at most this many files for one PR. A shorter list is complete.
-const LISTED_FILES_AT_MOST = 3000;
-
-// Reads the merged PRs of `repo` ("owner/name") and returns one history line for each, newest
-// merge first. `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
-// Only the kept PRs ask for their files, reviews, comments, check runs and commit statuses.
+// Reads the merged PRs of the forge's repo and returns one history line for each, newest merge
+// first. `forge` is the forge module for the repo, such as createGitHubForge in src/github.js.
+// `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
+// Only the kept PRs ask for their files, reviews, comments and CI results.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification`. The lines fill the spec 8.3 fields this version
 // knows: the later fields (evidence_section, szz, exhibit) are left out. The schema requires szz,
 // so the history command (src/commands/history.js) adds szz to each line before it checks and
 // writes the lines.
-// `warn` gets one text for each PR whose files list GitHub cut short, and one for each comment
+// `warn` gets one text for each PR whose files list the forge cut short, and one for each comment
 // whose only verdict is in a quoted line, in the order of the lines.
-export async function readHistory({ repo, token, fetch, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
-  const github = createGitHub({ token, fetch });
-  const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`, { permission: PERMISSIONS.pullRequests });
-
-  let merged = pulls.filter((pr) => pr.merged_at !== null);
+export async function readHistory({ forge, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
+  let merged = await forge.mergedPulls();
   if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
   merged.sort((a, b) => b.merged_at.localeCompare(a.merged_at) || b.number - a.number);
   if (limit !== undefined) merged = merged.slice(0, limit);
 
   const read = await mapInBatches(merged, PRS_AT_ONCE, async (pr) => {
-    const [files, reviews, comments, checkRuns, statuses] = await Promise.all([
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`, { permission: PERMISSIONS.pullRequests }),
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`, { permission: PERMISSIONS.pullRequests }),
+    const [files, reviews, comments, ci] = await Promise.all([
+      forge.pullFiles(pr.number),
+      forge.pullReviews(pr.number),
       // The PR's comments, where some rooms post their reviews (spec 8.3).
-      github.getAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`, { permission: PERMISSIONS.pullRequests }),
-      // The check runs and commit statuses on the PR's last head commit: the CI result the PR was
-      // merged with. Some CI services post check runs, and some post the older commit statuses.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`, { listField: 'check_runs', permission: PERMISSIONS.checks }),
-      // The combined status: GitHub gives only the newest status for each context.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses', permission: PERMISSIONS.commitStatuses })
+      forge.pullComments(pr.number),
+      // The CI results on the PR's last head commit: the CI result the PR was merged with.
+      forge.ciResults(pr.head.sha)
     ]);
-    const ci = [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
-    const filesWarning = await checkFilesComplete(github, repo, pr.number, files.length);
+    const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
       line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals),
       warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments)]
@@ -51,15 +40,15 @@ export async function readHistory({ repo, token, fetch, since, limit, fixSignals
   return read.map(({ line }) => line);
 }
 
-// Returns a warning when GitHub listed fewer files than the PR changed, or null. The list of PRs
-// has no changed_files count, so only a PR whose list reached GitHub's limit is asked for it.
+// Returns a warning when the forge listed fewer files than the PR changed, or null. Only a PR
+// whose list reached the forge's limit is asked for its count of changed files.
 // The count is only for this warning. So when that request fails, the run goes on, and the
 // warning says that the count is unknown and the list may be cut short.
-async function checkFilesComplete(github, repo, number, listed) {
-  if (listed < LISTED_FILES_AT_MOST) return null;
+async function checkFilesComplete(forge, number, listed) {
+  if (listed < forge.mostFilesListed) return null;
   let changed;
   try {
-    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`, { permission: PERMISSIONS.pullRequests }));
+    changed = await forge.pullFileCount(number);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     return `PR ${number} has ${listed} files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
@@ -91,7 +80,8 @@ function toHistoryLine(pr, files, reviews, comments, ci, fixSignals) {
       change_request_rounds: list.filter((review) => review.state === 'CHANGES_REQUESTED').length,
       list
     },
-    ci,
+    // The history line keeps the name and conclusion of each CI result (spec 8.3).
+    ci: ci.map(({ name, conclusion }) => ({ name, conclusion })),
     classification: classifyFix({ title: pr.title, labels, branch: pr.head.ref }, fixSignals)
   };
 }
@@ -107,16 +97,6 @@ function inTimeOrder(reviews, comments) {
     merged.push(review);
   }
   return merged.concat(comments.slice(c));
-}
-
-function fromCheckRun(run) {
-  return { name: run.name, conclusion: run.conclusion };
-}
-
-// A commit status has a state: success, failure, error or pending. A pending status has not
-// finished, so its conclusion is null, as for a check run that has not finished.
-function fromStatus(status) {
-  return { name: status.context, conclusion: status.state === 'pending' ? null : status.state };
 }
 
 async function mapInBatches(items, size, fn) {

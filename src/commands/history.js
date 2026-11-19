@@ -2,7 +2,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { readFixSignals } from '../fix-signals.js';
-import { createGitHub } from '../github.js';
+import { createGitHubForge, isRepoName } from '../github.js';
 import { readHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { buildReport } from '../report.js';
@@ -11,7 +11,6 @@ import { ToolError } from '../tool-error.js';
 
 const OUTPUT = '.exhibit/history.jsonl';
 const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
-const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
 // `exhibit history --repo owner/name [--since DATE] [--limit N] [--json]`
@@ -30,12 +29,13 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
   const fixSignals = await readFixSignals(cwd);
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const read = await readHistory({ repo: options.repo, token, fetch, since: options.since, limit: options.limit, fixSignals, warn });
+  const forge = createGitHubForge({ repo: options.repo, token, fetch });
+  const read = await readHistory({ forge, since: options.since, limit: options.limit, fixSignals, warn });
 
-  const root = await cloneRoot(cwd, options.repo);
+  const root = await cloneRoot(cwd, forge);
   let lines;
   if (root) {
-    lines = await addSzz(read, { dir: root, repo: options.repo, github: createGitHub({ token, fetch }), warn });
+    lines = await addSzz(read, { dir: root, forge, warn });
   } else {
     lines = read.map((line) => ({ ...line, szz: null }));
     stderr.write(`exhibit: note: SZZ did not run, because this folder is not a clone of ${options.repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`);
@@ -79,7 +79,7 @@ function parseOptions(argv) {
   }
 
   if (values.repo === undefined) throw new ToolError('history needs --repo owner/name, for example --repo bfalkowski/Building58.');
-  if (!REPO_NAME.test(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
+  if (!isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
 
   let since;
   if (values.since !== undefined) {

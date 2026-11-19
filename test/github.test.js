@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGitHub } from '../src/github.js';
+import { createGitHub, createGitHubForge } from '../src/github.js';
 import { ToolError } from '../src/tool-error.js';
 
 // A fetch that gives the replies in order, and a sleep that records how long it was asked to wait.
@@ -179,4 +179,19 @@ test('only secondary-limit waits count toward the longer wait', async () => {
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
   assert.deepEqual(await github.getAll('/x'), [1]);
   assert.deepEqual(s.waits, [5_000, 60_000]);
+});
+
+test('the GitHub forge gives CI results in one shape: check runs first, then commit statuses, each with a URL', async () => {
+  const { fileURLToPath } = await import('node:url');
+  const { replayFetch } = await import('../test-support/replay-fetch.js');
+  const fetch = replayFetch(fileURLToPath(new URL('./fixtures/github/acme-widgets.json', import.meta.url)));
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  assert.deepEqual(await forge.ciResults('c'.repeat(39) + '4'), [
+    { name: 'test', conclusion: 'success', url: 'https://github.com/acme/widgets/runs/41' },
+    { name: 'buildkite/widgets', conclusion: 'success', url: 'https://buildkite.com/acme/widgets/builds/401' },
+    { name: 'deploy/preview', conclusion: 'error', url: 'https://buildkite.com/acme/widgets/builds/402' },
+    { name: 'ci/legacy', conclusion: null, url: 'https://buildkite.com/acme/widgets/builds/403' }
+  ]);
+  // A check run with no html_url gives a null URL.
+  assert.deepEqual((await forge.ciResults('c'.repeat(39) + '1')), [{ name: 'test', conclusion: null, url: null }]);
 });

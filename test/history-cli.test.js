@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
-import { writeHistoryReplay } from './fixtures/szz-github.js';
+import { writeHistoryReplay } from './fixtures/github/szz-replies.js';
 import { gitEnv } from './fixtures/git-env.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
