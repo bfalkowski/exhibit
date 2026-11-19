@@ -126,12 +126,11 @@ test('SZZ on the fixture repo', async (t) => {
     assert.deepEqual(fix.szz.unlinked_lines, []);
   });
 
-  await t.test("to find a fix's first commit, asks GitHub only about commits that are not merge SHAs", () => {
+  await t.test("to find a rebase fix's first commit, asks GitHub about its earlier copy on main", () => {
     // PR 12's walk asks about its first copy on main. The next parent is PR 11's merge_sha, so
-    // the walk stops there with no request. A squash fix's parent is a merge SHA too.
+    // the walk stops there with no request.
     const asked = fetch.calls.map((call) => call.key.split('/')[5]);
     assert.ok(asked.includes(repo.onMain.get(12)[0]));
-    for (const n of [7, 9]) assert.ok(!asked.includes(byNumber.get(n).merge_sha), `PR ${n}`);
   });
 
   await t.test('PRs that are not fixes get szz: null', () => {
@@ -140,6 +139,40 @@ test('SZZ on the fixture repo', async (t) => {
 
   await t.test('every line passes the schema', () => {
     for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  });
+});
+
+// The commits SZZ asked GitHub about, by the "pull requests for a commit" requests.
+const askedShas = (fetch) => fetch.calls.map((call) => /\/commits\/([0-9a-f]{40})\/pulls/.exec(call.key)?.[1]).filter(Boolean);
+
+test('the walk to a squash fix\'s first commit', async (t) => {
+  await t.test('asks GitHub nothing when the parent is a merge SHA in the history', async (t) => {
+    // Only the squash fixes 7 and 9 count as fixes here. Their parents are the merge SHAs of PR 6
+    // and PR 8, so the walk costs no request. Fix 9 moves lines only, so it blames nothing. Fix 7
+    // blames one line on PR 2's merge SHA and one on a commit on PR 3's branch: only that one
+    // goes to GitHub.
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const history = repo.history.map((pr) => ({ ...pr, classification: { ...pr.classification, fix: pr.number === 7 || pr.number === 9 } }));
+    const fetch = commitPullsFetch(repo, REPO);
+    const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
+    const fix7 = lines.find((line) => line.number === 7);
+    const pr3 = fix7.szz.links.find((link) => link.pr === 3);
+    assert.deepEqual(askedShas(fetch), [pr3.lines[0].blame.commit]);
+  });
+
+  await t.test('asks GitHub once about the parent, and stops there, when the parent is not a merge SHA in the history', async (t) => {
+    // With only PR 9 in the history, its parent (PR 8's merge commit) is not a known merge SHA.
+    // GitHub says it belongs to PR 8, not PR 9, so the walk stops after one request.
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const fix9 = repo.history.find((pr) => pr.number === 9);
+    const fetch = commitPullsFetch(repo, REPO);
+    const [line] = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
+    const parent = git(repo.dir, ['rev-parse', `${fix9.merge_sha}^1`]);
+    assert.equal(parent, repo.history.find((pr) => pr.number === 8).merge_sha);
+    assert.deepEqual(askedShas(fetch), [parent]);
+    assert.equal(line.szz.blamed_commit, parent);
   });
 });
 

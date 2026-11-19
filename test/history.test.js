@@ -32,7 +32,10 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
     merged_at: '2026-03-05T12:00:00Z',
     base_ref: 'main',
     base_sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7',
+    head_sha: 'ccccccccccccccccccccccccccccccccccccccc7',
     merge_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7',
+    forge: 'github',
+    url: 'https://github.com/acme/widgets/pull/7',
     files: [
       { path: 'src/cache.js', additions: 120, deletions: 0 },
       { path: 'src/widget.js', additions: 8, deletions: 3 },

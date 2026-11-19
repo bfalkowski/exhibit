@@ -157,6 +157,22 @@ test('the fixture repo and its records match the answer key', async (t) => {
     assert.deepEqual([...ways].sort(), ['merge', 'rebase', 'squash']);
   });
 
+  await t.test('head_sha is the head commit, not the merge commit, and git merge-base needs only the line', () => {
+    const squashed = history.filter((pr) => parentsOf(dir, pr.merge_sha).length === 2 && repo.onMain.get(pr.number).length === 1);
+    assert.ok(squashed.length > 0, 'the fixture has a squash merge');
+    for (const pr of history) {
+      assert.equal(pr.head_sha, git(dir, ['rev-parse', `refs/pull/${pr.number}/head`]).trim(), `PR ${pr.number}`);
+      // The merge-base of the PR's branch and the main branch just before the merge. Every PR
+      // here left main at base_sha, so the two must be the same.
+      assert.equal(git(dir, ['merge-base', pr.head_sha, `${pr.merge_sha}^1`]).trim(), pr.base_sha, `PR ${pr.number}`);
+    }
+    for (const pr of squashed) {
+      assert.notEqual(pr.head_sha, pr.merge_sha, `PR ${pr.number}`);
+      // A squash commit is not on the PR's branch at all.
+      assert.throws(() => git(dir, ['merge-base', '--is-ancestor', pr.merge_sha, pr.head_sha]), undefined, `PR ${pr.number}`);
+    }
+  });
+
   await t.test('a merge-commit PR had a stale base, so its merge joins two lines of work', () => {
     const pr3 = byNumber.get(3);
     assert.notEqual(git(dir, ['rev-parse', `${pr3.merge_sha}^1`]).trim(), pr3.base_sha);

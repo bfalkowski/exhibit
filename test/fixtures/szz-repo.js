@@ -305,7 +305,11 @@ function build(dir) {
       merged_at: mergedAt,
       base_ref: 'main',
       base_sha: opened.get(number),
+      // The PR's last head commit, kept at refs/pull/N/head. It is never the merge commit.
+      head_sha: head,
       merge_sha: run(['rev-parse', 'main']),
+      forge: 'github',
+      url: `https://github.com/fixture/shop/pull/${number}`,
       files: diffFiles(run(['diff', '--numstat', `${opened.get(number)}...${head}`])),
       reviews: { change_request_rounds: 0, list: [] },
       ci: [],

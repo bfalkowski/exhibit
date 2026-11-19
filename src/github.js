@@ -190,13 +190,15 @@ export function isRepoName(text) {
 // the one repo `repo` ("owner/name"). Only this module builds GitHub API paths, so another forge,
 // such as GitLab, can come later as a second module with the same methods. The other options go
 // to createGitHub.
-// Most methods return GitHub's own objects. ciResults returns one shape for check runs and
+// Most methods return GitHub's own objects. A PR from mergedPulls has html_url, its web page. ciResults returns one shape for check runs and
 // commit statuses: { name, conclusion, url }, with check runs first.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
   const base = `/repos/${repo}`;
   const pullRequests = { permission: PERMISSIONS.pullRequests };
   return {
+    // The forge's name in a history line's forge field.
+    name: 'github',
     repo,
 
     // GitHub lists at most this many files for one PR. A shorter list is complete.
