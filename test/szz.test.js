@@ -5,14 +5,16 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createGitHub } from '../src/github.js';
+import { createGitHubForge } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
-import { commitPullsFetch } from './fixtures/szz-github.js';
+import { commitPullsFetch } from './fixtures/github/szz-replies.js';
 
 const REPO = 'fixture/shop';
+// cloneRoot asks only the forge's remote rule, so this forge never fetches.
+const SHOP_FORGE = createGitHubForge({ repo: REPO, token: 't', fetch: async () => { throw new Error('cloneRoot must not fetch'); } });
 
 function git(dir, args) {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
@@ -24,8 +26,8 @@ async function szzOnFixture(t) {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const fetch = commitPullsFetch(repo, REPO);
-  const github = createGitHub({ token: 't', fetch });
-  const lines = await addSzz(repo.history, { dir: repo.dir, repo: REPO, github });
+  const forge = createGitHubForge({ repo: REPO, token: 't', fetch });
+  const lines = await addSzz(repo.history, { dir: repo.dir, forge });
   return { repo, lines, fetch, byNumber: new Map(lines.map((line) => [line.number, line])) };
 }
 
@@ -178,8 +180,8 @@ test('SZZ gives szz: null and a warning when the fix merge commit is not in the 
   t.after(() => repo.cleanup());
   const missing = { ...repo.history.find((pr) => pr.number === 6), merge_sha: 'f'.repeat(40) };
   const warnings = [];
-  const github = createGitHub({ token: 't', fetch: commitPullsFetch(repo, REPO) });
-  const [line] = await addSzz([missing], { dir: repo.dir, repo: REPO, github, warn: (text) => warnings.push(text) });
+  const forge = createGitHubForge({ repo: REPO, token: 't', fetch: commitPullsFetch(repo, REPO) });
+  const [line] = await addSzz([missing], { dir: repo.dir, forge, warn: (text) => warnings.push(text) });
   assert.equal(line.szz, null);
   assert.deepEqual(warnings, [`PR 6: SZZ skipped, because its merge commit ${'f'.repeat(40)} is not in this clone. Run git fetch, then run history again.`]);
 });
@@ -197,7 +199,7 @@ async function szzWithIssues(t, body, issues) {
     return new Response(JSON.stringify(issue ?? { message: 'Not Found' }), { status: issue ? 200 : 404, headers: { 'content-type': 'application/json' } });
   };
   const fix6 = { ...repo.history.find((pr) => pr.number === 6), body };
-  const [line] = await addSzz([fix6], { dir: repo.dir, repo: REPO, github: createGitHub({ token: 't', fetch }) });
+  const [line] = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
   return line;
 }
 
@@ -224,35 +226,35 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
 test('commit-to-PR mapping', async (t) => {
   const recorded = fileURLToPath(new URL('./fixtures/github/building58-commit-pulls.json', import.meta.url));
   const repo = 'bfalkowski/Building58';
-  const github = () => {
+  const replay = () => {
     const fetch = replayFetch(recorded);
-    return { fetch, github: createGitHub({ token: 't', fetch }) };
+    return { fetch, forge: createGitHubForge({ repo, token: 't', fetch }) };
   };
 
   await t.test('a merge SHA in the history of a PR into the default branch maps to that PR, with no request for its pulls', async () => {
-    const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [{ number: 41, base_ref: 'main', merge_sha: 'a'.repeat(40) }], repo, github: gh });
+    const { fetch, forge: gh } = replay();
+    const find = createPrFinder({ lines: [{ number: 41, base_ref: 'main', merge_sha: 'a'.repeat(40) }], forge: gh });
     assert.equal(await find('a'.repeat(40)), 41);
     assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58']);
   });
 
   await t.test('any other commit maps through the API to the merged PR that holds it', async () => {
-    const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { fetch, forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     assert.equal(await find('18ce79d6f068f5fc57cf63497ea5f398356eab68'), 82);
     assert.equal(await find('18ce79d6f068f5fc57cf63497ea5f398356eab68'), 82);
     assert.equal(fetch.calls.length, 1, 'the answer is kept, so the API is asked once');
   });
 
   await t.test('a commit GitHub does not know (422) maps to no PR', async () => {
-    const { github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     assert.equal(await find('0000000000000000000000000000000000000001'), null);
   });
 
   await t.test('one merged PR wins with no request for the default branch', async () => {
-    const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { fetch, forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     assert.equal(await find('18ce79d6f068f5fc57cf63497ea5f398356eab68'), 82);
     assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58/commits/18ce79d6f068f5fc57cf63497ea5f398356eab68/pulls?per_page=100']);
   });
@@ -264,39 +266,39 @@ test('commit-to-PR mapping', async (t) => {
 test('commit-to-PR mapping across base branches', async (t) => {
   const recorded = fileURLToPath(new URL('./fixtures/github/release-flow-commit-pulls.json', import.meta.url));
   const repo = 'fixture/release-flow';
-  const github = () => {
+  const replay = () => {
     const fetch = replayFetch(recorded);
-    return { fetch, github: createGitHub({ token: 't', fetch }) };
+    return { fetch, forge: createGitHubForge({ repo, token: 't', fetch }) };
   };
 
   await t.test('the merged PR into the default branch wins, even when a PR into another branch merged first', async () => {
-    const { github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     assert.equal(await find('1'.repeat(40)), 31);
   });
 
   await t.test('when no merged PR went to the default branch, the first one merged wins', async () => {
-    const { github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     assert.equal(await find('2'.repeat(40)), 40);
   });
 
   // The lines a real history run has: PR 30 is in the history too, and 1111111 is its squash
   // commit on release. The merge SHA must not decide before the base branch is checked.
   await t.test('a merge SHA of a PR into another branch does not decide: the PR into the default branch wins', async () => {
-    const { github: gh } = github();
+    const { forge: gh } = replay();
     const lines = [
       { number: 31, base_ref: 'main', merge_sha: '3'.repeat(40) },
       { number: 30, base_ref: 'release', merge_sha: '1'.repeat(40) }
     ];
-    const find = createPrFinder({ lines, repo, github: gh });
+    const find = createPrFinder({ lines, forge: gh });
     assert.equal(await find('1'.repeat(40)), 31);
     assert.equal(await find('3'.repeat(40)), 31);
   });
 
   await t.test('the default branch is asked for once', async () => {
-    const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [], repo, github: gh });
+    const { fetch, forge: gh } = replay();
+    const find = createPrFinder({ lines: [], forge: gh });
     await find('1'.repeat(40));
     await find('2'.repeat(40));
     assert.equal(fetch.calls.filter((call) => call.key === '/repos/fixture/release-flow').length, 1);
@@ -309,7 +311,7 @@ test('cloneRoot', async (t) => {
       const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exhibit-clone-')));
       git(dir, ['init', '--quiet']);
       git(dir, ['remote', 'add', 'origin', url]);
-      assert.equal(await cloneRoot(dir, REPO), dir, url);
+      assert.equal(await cloneRoot(dir, SHOP_FORGE), dir, url);
     }
   });
 
@@ -318,16 +320,16 @@ test('cloneRoot', async (t) => {
     git(dir, ['init', '--quiet']);
     git(dir, ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git']);
     mkdirSync(join(dir, 'src'));
-    assert.equal(await cloneRoot(join(dir, 'src'), REPO), dir);
+    assert.equal(await cloneRoot(join(dir, 'src'), SHOP_FORGE), dir);
   });
 
   await t.test('gives null for another repo, a repo with no remote, and a folder that is not a repo', async () => {
     const other = mkdtempSync(join(tmpdir(), 'exhibit-clone-'));
     git(other, ['init', '--quiet']);
-    assert.equal(await cloneRoot(other, REPO), null);
+    assert.equal(await cloneRoot(other, SHOP_FORGE), null);
     git(other, ['remote', 'add', 'origin', 'https://github.com/fixture/shopping.git']);
-    assert.equal(await cloneRoot(other, REPO), null);
-    assert.equal(await cloneRoot(mkdtempSync(join(tmpdir(), 'exhibit-plain-')), REPO), null);
+    assert.equal(await cloneRoot(other, SHOP_FORGE), null);
+    assert.equal(await cloneRoot(mkdtempSync(join(tmpdir(), 'exhibit-plain-')), SHOP_FORGE), null);
   });
 });
 
@@ -347,13 +349,13 @@ function repoWithSubmoduleBump() {
   return dir;
 }
 
-const noPrs = () => createGitHub({ token: 't', fetch: async () => new Response('{"message":"No commit found"}', { status: 422 }) });
+const noPrs = () => createGitHubForge({ repo: REPO, token: 't', fetch: async () => new Response('{"message":"No commit found"}', { status: 422 }) });
 
 test('a fix that moves a submodule pointer blames only its file lines', async () => {
   const dir = repoWithSubmoduleBump();
   const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
   const warnings = [];
-  const [line] = await addSzz([fix], { dir, repo: REPO, github: noPrs(), warn: (text) => warnings.push(text) });
+  const [line] = await addSzz([fix], { dir, forge: noPrs(), warn: (text) => warnings.push(text) });
   assert.deepEqual(warnings, []);
   assert.deepEqual(line.szz.unlinked_lines.map((l) => [l.path, l.line, l.text]), [['a.js', 2, 'two;']]);
 });
@@ -373,15 +375,15 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
   assert.equal(git(shallow, ['rev-parse', '--is-shallow-repository']), 'true');
 
   const warnings = [];
-  const github = createGitHub({ token: 't', fetch: commitPullsFetch(repo, REPO) });
-  const lines = await addSzz([newest, older], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
+  const forge = createGitHubForge({ repo: REPO, token: 't', fetch: commitPullsFetch(repo, REPO) });
+  const lines = await addSzz([newest, older], { dir: shallow, forge, warn: (text) => warnings.push(text) });
   assert.equal(lines[0].szz, null);
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /^This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong\. Run git fetch --unshallow, then run history again\.$/);
   assert.match(warnings[1], /^PR 12: SZZ skipped, because git failed: .+/);
 
   // The fix after the skipped one still gets the same links as in the full clone.
-  const [full] = await addSzz([older], { dir: repo.dir, repo: REPO, github });
+  const [full] = await addSzz([older], { dir: repo.dir, forge });
   assert.ok(full.szz.links.length > 0);
   assert.deepEqual(lines[1].szz, full.szz);
 });

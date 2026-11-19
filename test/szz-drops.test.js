@@ -254,3 +254,39 @@ test('comments: a * row with a "*/" later in the hunk that does not close a bloc
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty;', 'const re = /a*/;'], added: ['  * qty * rate;', 'const re = /b*/;'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
 });
+
+test('comments: a line where only the trailing comment changed is dropped', () => {
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 2, deleted: ['x = 1; // old note', 'y = 2; /* old */'], added: ['x = 1;', 'y = 2; /* new */'] }] },
+    { path: 'a.ts', hunks: [{ at: 7, deleted: ['let z = 3;'], added: ['let z = 3; // why z is 3'] }] },
+    { path: 'a.py', hunks: [{ at: 4, deleted: ['    total = 0  # start at zero'], added: ['    total = 0'] }] }
+  ));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'comment'], ['a.js', 3, 'comment'], ['a.ts', 7, 'comment'], ['a.py', 4, 'comment']]);
+});
+
+test('comments: a line whose code changed with its trailing comment counts', () => {
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 1, deleted: ['x = 1; // old note'], added: ['x = 2;'] }] },
+    // In Python the indent is code, so a line that leaves its block counts.
+    { path: 'a.py', hunks: [{ at: 4, deleted: ['    total = 0  # start'], added: ['total = 0'] }] }
+  ));
+  assert.deepEqual(counted(result), [['a.js', [1]], ['a.py', [4]]]);
+});
+
+test('comments: a // or # inside a string is code, not a comment', () => {
+  // With the quotes ignored, each pair would be the same code with a changed comment.
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 1, deleted: ["url = 'a // b';", 'path = "x /* y */ z";', 'tag = `a // b`;'], added: ["url = 'a // c';", 'path = "x /* q */ z";', 'tag = `a // c`;'] }] },
+    { path: 'a.py', hunks: [{ at: 1, deleted: ["tag = 'a # b'", 'say = "it\\"s # 1"'], added: ["tag = 'a # c'", 'say = "it\\"s # 2"'] }] }
+  ));
+  assert.deepEqual(counted(result), [['a.js', [1, 2, 3]], ['a.py', [1, 2]]]);
+});
+
+test('comments: a trailing comment pairs only with a line in the same hunk', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, deleted: ['x = 1; // old note'] },
+    { at: 9, added: ['x = 1;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [1]]]);
+});

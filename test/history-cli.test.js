@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
-import { writeHistoryReplay } from './fixtures/szz-github.js';
+import { writeHistoryReplay } from './fixtures/github/szz-replies.js';
 import { gitEnv } from './fixtures/git-env.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
@@ -67,6 +67,25 @@ test('a custom fix_signals list in evidence.yml replaces the defaults', () => {
   const lines = readLines(run.historyPath);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title:rename']]);
+});
+
+test('a title_after_key signal is recorded in classification, and the line passes the schema', () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [title_after_key:rename]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_key:rename']]);
+});
+
+test('a title_after_key signal with no value gives exit 2 with a message, and writes no file', () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, "title_after_key:"]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "title_after_key:", which needs a value/);
+  assert.ok(!existsSync(run.historyPath));
 });
 
 test('a malformed fix_signals gives exit 2 with a message, and writes no file', () => {
