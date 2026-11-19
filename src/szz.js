@@ -397,18 +397,20 @@ function commentStyle(path) {
   return null;
 }
 
-// A row that ends a block comment: it starts or ends with "*/". A "*/" in the middle of a row,
-// such as in the regex /a*/, does not count.
+// A row that ends a block comment that opened before it: it starts with "*/", or it starts
+// with "*", ends with "*/" and has no "/*" before that "*/". So these rows do not count:
+// "foo(); /* note */", which opens its own comment, and "const re = /a*/", a regex.
 const closesBlock = (text) => {
   const rest = text.trim();
-  return rest.startsWith('*/') || rest.endsWith('*/');
+  if (rest.startsWith('*/')) return true;
+  return rest.startsWith('*') && rest.endsWith('*/') && !rest.slice(0, -2).includes('/*');
 };
 
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. A row that starts with "*" counts
-// as a row of such a block only when the row or a later row of the hunk closes the block (a
-// later row that starts or ends with "*/"), or when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as
-// "* qty;" after a line that ends in "price".
+// as a row of such a block only when the row or a later row of the hunk closes the block, or
+// when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as "* qty;"
+// after a line that ends in "price".
 function markComments(texts, path) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
