@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -121,7 +121,27 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
   const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 6 } });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 6, skipped: 0 } });
+});
+
+test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  // A clone of depth 1 holds only the newest commit, so SZZ skips every fix.
+  const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
+  t.after(() => rmSync(shallow, { recursive: true, force: true }));
+  execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.'], { cwd: shallow });
+  execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/fixture/shop.git'], { cwd: shallow });
+  const fixturePath = writeHistoryReplay(repo, 'fixture/shop');
+
+  const text = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\n');
+  assert.equal(text.stderr.match(/SZZ skipped/g).length, 6);
+
+  const json = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 } });
 });
 
 test('--since keeps PRs merged on or after the date', () => {
