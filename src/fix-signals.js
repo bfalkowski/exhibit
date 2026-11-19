@@ -71,7 +71,11 @@ function checkSignals(signals) {
     if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.`);
     const type = signal.slice(0, signal.indexOf(':'));
     if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title: or branch:.`);
-    if (signal.slice(type.length + 1).trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
+    const value = signal.slice(type.length + 1);
+    if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
+    // Labels, titles and branches never start or end with a space here, so such a signal
+    // could never match. Refuse it instead of matching nothing with no message.
+    if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
   });
 }
 

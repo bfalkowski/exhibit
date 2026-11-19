@@ -89,6 +89,8 @@ test('readFixSignals refuses a malformed fix_signals with a tool error that says
     ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title: or branch:/],
     ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title: or branch:/],
     ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],
+    ['settings:\n  fix_signals: ["label: bug"]\n', /"label: bug".*space/],
+    ['settings:\n  fix_signals: ["title:fix "]\n', /"title:fix ".*space/],
     ['settings:\n  fix_signals: [label:bug\n', /evidence\.yml is not valid YAML/]
   ];
   for (const [text, message] of cases) {

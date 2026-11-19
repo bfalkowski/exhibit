@@ -215,7 +215,7 @@ One escaped defect per line, with these fields:
   - `branch:fix/` matches a head branch whose name starts with `fix/`.
   - All matching ignores case.
 - The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads only this one setting from the file, and the other settings are not checked until slice S4.
-- A `fix_signals` that is not a list, is empty, or has a signal that does not start with `label:`, `title:` or `branch:` makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
+- A `fix_signals` that is not a list, is empty, has a signal that does not start with `label:`, `title:` or `branch:`, or has a space before or after the value (such as "label: bug") makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
 - A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
 - A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
 
