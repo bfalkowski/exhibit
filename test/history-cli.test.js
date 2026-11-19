@@ -346,3 +346,13 @@ test('a run that fails says how many GitHub requests it made', (t) => {
   assert.match(run.stderr, /does not fit the history schema/);
   assert.match(run.stderr, /exhibit: note: this run made [1-9]\d* GitHub requests, and 0 got a 304\.\n/);
 });
+
+test('a policy that breaks the schema gives exit 2 with a message that names the field, and writes no file', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nkinds:\n  relay-core:\n    match: ["relay/**"]\n    risk: extreme\n    needs: [tests-before-after]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: evidence\.yml kinds\.relay-core\.risk must be low, medium or high, not "extreme"\.$/m);
+  assert.doesNotMatch(run.stderr, /\n\s+at /);
+  assert.ok(!existsSync(run.historyPath));
+});
