@@ -5,6 +5,7 @@
     "body": [
       {
         "number": 2,
+        "html_url": "https://github.com/acme/broken/pull/2",
         "state": "closed",
         "title": "Good one",
         "body": "Body of #2.",
@@ -28,6 +29,7 @@
       },
       {
         "number": 1,
+        "html_url": "https://github.com/acme/broken/pull/1",
         "state": "closed",
         "title": "Bad one",
         "body": "Body of #1.",

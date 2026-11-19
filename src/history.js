@@ -32,7 +32,7 @@ export async function readHistory({ forge, since, limit, fixSignals = DEFAULT_FI
     ]);
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
-      line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals),
+      line: toHistoryLine(forge.name, pr, files, reviews, comments, ci, fixSignals),
       warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments)]
     };
   });
@@ -57,7 +57,7 @@ async function checkFilesComplete(forge, number, listed) {
   return `PR ${number} changed ${changed} files, but GitHub listed only the first ${listed}, so its files field is cut short.`;
 }
 
-function toHistoryLine(pr, files, reviews, comments, ci, fixSignals) {
+function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) {
   const labels = pr.labels.map((label) => label.name);
   const list = inTimeOrder(
     reviews.map((review) => ({ state: review.state, author: review.user?.login ?? null, source: 'review', at: review.submitted_at })),
@@ -72,7 +72,12 @@ function toHistoryLine(pr, files, reviews, comments, ci, fixSignals) {
     merged_at: pr.merged_at,
     base_ref: pr.base.ref,
     base_sha: pr.base.sha,
+    // The PR's last head commit, not the merge commit. With it, git merge-base can find where the
+    // PR's branch left the base branch from this line alone (spec 16, question 8).
+    head_sha: pr.head.sha,
     merge_sha: pr.merge_commit_sha,
+    forge: forgeName,
+    url: pr.html_url,
     files: files.map((file) => ({ path: file.filename, additions: file.additions, deletions: file.deletions })),
     reviews: {
       // A change request that was later dismissed has the state DISMISSED, so it is not a round.

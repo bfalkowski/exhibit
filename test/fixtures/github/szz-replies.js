@@ -64,6 +64,7 @@ export function writeHistoryReplay(built, repo) {
     headers: {},
     body: newestFirst.map((pr) => ({
       number: pr.number,
+      html_url: pr.url,
       title: pr.title,
       body: pr.body,
       user: { login: pr.author },
@@ -71,7 +72,7 @@ export function writeHistoryReplay(built, repo) {
       merged_at: pr.merged_at,
       merge_commit_sha: pr.merge_sha,
       base: { ref: 'main', sha: pr.base_sha },
-      head: { ref: `pr-${pr.number}`, sha: git(built.dir, ['rev-parse', `refs/pull/${pr.number}/head`]) }
+      head: { ref: `pr-${pr.number}`, sha: pr.head_sha }
     }))
   };
   for (const pr of built.history) {

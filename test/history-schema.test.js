@@ -14,7 +14,10 @@ const good = () => ({
   merged_at: '2026-03-05T12:00:00Z',
   base_ref: 'main',
   base_sha: 'b'.repeat(40),
+  head_sha: 'c'.repeat(40),
   merge_sha: 'a'.repeat(40),
+  forge: 'github',
+  url: 'https://github.com/acme/widgets/pull/7',
   files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],
   reviews: { change_request_rounds: 1, list: [{ state: 'CHANGES_REQUESTED', author: 'rev1', source: 'review' }, { state: 'APPROVED', author: null, source: 'comment' }] },
   ci: [{ name: 'test', conclusion: 'success' }, { name: 'lint', conclusion: null }],
@@ -40,6 +43,21 @@ test('classification must say whether the PR is a fix and which signal matched',
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: 'yes', fix_signal: 'bug' } }).sort(), [
     '/classification/fix: must be boolean, not string',
     '/classification/fix_signal: does not match ^(label|title|title_after_key|branch):.+$'
+  ]);
+});
+
+test('a line from before head_sha, forge and url fails, once for each field', () => {
+  const { head_sha, forge, url, ...older } = good();
+  assert.ok(head_sha && forge && url);
+  assert.deepEqual(checkHistoryLine(older).sort(), ['/: misses the field forge', '/: misses the field head_sha', '/: misses the field url']);
+});
+
+test('head_sha is a full sha, forge names a forge Exhibit knows, and url is a web address', () => {
+  const line = { ...good(), head_sha: 'abc', forge: 'gitea', url: 'github.com/acme/widgets/pull/7' };
+  assert.deepEqual(checkHistoryLine(line).sort(), [
+    '/forge: does not match ^(github)$',
+    '/head_sha: does not match ^[0-9a-f]{40}$',
+    '/url: does not match ^https?://.+$'
   ]);
 });
 
