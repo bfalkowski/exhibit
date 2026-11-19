@@ -5,10 +5,12 @@ import { readFixSignals } from '../fix-signals.js';
 import { createGitHub } from '../github.js';
 import { readHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
+import { buildReport } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
 
 const OUTPUT = '.exhibit/history.jsonl';
+const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
@@ -19,6 +21,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
+// Then it writes the report of escaped defects, as report.md and report.html (spec 8.5).
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
@@ -45,17 +48,20 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     throw new ToolError(`GitHub sent data that does not fit the history schema, so ${OUTPUT} was not written:\n  ${shown}${more}\nReport this as an Exhibit issue, with the PR numbers.`);
   }
 
-  await writeAtomically(join(cwd, OUTPUT), lines.map((line) => JSON.stringify(line) + '\n').join(''));
+  await writeAtomically(cwd, OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join(''));
+  const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals });
+  await writeAtomically(cwd, REPORT.markdown, report.markdown);
+  await writeAtomically(cwd, REPORT.html, report.html);
 
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
   const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
-    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n`);
+    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n`);
   }
 }
 
@@ -102,7 +108,9 @@ function parseSince(text) {
   return Number.isNaN(since.getTime()) ? null : since;
 }
 
-async function writeAtomically(path, text) {
+// Writes `text` to `name` in `cwd`, so a failed write leaves the older file as it was.
+async function writeAtomically(cwd, name, text) {
+  const path = join(cwd, name);
   const temporary = `${path}.${process.pid}.tmp`;
   try {
     await mkdir(join(path, '..'), { recursive: true });
@@ -111,6 +119,6 @@ async function writeAtomically(path, text) {
   } catch (error) {
     // Best effort: when the folder itself is the problem, removing the temporary file fails too.
     await rm(temporary, { force: true }).catch(() => {});
-    throw new ToolError(`could not write ${OUTPUT}: ${error.message}`);
+    throw new ToolError(`could not write ${name}: ${error.message}`);
   }
 }

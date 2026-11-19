@@ -241,6 +241,23 @@ One escaped defect per line, with these fields:
 - The escaped defects found, each with its SZZ evidence.
 - How sure Exhibit is, in plain words. With weak history, the report says so instead of guessing.
 
+`exhibit history` writes the report to `.exhibit/report.md` and `.exhibit/report.html`, after it writes `.exhibit/history.jsonl`. A run that fails writes no report. Both files come from the same content, so they hold the same facts. `--json` names the two files in its `report` field. The report has these parts, in this order:
+
+1. **The counts.** The number of merged PRs read, the number of fix PRs, and how many of the fix PRs SZZ linked to an introducing PR. Each fix PR with at least one link is an escaped defect. When SZZ skipped a fix PR (section 9.2), the count says so. With no fix PRs, the report says so in one sentence and has no list of defects. Outside a clone, SZZ did not run, and the report says it cannot show escaped defects.
+2. **How sure Exhibit is.** Whether the history is weak, and why, in plain words, then the rule below.
+3. **The escaped defects**, newest fix first. For each one: the fix PR and its title, the commit that SZZ blamed, and each introducing PR with its confidence as a percent and as a count of the fix's counted lines. Under each introducing PR are its lines (path, line number and text) and what `git blame` said about each one: the commit, the author, the date and the commit summary, and the first path and line when they differ. The lines that came from no merged PR are listed too. The report shows at most 5 lines for each link, then says how many more there are. `history.jsonl` has them all.
+4. **The fix PRs with no escaped defect found**, and why: SZZ skipped the PR, dropped every line (the `no_link_reason`), found its lines only in commits that are in no merged PR, or found no deleted or changed line to blame.
+
+**Weak history.** The history is weak when one of these is true:
+
+- It has fewer than 10 fix PRs. With 9 it is weak, and with 10 it is not.
+- SZZ linked none of the fix PRs, or did not run.
+- Fewer than half of the escaped defects have a strong link. A strong link has a confidence of 0.5 or more. So 2 strong defects of 4 is not weak, and 1 of 4 is weak.
+
+Each link counts lines, not bugs, so with few fixes, or with links that hold only a small part of a fix's lines, Exhibit cannot tell a real pattern from chance. A weak history makes the report say "The history is weak" and list the reasons. With no fix PRs, the report also says to check that the fix signals match how the repo marks a fix, and names them.
+
+`report.html` works with no network. Its styles are in the file. It has no scripts, no images, no links, and a Content Security Policy of `default-src 'none'; style-src 'unsafe-inline'`, so a browser loads nothing from outside the file. It escapes all text from the history, so a PR title cannot add HTML. `report.md` escapes markdown marks in that text, so a title is shown as it is.
+
 ## 9. How the parts work
 
 ### 9.1 Classifying a change
