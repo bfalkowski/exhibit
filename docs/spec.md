@@ -170,7 +170,7 @@ One merged PR per line, with these fields:
 - `files`: path, additions and deletions for each file
 - `classification`: `kinds` holds the kinds of change under the current policy. `classification.fix` is true when the PR is a fix.
 - `reviews`: `list` holds the `state`, `author` and `source` of each review, oldest first. `source` is `review` for a GitHub review, or `comment` for a review posted as a PR comment. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`, from both sources.
-- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state.
+- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state. A reader of `ci`, such as the S5 backtest, must allow for two things: an app that posts both a check run and a commit status with the same name shows up twice, and a commit status can give the conclusion `error`, which a check run never gives.
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
 - `szz`: for fix PRs, the introducing PRs, the lines, the blame output for each line, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
@@ -189,7 +189,7 @@ What each version fills:
   - A comment with no verdict is not a review, and is not in `reviews`.
   - The comment reviews and the GitHub reviews are merged into one list by time: `created_at` for a comment, `submitted_at` for a review. At the same time, the review comes first. A pending review has no `submitted_at`, so it comes before every comment that is still left, even an older one.
 - **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`. A history file from before S2 has no `classification`, so it fails the schema. Run `exhibit history` again: it writes the whole file new, so the new file has `classification` on every line.
-- **S2, SZZ:** every line has `szz` (section 9.2), and the schema requires it. It is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds three fields:
+- **S2, SZZ:** every line has `szz` (section 9.2), and the schema requires it. A history file from before this change has no `szz`, so it fails the schema, even when it has `classification`: run `exhibit history` again, and the new file has `szz` on every line. `szz` is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds three fields:
   - `blamed_commit`: the commit that `git blame` ran on: the parent of the fix's first commit on the main branch (section 9.2, step 3).
   - `links`: one for each introducing PR, highest confidence first. A link has `pr`, `confidence` and `lines`.
   - `unlinked_lines`: the lines whose commit is in no merged PR, such as a commit pushed straight to the main branch.
@@ -199,11 +199,20 @@ What each version fills:
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
 
-- A `retry-after` header. It holds whole seconds or an HTTP date, and `exhibit history` waits that long or until that time.
+- A `retry-after` header. It holds whole seconds, or an HTTP date such as `Thu, 19 Nov 2026 10:00:30 GMT`, and `exhibit history` waits that long or until that time. A value in any other form, such as `1.5`, counts as no `retry-after` header.
 - No requests left until `x-ratelimit-reset`. `exhibit history` waits until one second after that time.
-- A message that names a secondary rate limit, with neither of these headers. `exhibit history` waits one minute, as GitHub's docs say.
+- A message that names a secondary rate limit, with neither of these headers. GitHub's docs say to wait at least one minute, and longer each time the limit comes back. So the first wait for a secondary limit is one minute, the second two minutes, and the third four minutes. Waits of the other two kinds do not count here. Each wait gets a random extra of up to a quarter of it, so the requests that hit the limit together do not all ask again at the same moment. The longest such wait is five minutes.
 
 If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too.
+
+`exhibit history` reads `GITHUB_TOKEN`. A fine-grained token needs these repository permissions:
+
+- Metadata: read. GitHub gives it to every fine-grained token.
+- Pull requests: read, for the PRs, their files, reviews and comments, and for the PRs of a commit (SZZ).
+- Checks: read, for the check runs. GitHub's page of permissions for fine-grained tokens does not list the check-runs request, so this one is not yet confirmed.
+- Commit statuses: read, for the commit statuses.
+
+A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks. A 429, and a rate limit that is still there when the waits end, do not name a permission.
 
 ### 8.4 `.exhibit/labels.jsonl`
 

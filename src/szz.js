@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { PERMISSIONS } from './github.js';
 
 const run = promisify(execFile);
 
@@ -73,7 +74,7 @@ export function createPrFinder({ lines, repo, github }) {
 async function askGitHub(github, repo, sha, defaultBranch) {
   // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
   // means the same here: the repo itself was read a moment before.
-  const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422] });
+  const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], permission: PERMISSIONS.pullRequests });
   const merged = pulls.filter((pr) => pr.merged_at).sort((a, b) => a.merged_at.localeCompare(b.merged_at));
   if (merged.length < 2) return merged.length === 1 ? merged[0].number : null;
   // A commit can sit in more than one merged PR, such as a fix merged into a release branch and
