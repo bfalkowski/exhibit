@@ -53,9 +53,12 @@ export async function cloneRoot(dir, forge) {
 // Returns a function that maps a commit SHA to the number of the PR that brought it to the main
 // branch, or null when no merged PR holds it. It looks first at the merge SHAs in `lines` (a
 // squash merge's one commit), then asks the forge which PRs hold the commit, and keeps each answer.
-// A merge SHA decides only for a PR into the default branch. A PR squash merged into a release
-// branch did not bring its commit to main, so the forge is asked about that commit.
-export function createPrFinder({ lines, forge }) {
+// A merge SHA decides for a PR into the default branch. A PR squash merged into a release branch
+// did not bring its commit to main, so the forge is asked about that commit. A PR merged before
+// the default branch was renamed has the old name as its base_ref, so for any other base_ref the
+// merge SHA still decides when `onMainLine` says the commit is on the default branch's first
+// parent line in the clone.
+export function createPrFinder({ lines, forge, onMainLine = async () => false }) {
   const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line]));
   const asked = new Map();
   let mainBranch = null;
@@ -68,7 +71,10 @@ export function createPrFinder({ lines, forge }) {
   };
   const find = async (sha) => {
     const line = byMergeSha.get(sha);
-    if (line && line.base_ref === (await defaultBranch())) return line.number;
+    if (line) {
+      const main = await defaultBranch();
+      if (line.base_ref === main || (await onMainLine(sha, main))) return line.number;
+    }
     return askForge(forge, sha, defaultBranch);
   };
   return (sha) => {
@@ -99,7 +105,7 @@ async function askForge(forge, sha, defaultBranch) {
 // warning first, because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
 export async function addSzz(lines, { dir, forge, warn = () => {} }) {
-  const findPr = createPrFinder({ lines, forge });
+  const findPr = createPrFinder({ lines, forge, onMainLine: mainLineCheck(dir, forge) });
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -124,6 +130,39 @@ export async function addSzz(lines, { dir, forge, warn = () => {} }) {
     }
   }
   return out;
+}
+
+// Returns a function that says whether a commit is on the first-parent line of the default
+// branch in the clone: a commit that the default branch got on its own, such as a squash merge,
+// and not one that came in through a merge commit. The tip is the default branch of a remote
+// that points at the forge's repo, else the local branch with that name. Git lists the line
+// once per run, when a merge SHA first needs it. With no such branch in the clone, no commit is
+// on the line.
+function mainLineCheck(dir, forge) {
+  let line = null;
+  return async (sha, branch) => {
+    line ??= firstParentLine(dir, forge, branch);
+    return (await line).has(sha);
+  };
+}
+
+async function firstParentLine(dir, forge, branch) {
+  const tip = await branchTip(dir, forge, branch);
+  if (!tip) return new Set();
+  return new Set((await git(dir, ['rev-list', '--first-parent', tip])).split('\n').filter(Boolean));
+}
+
+async function branchTip(dir, forge, branch) {
+  const rows = (await git(dir, ['remote', '-v'])).split('\n').map((row) => row.split(/\s+/));
+  const remotes = [...new Set(rows.filter(([name, url]) => name && url && forge.isRemote(url)).map(([name]) => name))];
+  for (const ref of [...remotes.map((name) => `refs/remotes/${name}/${branch}`), `refs/heads/${branch}`]) {
+    try {
+      return (await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim();
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+    }
+  }
+  return null;
 }
 
 // A GitHub reply that is a problem with one request, such as a 502. GitHubReplyError says
