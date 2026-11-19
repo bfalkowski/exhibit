@@ -33,6 +33,25 @@ test('a 429 with retry-after waits that many seconds, then asks again', async ()
   assert.equal(s.calls.length, 2);
 });
 
+test('getOne waits on a 429 with retry-after, then asks again and returns the object', async () => {
+  const s = scripted([
+    { status: 429, headers: { 'retry-after': '2' }, body: { message: 'slow down' } },
+    { status: 200, body: { number: 9, title: 'Add a thing' } }
+  ]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  assert.deepEqual(await github.getOne('/repos/o/r/pulls/9'), { number: 9, title: 'Add a thing' });
+  assert.deepEqual(s.waits, [2000]);
+  assert.equal(s.calls.length, 2);
+});
+
+test('getOne does not wait an hour for a retry-after: it fails with a tool error', async () => {
+  const s = scripted([{ status: 429, headers: { 'retry-after': '3600' }, body: { message: 'slow down' } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(github.getOne('/repos/o/r/pulls/9'), (error) => error instanceof ToolError && /429/.test(error.message) && /rate limit/.test(error.message));
+  assert.deepEqual(s.waits, []);
+  assert.equal(s.calls.length, 1);
+});
+
 test('a 403 with no requests left waits until the reset time, then asks again', async () => {
   const s = scripted([
     { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1000' }, body: { message: 'rate limit' } },
