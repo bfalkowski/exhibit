@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cacheFolder } from '../src/github-cache.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
@@ -41,6 +42,10 @@ const notAClone = (repo) => `exhibit: note: SZZ did not run, because this folder
 const QUOTED_VERDICT_WARNING = 'exhibit: warning: PR 5: the comment by dev5 at 2026-02-20T10:00:00Z gives the verdict fix only in a quoted line, so it does not count as a review.\n';
 const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const WROTE_REPORT = 'Wrote the report to .exhibit/report.md and .exhibit/report.html.\n';
+// Each run gets HOME = its own folder, so its reply cache is in that folder, and starts empty.
+const cacheOf = (cwd) => cacheFolder({ env: {}, home: cwd });
+const madeRequests = (cwd, requests, notModified = 0) => `Made ${requests} GitHub requests. ${notModified} got a 304 and came from the cache in ${cacheOf(cwd)}.\n`;
+const githubCounts = (cwd, requests, notModified = 0) => ({ requests, not_modified: notModified, cache: cacheOf(cwd) });
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', () => {
@@ -104,7 +109,7 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 76) });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
@@ -134,7 +139,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
-  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\n' + WROTE_REPORT);
+  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\n' + WROTE_REPORT + madeRequests(repo.dir, 66));
 
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
@@ -197,7 +202,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 }, report: REPORT });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 66) });
 });
 
 test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (t) => {
@@ -213,12 +218,12 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const text = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\n' + WROTE_REPORT);
+  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\n' + WROTE_REPORT + madeRequests(shallow, 61));
   assert.equal(text.stderr.match(/SZZ skipped/g).length, 6);
 
   const json = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 }, report: REPORT });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 }, report: REPORT, github: githubCounts(shallow, 61) });
 });
 
 test('--since keeps PRs merged on or after the date', () => {
@@ -236,7 +241,7 @@ test('--limit keeps the newest N merged PRs', () => {
 test('--json prints a short machine summary', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 31) });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', () => {
@@ -299,4 +304,48 @@ test('a folder that cannot be written gives exit 2 and a message, not a stack tr
   assert.equal(run.status, 2);
   assert.match(run.stderr, /could not write \.exhibit\/history\.jsonl/);
   assert.doesNotMatch(run.stderr, /\n\s+at /);
+});
+
+// Writes a copy of the acme-widgets fixture where every 200 reply has an ETag, in `dir`.
+function widgetsWithETags(dir) {
+  const recorded = JSON.parse(readFileSync(fixture('acme-widgets'), 'utf8'));
+  for (const [key, reply] of Object.entries(recorded)) {
+    if (reply.status === 200) reply.headers = { ...reply.headers, etag: `W/"${key}"` };
+  }
+  const path = join(dir, 'acme-widgets-etags.json');
+  writeFileSync(path, JSON.stringify(recorded));
+  return path;
+}
+
+test('a second run gets a 304 for every request, writes the same history, and says so', () => {
+  const cwd = newFolder();
+  const fixturePath = widgetsWithETags(newFolder());
+  const first = exhibit(['history', '--repo', 'acme/widgets'], { fixturePath, cwd });
+  assert.equal(first.status, 0, first.stderr);
+  assert.ok(first.stdout.endsWith(madeRequests(cwd, 31)), first.stdout);
+  const history = readFileSync(first.historyPath, 'utf8');
+
+  const second = exhibit(['history', '--repo', 'acme/widgets', '--json'], { fixturePath, cwd });
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 31, 31));
+  assert.equal(readFileSync(second.historyPath, 'utf8'), history);
+});
+
+test('--no-cache gets no 304s and writes no cache folder', () => {
+  const cwd = newFolder();
+  const fixturePath = widgetsWithETags(newFolder());
+  for (let run = 0; run < 2; run++) {
+    const text = exhibit(['history', '--repo', 'acme/widgets', '--no-cache'], { fixturePath, cwd });
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, /\nMade 31 GitHub requests\. The cache was off\.\n$/);
+  }
+  const json = exhibit(['history', '--repo', 'acme/widgets', '--no-cache', '--json'], { fixturePath, cwd });
+  assert.deepEqual(JSON.parse(json.stdout).github, { requests: 31, not_modified: 0, cache: null });
+  assert.equal(existsSync(cacheOf(cwd)), false);
+});
+
+test('a run that fails says how many GitHub requests it made', () => {
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { fixtureName: 'acme-broken' });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /exhibit: note: this run made \d+ GitHub requests, and 0 got a 304\.\n/);
 });

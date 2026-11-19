@@ -61,6 +61,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 | Blind sample | Merged PRs picked at random that a person reads without seeing the verdict first. |
 | Rung | One step on the trust ladder, for one kind of change. Only a person turns a rung on. |
 | Forge | The service that hosts the repo and its PRs, such as GitHub. |
+| Reply cache | The folder where Exhibit saves GitHub replies with their ETags, so a later run can get a 304 instead of a full reply (section 8.6). |
 
 ## 7. Commands
 
@@ -69,7 +70,7 @@ All commands accept `--json` for machine output and `--repo owner/name`. Each co
 | Command | What it does |
 |---|---|
 | `exhibit init` | Writes a starter `evidence.yml` and example workflow files. |
-| `exhibit history [--since DATE] [--limit N]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. |
+| `exhibit history [--since DATE] [--limit N] [--no-cache]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. `--no-cache` turns off the reply cache (section 8.6). |
 | `exhibit label [--claude]` | Shows each escaped defect that has no code yet. With `--claude`, Claude drafts a code and a category. The person confirms or edits each one. Writes `.exhibit/labels.jsonl`. |
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
@@ -264,6 +265,20 @@ One escaped defect per line, with these fields:
 Each link counts lines, not bugs, so with few fixes, or with links that hold only a small part of a fix's lines, Exhibit cannot tell a real pattern from chance. A weak history makes the report say "The history is weak" and list the reasons. With no fix PRs, the report also says to check that the fix signals match how the repo marks a fix, and names them.
 
 `report.html` works with no network. Its styles are in the file. It has no scripts, no images, no links, and a Content Security Policy of `default-src 'none'; style-src 'unsafe-inline'`, so a browser loads nothing from outside the file. It escapes all text from the history, so a PR title cannot add HTML. `report.md` escapes markdown marks in that text, so a title is shown as it is.
+
+### 8.6 Reply cache
+
+GitHub allows a token 5,000 REST requests an hour, and every run with that token shares the limit. A conditional request costs nothing when nothing changed: GitHub answers `304 Not Modified`, and a 304 does not count against the rate limit. So `exhibit history` saves GitHub replies in a reply cache, and asks again with `If-None-Match`.
+
+- **The folder.** All runs by one user on a machine share one folder: `exhibit/github` in the user's cache folder. That is `$XDG_CACHE_HOME/exhibit/github` when `XDG_CACHE_HOME` is set. Otherwise it is `~/Library/Caches/exhibit/github` on macOS, `%LOCALAPPDATA%\exhibit\github` on Windows, and `~/.cache/exhibit/github` elsewhere. The folder is made on the first write, readable only by the user, because it can hold replies about private repos.
+- **An entry.** Each entry is one JSON file that holds the URL, the ETag, the body of the reply, and its `content-type` and `link` headers. The client reads the next page from `link`. Only a 200 reply with an ETag is saved. A newer 200 for the same URL replaces the entry.
+- **The key.** The file name is a SHA-256 hash of the URL and a SHA-256 hash of the token. So two tokens never share an entry, even for the same URL, and a token with less access never gets a reply that another token read. No file name or file holds the token.
+- **A request.** When the URL has an entry, the request sends its ETag in `If-None-Match`. A 304 gives the saved body. Any other reply is used as before, and a 200 with an ETag replaces the entry.
+- **A broken entry.** An entry that is not valid JSON, is cut short, or lacks a field counts as no entry: the request goes without `If-None-Match`, and the new reply replaces it. A write first goes to a temporary file that is then renamed, so another run never reads half an entry. A write that fails is ignored. The cache never stops a run.
+- **`--no-cache`.** The run reads no entry, sends no `If-None-Match`, and writes nothing to the folder.
+- **The counts.** At the end, `exhibit history` prints how many requests went to GitHub and how many got a 304, for example `Made 31 GitHub requests. 31 got a 304 and came from the cache in /Users/me/Library/Caches/exhibit/github.` With `--no-cache` the second sentence is `The cache was off.` `--json` gives the same in its `github` field: `{ "requests": 31, "not_modified": 31, "cache": "<folder>" }`, with `cache` null under `--no-cache`. A request that is asked again after a rate-limit wait counts each time. A run that fails prints the two counts on stderr before it exits 2.
+
+The cache does not remove old entries. Deleting the folder is always safe: the next run fills it again.
 
 ## 9. How the parts work
 

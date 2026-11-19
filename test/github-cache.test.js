@@ -1,0 +1,137 @@
+import { afterEach, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createGitHub } from '../src/github.js';
+import { cacheFolder, createReplyCache } from '../src/github-cache.js';
+
+// Makes a new empty cache folder. The folder is removed when the test that made it ends.
+const madeFolders = [];
+function newFolder() {
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-cache-'));
+  madeFolders.push(dir);
+  return dir;
+}
+afterEach(() => {
+  for (const dir of madeFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+// A fetch that acts like GitHub for recorded replies. `replies` maps a path to { etag, body, link }.
+// A request whose If-None-Match equals the reply's ETag gets a 304 with no body, as from GitHub.
+// Every request is recorded with its headers.
+function recorded(replies) {
+  const calls = [];
+  const fetch = async (url, init = {}) => {
+    const { pathname, search } = new URL(url);
+    calls.push({ path: pathname + search, headers: { ...init.headers } });
+    const { etag, body, link } = replies[pathname + search];
+    if (init.headers['if-none-match'] === etag) return new Response(null, { status: 304, headers: { etag } });
+    return new Response(JSON.stringify(body), { status: 200, headers: { etag, 'content-type': 'application/json', ...(link ? { link } : {}) } });
+  };
+  return { fetch, calls };
+}
+
+const TOKEN = 'ghp_secretTokenThatMustNotBeSaved1234';
+
+function client(fetch, dir, token = TOKEN) {
+  return createGitHub({ token, fetch, cache: createReplyCache({ dir, token }) });
+}
+
+test('the second request for a URL sends If-None-Match, gets a 304, and returns the saved body', async () => {
+  const dir = newFolder();
+  const github = recorded({ '/repos/o/r/pulls/9': { etag: 'W/"v1"', body: { number: 9, title: 'Add a thing' } } });
+
+  assert.deepEqual(await client(github.fetch, dir).getOne('/repos/o/r/pulls/9'), { number: 9, title: 'Add a thing' });
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getOne('/repos/o/r/pulls/9'), { number: 9, title: 'Add a thing' });
+
+  assert.equal(github.calls[0].headers['if-none-match'], undefined);
+  assert.equal(github.calls[1].headers['if-none-match'], 'W/"v1"');
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1 });
+});
+
+test('a list served from the cache still follows the saved Link header to the next page', async () => {
+  const dir = newFolder();
+  const github = recorded({
+    '/x?page=1': { etag: '"p1"', body: [1, 2], link: '<https://api.github.com/x?page=2>; rel="next"' },
+    '/x?page=2': { etag: '"p2"', body: [3] }
+  });
+  assert.deepEqual(await client(github.fetch, dir).getAll('/x?page=1'), [1, 2, 3]);
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getAll('/x?page=1'), [1, 2, 3]);
+  assert.deepEqual(second.counts(), { requests: 2, not_modified: 2 });
+});
+
+test('a 200 with a new ETag replaces the saved entry', async () => {
+  const dir = newFolder();
+  const replies = { '/repos/o/r': { etag: '"old"', body: { default_branch: 'main' } } };
+  const github = recorded(replies);
+  await client(github.fetch, dir).getOne('/repos/o/r');
+
+  replies['/repos/o/r'] = { etag: '"new"', body: { default_branch: 'trunk' } };
+  assert.deepEqual(await client(github.fetch, dir).getOne('/repos/o/r'), { default_branch: 'trunk' }, 'the old ETag no longer matches, so GitHub sends 200');
+  const third = client(github.fetch, dir);
+  assert.deepEqual(await third.getOne('/repos/o/r'), { default_branch: 'trunk' });
+
+  assert.deepEqual(github.calls.map((call) => call.headers['if-none-match']), [undefined, '"old"', '"new"']);
+  assert.deepEqual(third.counts(), { requests: 1, not_modified: 1 });
+});
+
+test('a broken or partly written entry is ignored: the client asks again with no If-None-Match, and the run succeeds', async () => {
+  const dir = newFolder();
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  await client(github.fetch, dir).getOne('/repos/o/r');
+  const [file] = readdirSync(dir);
+
+  for (const broken of ['{"url":"https://api.github.com/repos/o/r","etag":"\\"v1\\"","bo', '', '[]', '{"etag":"\\"v1\\""}']) {
+    writeFileSync(join(dir, file), broken);
+    const again = client(github.fetch, dir);
+    assert.deepEqual(await again.getOne('/repos/o/r'), { default_branch: 'main' }, JSON.stringify(broken));
+    assert.equal(github.calls.at(-1).headers['if-none-match'], undefined, JSON.stringify(broken));
+    assert.deepEqual(again.counts(), { requests: 1, not_modified: 0 });
+  }
+  // The last fetch wrote a whole entry again, so the next request gets a 304.
+  const fixed = client(github.fetch, dir);
+  await fixed.getOne('/repos/o/r');
+  assert.deepEqual(fixed.counts(), { requests: 1, not_modified: 1 });
+});
+
+test('with no cache, the client sends no If-None-Match and writes nothing', async () => {
+  const dir = newFolder();
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  const noCache = createGitHub({ token: TOKEN, fetch: github.fetch });
+  await noCache.getOne('/repos/o/r');
+  await noCache.getOne('/repos/o/r');
+  assert.deepEqual(github.calls.map((call) => call.headers['if-none-match']), [undefined, undefined]);
+  assert.deepEqual(noCache.counts(), { requests: 2, not_modified: 0 });
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('two tokens get separate entries, and no file in the cache holds a token', async () => {
+  const dir = newFolder();
+  const other = 'github_pat_anotherSecretToken5678';
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+
+  await client(github.fetch, dir, TOKEN).getOne('/repos/o/r');
+  const second = client(github.fetch, dir, other);
+  await second.getOne('/repos/o/r');
+
+  assert.equal(github.calls[1].headers['if-none-match'], undefined, 'the second token does not get the first token\'s entry');
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 0 });
+  const files = readdirSync(dir);
+  assert.equal(files.length, 2);
+  for (const name of files) {
+    const text = readFileSync(join(dir, name), 'utf8');
+    for (const token of [TOKEN, other]) {
+      assert.ok(!name.includes(token) && !text.includes(token), `${name} holds a token`);
+    }
+  }
+});
+
+test('the cache folder is exhibit/github in the user\'s cache folder', () => {
+  assert.equal(cacheFolder({ env: { XDG_CACHE_HOME: '/c' }, platform: 'darwin', home: '/h' }), join('/c', 'exhibit', 'github'));
+  assert.equal(cacheFolder({ env: {}, platform: 'darwin', home: '/h' }), join('/h', 'Library', 'Caches', 'exhibit', 'github'));
+  assert.equal(cacheFolder({ env: {}, platform: 'linux', home: '/h' }), join('/h', '.cache', 'exhibit', 'github'));
+  assert.equal(cacheFolder({ env: { LOCALAPPDATA: 'C:\\L' }, platform: 'win32', home: '/h' }), join('C:\\L', 'exhibit', 'github'));
+});

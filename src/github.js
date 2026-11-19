@@ -19,6 +19,8 @@ const SECONDARY_LIMIT_WAIT_MS = 60 * 1000;
 // Each secondary-limit wait gets a random extra of up to this part of it, so requests that hit
 // the limit together do not all ask again at the same moment.
 const SECONDARY_LIMIT_SPREAD = 0.25;
+// The reply headers that the cache saves: the client reads the next page from link.
+const SAVED_HEADERS = ['content-type', 'link'];
 // The one form of HTTP date that GitHub sends, as in "Thu, 19 Nov 2026 10:00:30 GMT".
 const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
@@ -32,20 +34,44 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // that is not a rate limit then says which permission a fine-grained token may lack.
 // `getOne` returns the object at one path, or null for a status in its `emptyOn`.
 // `sleep`, `now` and `random` are parameters too, so tests can check a rate-limit wait without waiting.
-export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
+// `cache` is a reply cache from src/github-cache.js, or undefined for none. With a cache, a
+// request for a URL that has an entry sends If-None-Match, and a 304 reply gives the saved body.
+// A 200 reply with an ETag replaces the entry.
+// `counts()` returns how many requests went to GitHub, and how many of them got a 304.
+export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
+  const counts = { requests: 0, not_modified: 0 };
+
   async function request(url) {
+    const saved = cache ? await cache.read(url) : null;
+    const headers = {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${token}`,
+      'x-github-api-version': '2022-11-28',
+      'user-agent': 'exhibit'
+    };
+    if (saved) headers['if-none-match'] = saved.etag;
+    let response;
     try {
-      return await fetch(url, {
-        headers: {
-          accept: 'application/vnd.github+json',
-          authorization: `Bearer ${token}`,
-          'x-github-api-version': '2022-11-28',
-          'user-agent': 'exhibit'
-        }
-      });
+      counts.requests++;
+      response = await fetch(url, { headers });
     } catch (error) {
       throw new ToolError(`could not reach GitHub (${error.message}). Check the network and try again.`);
     }
+    if (saved && response.status === 304) {
+      counts.not_modified++;
+      return new Response(saved.body, { status: 200, headers: saved.headers });
+    }
+    const etag = response.headers.get('etag');
+    if (!cache || response.status !== 200 || !etag) return response;
+    // Only the headers that the client reads from a 200 are saved.
+    const body = await response.text();
+    const kept = {};
+    for (const name of SAVED_HEADERS) {
+      const value = response.headers.get(name);
+      if (value !== null) kept[name] = value;
+    }
+    await cache.write(url, { etag, body, headers: kept });
+    return new Response(body, { status: 200, headers: response.headers });
   }
 
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
@@ -97,7 +123,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return reply;
   }
 
-  return { getAll, getOne };
+  return { getAll, getOne, counts: () => ({ ...counts }) };
 }
 
 function notShaped(url, shape) {
@@ -181,6 +207,10 @@ export function createGitHubForge({ repo, ...client }) {
     // The forge's name in a history line's forge field.
     name: 'github',
     repo,
+
+    // How many requests went to GitHub so far, and how many of them got a 304 from the cache:
+    // { requests, not_modified }.
+    counts: github.counts,
 
     // GitHub lists at most this many files for one PR. A shorter list is complete.
     mostFilesListed: 3000,
