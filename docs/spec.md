@@ -60,6 +60,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 | Shadow mode | Exhibit gives its verdict, but nothing waits on it. |
 | Blind sample | Merged PRs picked at random that a person reads without seeing the verdict first. |
 | Rung | One step on the trust ladder, for one kind of change. Only a person turns a rung on. |
+| Forge | The service that hosts the repo and its PRs, such as GitHub. |
 
 ## 7. Commands
 
@@ -391,6 +392,8 @@ Exhibit only reports these numbers. It never changes a rung.
 | JUnit XML for test results | Most test runners can write it. |
 | Files and a data branch instead of a server or a database | Anyone can run it, and everything stays in their repo. |
 | Tests with `node:test`, and recorded API responses as fixtures | No network access in unit tests. |
+
+Every request to the forge goes through one module, `src/github.js` for GitHub, with one named method for each request: `mergedPulls`, `pullFiles`, `pullReviews`, `pullComments`, `pullFileCount`, `ciResults`, `defaultBranch`, `pullsForCommit` and `issue`. `ciResults` gives each CI result as a name, a conclusion and a URL. The module also owns the forge's rules for a repo name (`isRepoName`) and for a remote URL that points at the repo (`isRemote`). History and SZZ take the forge as a parameter, and recorded fixtures sit in one folder for each forge, such as `test/fixtures/github/`. So a second forge, such as GitLab, can come later as a second module with the same methods.
 
 ## 12. Field test
 

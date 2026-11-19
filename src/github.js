@@ -3,7 +3,7 @@ import { ToolError } from './tool-error.js';
 const API = 'https://api.github.com';
 
 // The token permissions that Exhibit's requests need (spec 8.3). Pass one as `permission`.
-export const PERMISSIONS = {
+const PERMISSIONS = {
   pullRequests: 'Pull requests: read',
   checks: 'Checks: read',
   commitStatuses: 'Commit statuses: read'
@@ -157,4 +157,88 @@ async function apiError(response, url, permission) {
   if (response.status === 404) return new ToolError(`${what}. Check the repo name, and that GITHUB_TOKEN can read that repo.`);
   if (response.status >= 500) return new ToolError(`${what}. GitHub had a problem: try again later.`);
   return new ToolError(`${what}.`);
+}
+
+// A GitHub repo name is owner/name, and each part uses only letters, digits, _, . and -.
+const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+// Returns true when `text` is a GitHub repo name, such as bfalkowski/Building58.
+export function isRepoName(text) {
+  return REPO_NAME.test(text);
+}
+
+// The GitHub forge: every request that history and SZZ send to GitHub, as one method each, for
+// the one repo `repo` ("owner/name"). Only this module builds GitHub API paths, so another forge,
+// such as GitLab, can come later as a second module with the same methods. The other options go
+// to createGitHub.
+// Most methods return GitHub's own objects. ciResults returns one shape for check runs and
+// commit statuses: { name, conclusion, url }, with check runs first.
+export function createGitHubForge({ repo, ...client }) {
+  const github = createGitHub(client);
+  const base = `/repos/${repo}`;
+  const pullRequests = { permission: PERMISSIONS.pullRequests };
+  return {
+    repo,
+
+    // GitHub lists at most this many files for one PR. A shorter list is complete.
+    mostFilesListed: 3000,
+
+    // Returns true when the git remote URL `url` points at this repo on github.com. Any URL form
+    // counts: https, ssh, or scp-like (git@github.com:owner/name.git).
+    isRemote(url) {
+      const match = /github\.com[:/]+([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url);
+      return match !== null && match[1].toLowerCase() === repo.toLowerCase();
+    },
+
+    // The PRs that were merged, in the order GitHub lists them. GitHub lists merged PRs with the
+    // closed ones, so the PRs closed without a merge are left out here.
+    async mergedPulls() {
+      const pulls = await github.getAll(`${base}/pulls?state=closed&per_page=100`, pullRequests);
+      return pulls.filter((pr) => pr.merged_at !== null);
+    },
+
+    pullFiles: (number) => github.getAll(`${base}/pulls/${number}/files?per_page=100`, pullRequests),
+    pullReviews: (number) => github.getAll(`${base}/pulls/${number}/reviews?per_page=100`, pullRequests),
+    // A PR's comments are the comments of the issue with the same number.
+    pullComments: (number) => github.getAll(`${base}/issues/${number}/comments?per_page=100`, pullRequests),
+
+    // How many files the PR changed. The list of PRs has no such count, so it costs one request.
+    async pullFileCount(number) {
+      return (await github.getOne(`${base}/pulls/${number}`, pullRequests)).changed_files;
+    },
+
+    // The CI results on a commit, such as a PR's last head commit. Some CI services post check
+    // runs, and some post the older commit statuses, so the list holds both, check runs first.
+    async ciResults(headSha) {
+      const [checkRuns, statuses] = await Promise.all([
+        github.getAll(`${base}/commits/${headSha}/check-runs?per_page=100`, { listField: 'check_runs', permission: PERMISSIONS.checks }),
+        // The combined status: GitHub gives only the newest status for each context.
+        github.getAll(`${base}/commits/${headSha}/status?per_page=100`, { listField: 'statuses', permission: PERMISSIONS.commitStatuses })
+      ]);
+      return [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
+    },
+
+    async defaultBranch() {
+      return (await github.getOne(base)).default_branch;
+    },
+
+    // The PRs that hold the commit `sha`. GitHub answers 422 for a commit it does not know, such
+    // as one that was never pushed. A 404 means the same here: the repo itself was read before.
+    // Both give an empty list.
+    pullsForCommit: (sha) => github.getAll(`${base}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], ...pullRequests }),
+
+    // The issue (or PR) with the number `number`, or null when GitHub does not know it or it was
+    // deleted.
+    issue: (number) => github.getOne(`${base}/issues/${number}`, { emptyOn: [404, 410] })
+  };
+}
+
+function fromCheckRun(run) {
+  return { name: run.name, conclusion: run.conclusion, url: run.html_url ?? null };
+}
+
+// A commit status has a state: success, failure, error or pending. A pending status has not
+// finished, so its conclusion is null, as for a check run that has not finished.
+function fromStatus(status) {
+  return { name: status.context, conclusion: status.state === 'pending' ? null : status.state, url: status.target_url ?? null };
 }

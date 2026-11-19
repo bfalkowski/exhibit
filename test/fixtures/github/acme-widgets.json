@@ -476,6 +476,7 @@
           "name": "test",
           "status": "completed",
           "conclusion": "success",
+          "html_url": "https://github.com/acme/widgets/runs/41",
           "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
           "app": {
             "slug": "github-actions"
