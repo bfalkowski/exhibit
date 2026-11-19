@@ -75,11 +75,11 @@ test('the fixed history file is still what SZZ gives on the fixture repo', async
 test('report.md from the fixture history gives the counts and each escaped defect with its evidence', () => {
   const { markdown } = report(shopLines());
   const facts = factsIn(markdownText(markdown));
-  assert.equal(facts.read, '12');
-  assert.equal(facts.fixes, '6');
+  assert.equal(facts.read, '14');
+  assert.equal(facts.fixes, '7');
   // Newest merge first. Each defect lists its introducing PRs with their confidence.
-  assert.deepEqual(facts.defects, [12, 7, 6]);
-  assert.deepEqual(facts.links, ['1 50 1 2', '11 50 1 2', '2 50 1 2', '3 50 1 2', '1 100 1 1']);
+  assert.deepEqual(facts.defects, [14, 12, 7, 6]);
+  assert.deepEqual(facts.links, ['13 100 1 1', '1 50 1 2', '11 50 1 2', '2 50 1 2', '3 50 1 2', '1 100 1 1']);
   assert.match(markdown, /^# Escaped defects in fixture\/shop$/m);
   assert.match(markdown, /^### Fix PR 7: Fix discount and tax math$/m);
   assert.match(markdown, /Introducing PR 2: Add discounts, confidence 50% \(1 of 2 counted lines\)/);
@@ -93,7 +93,7 @@ test('report.md from the fixture history gives the counts and each escaped defec
 
 test('the first screen gives the counts and how sure Exhibit is before the list of defects', () => {
   const { markdown } = report(shopLines());
-  const read = markdown.indexOf('Exhibit read 12 merged PRs');
+  const read = markdown.indexOf('Exhibit read 14 merged PRs');
   const sure = markdown.indexOf('## How sure Exhibit is');
   const defects = markdown.indexOf('## Escaped defects');
   assert.ok(read > 0 && read < sure && sure < defects, markdown);
@@ -103,8 +103,8 @@ test('report.html and report.md list the same defects with the same numbers', ()
   const { markdown, html } = report(shopLines());
   const md = factsIn(markdownText(markdown));
   const page = factsIn(htmlText(html));
-  assert.equal(md.defects.length, 3);
-  assert.equal(md.commits.length, 5);
+  assert.equal(md.defects.length, 4);
+  assert.equal(md.commits.length, 6);
   assert.deepEqual(page, md);
 });
 
@@ -200,5 +200,5 @@ test('a fix PR that SZZ skipped is listed with no link, and counted in the summa
   const { markdown } = report(lines);
   assert.match(markdown, /SZZ skipped 1 of them/);
   assert.match(markdown, /PR 6 \(Fix subtotal to count quantity\): SZZ skipped it\. The warning from exhibit history says why\./);
-  assert.deepEqual(factsIn(markdownText(markdown)).defects, [12, 7]);
+  assert.deepEqual(factsIn(markdownText(markdown)).defects, [14, 12, 7]);
 });

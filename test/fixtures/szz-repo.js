@@ -9,6 +9,9 @@
 // - 'squash': one new commit on main with all of the PR's changes.
 // - 'rebase': each of the PR's commits is copied onto main, as GitHub's "rebase and merge" does.
 //   merge_sha is the last copy.
+//
+// A PR with `fork` set comes from a fork: its commits are made in a separate clone, and reach
+// this repo only through refs/pull/N/head, as GitHub fetches them.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -120,6 +123,12 @@ const CART_V2 = CART_V1.replace('sum += item.price;', 'sum += item.price * item.
 const CART_V3 = CART_V2.replace('return items.length;', 'return items.reduce((n, item) => n + item.qty, 0);');
 const CART_V4 = CART_V3.replace('n + item.qty, 0', 'n + (item.qty ?? 1), 0');
 
+const SHIPPING_V1 = lines(
+  'export function shipping(total) {',
+  '  return total > 50 ? 0 : 5;',
+  '}'
+);
+
 const SHOP = lines(
   "export { subtotal, itemCount } from './cart.js';",
   "export { applyDiscount } from './discount.js';",
@@ -174,7 +183,14 @@ const PRS = {
       { message: 'Count quantity and treat zero as out of stock',
         files: { 'src/cart.js': CART_V3, 'src/stock.js': STOCK_V2.replace('item.qty >= 0', 'item.qty > 0') } },
       { message: 'Count an item with no qty as one', files: { 'src/cart.js': CART_V4 } }
-    ] }
+    ] },
+  // A PR from the fork dee/shop. Its commit is not on main's first-parent line, so SZZ must ask
+  // the forge which PR holds it, and it must ask fixture/shop, the repo the PR merged into.
+  13: { title: 'Add free shipping', author: 'dee', way: 'merge', fix: false, fork: 'dee/shop',
+    commits: [{ message: 'Add shipping', files: { 'src/shipping.js': SHIPPING_V1 } }] },
+  14: { title: 'Fix free shipping at exactly 50', author: 'ben', way: 'squash', fix: true,
+    commits: [{ message: 'Ship free from 50',
+      files: { 'src/shipping.js': SHIPPING_V1.replace('total > 50', 'total >= 50') } }] }
 };
 
 // The order of events. PR 3 opens before PR 2 merges, so its merge joins two lines of work.
@@ -189,7 +205,9 @@ const SCRIPT = [
   ['open', 9], ['merge', 9],
   ['open', 10], ['merge', 10],
   ['open', 11], ['merge', 11],
-  ['open', 12], ['merge', 12]
+  ['open', 12], ['merge', 12],
+  ['open', 13], ['merge', 13],
+  ['open', 14], ['merge', 14]
 ];
 
 const BASE_FILES = {
@@ -199,21 +217,22 @@ const BASE_FILES = {
 
 /**
  * Builds the fixture repo in a new temp directory.
- * @returns {{ dir: string, historyPath: string, history: object[], onMain: Map<number, string[]>, cleanup: () => void }}
+ * @returns {{ dir: string, historyPath: string, history: object[], onMain: Map<number, string[]>, forks: Map<number, string>, cleanup: () => void }}
  *   `history` holds the records also written to `<dir>/.exhibit/history.jsonl`.
  *   `onMain` maps each PR number to the commits it put on main, oldest first: one for a merge
  *   commit or a squash merge, one per PR commit for a rebase merge.
+ *   `forks` maps the number of each PR from a fork to the fork's repo name, such as dee/shop.
  *   Call `cleanup` to remove the directory.
  */
 export function buildSzzRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-szz-'));
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
   try {
-    const { history, onMain } = build(dir);
+    const { history, onMain, forks } = build(dir);
     const historyPath = join(dir, '.exhibit', 'history.jsonl');
     mkdirSync(dirname(historyPath), { recursive: true });
     writeFileSync(historyPath, history.map((pr) => JSON.stringify(pr) + '\n').join(''));
-    return { dir, historyPath, history, onMain, cleanup };
+    return { dir, historyPath, history, onMain, forks, cleanup };
   } catch (err) {
     cleanup();
     throw err;
@@ -229,12 +248,12 @@ function build(dir) {
   let tick = 0;
   // Ignore the user's and the system's git config, so hooks, signing and templates
   // cannot change the commits.
-  const run = (args, author = 'maintainer') => {
+  const runIn = (cwd, args, author = 'maintainer') => {
     const date = `@${(START + tick * STEP) / 1000} +0000`;
     return execFileSync('git', args, {
-      cwd: dir,
+      cwd,
       encoding: 'utf8',
-      env: gitEnv(dir, {
+      env: gitEnv(cwd, {
         GIT_AUTHOR_NAME: author,
         GIT_AUTHOR_EMAIL: `${author}@example.com`,
         GIT_AUTHOR_DATE: date,
@@ -244,14 +263,28 @@ function build(dir) {
       })
     }).trim();
   };
-  const commit = (message, files, author) => {
+  const run = (args, author) => runIn(dir, args, author);
+  const commit = (message, files, author, cwd = dir) => {
     for (const [path, text] of Object.entries(files)) {
-      mkdirSync(dirname(join(dir, path)), { recursive: true });
-      writeFileSync(join(dir, path), text);
+      mkdirSync(dirname(join(cwd, path)), { recursive: true });
+      writeFileSync(join(cwd, path), text);
     }
-    run(['add', '--all']);
-    run(['commit', '--quiet', '-m', message], author);
+    runIn(cwd, ['add', '--all']);
+    runIn(cwd, ['commit', '--quiet', '-m', message], author);
     tick++;
+  };
+  // Makes a fork's commits in a new clone, then fetches them into refs/pull/N/head of this repo.
+  const openFromFork = (number, pr, branch, base) => {
+    const fork = mkdtempSync(join(tmpdir(), 'exhibit-szz-fork-'));
+    try {
+      runIn(tmpdir(), ['clone', '--quiet', '--template=', dir, fork]);
+      runIn(fork, ['switch', '--quiet', '-c', branch, base]);
+      for (const c of pr.commits) commit(c.message, c.files, pr.author, fork);
+      run(['fetch', '--quiet', fork, `${branch}:refs/pull/${number}/head`]);
+      run(['branch', '--quiet', branch, `refs/pull/${number}/head`]);
+    } finally {
+      rmSync(fork, { recursive: true, force: true });
+    }
   };
 
   run(['init', '--quiet', '--initial-branch=main', '--template=']);
@@ -260,15 +293,21 @@ function build(dir) {
   const opened = new Map();
   const history = [];
   const onMain = new Map();
+  const forks = new Map();
   for (const [event, number] of SCRIPT) {
     const pr = PRS[number];
     const branch = `pr-${number}`;
     if (event === 'open') {
       const base = run(['rev-parse', 'main']);
-      run(['switch', '--quiet', '-c', branch, base]);
-      for (const c of pr.commits) commit(c.message, c.files, pr.author);
-      run(['update-ref', `refs/pull/${number}/head`, branch]);
-      run(['switch', '--quiet', 'main']);
+      if (pr.fork) {
+        openFromFork(number, pr, branch, base);
+        forks.set(number, pr.fork);
+      } else {
+        run(['switch', '--quiet', '-c', branch, base]);
+        for (const c of pr.commits) commit(c.message, c.files, pr.author);
+        run(['update-ref', `refs/pull/${number}/head`, branch]);
+        run(['switch', '--quiet', 'main']);
+      }
       opened.set(number, base);
       continue;
     }
@@ -276,7 +315,8 @@ function build(dir) {
     const head = run(['rev-parse', branch]);
     const before = run(['rev-parse', 'main']);
     if (pr.way === 'merge') {
-      run(['merge', '--quiet', '--no-ff', '-m', `Merge pull request #${number} from fixture/${branch}`, branch], 'maintainer');
+      const from = `${(pr.fork ?? 'fixture/shop').split('/')[0]}/${branch}`;
+      run(['merge', '--quiet', '--no-ff', '-m', `Merge pull request #${number} from ${from}`, branch], 'maintainer');
     } else if (pr.way === 'squash') {
       run(['merge', '--quiet', '--squash', branch]);
       // A squash merge leaves a draft message file. Drop it, so the commit uses only -m.
@@ -315,7 +355,7 @@ function build(dir) {
       szz: null
     });
   }
-  return { history, onMain };
+  return { history, onMain, forks };
 }
 
 function diffFiles(numstat) {
