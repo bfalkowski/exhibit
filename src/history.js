@@ -9,6 +9,8 @@ const PRS_AT_ONCE = 8;
 
 // GitHub lists at most this many files for one PR. A shorter list is complete.
 const LISTED_FILES_AT_MOST = 3000;
+// The token permission that each request about pull requests needs (spec 8.3).
+const PULLS = 'Pull requests: read';
 
 // Reads the merged PRs of `repo` ("owner/name") and returns one history line for each, newest
 // merge first. `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
@@ -20,7 +22,7 @@ const LISTED_FILES_AT_MOST = 3000;
 // `warn` gets one text for each PR whose files list GitHub cut short, in the order of the lines.
 export async function readHistory({ repo, token, fetch, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   const github = createGitHub({ token, fetch });
-  const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`);
+  const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`, { permission: PULLS });
 
   let merged = pulls.filter((pr) => pr.merged_at !== null);
   if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
@@ -29,15 +31,15 @@ export async function readHistory({ repo, token, fetch, since, limit, fixSignals
 
   const read = await mapInBatches(merged, PRS_AT_ONCE, async (pr) => {
     const [files, reviews, comments, checkRuns, statuses] = await Promise.all([
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`),
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`),
+      github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`, { permission: PULLS }),
+      github.getAll(`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`, { permission: PULLS }),
       // The PR's comments, where some rooms post their reviews (spec 8.3).
-      github.getAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`),
+      github.getAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`, { permission: PULLS }),
       // The check runs and commit statuses on the PR's last head commit: the CI result the PR was
       // merged with. Some CI services post check runs, and some post the older commit statuses.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`, { listField: 'check_runs' }),
+      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`, { listField: 'check_runs', permission: 'Checks: read' }),
       // The combined status: GitHub gives only the newest status for each context.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses' })
+      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses', permission: 'Commit statuses: read' })
     ]);
     const ci = [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     return { line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals), warning: await checkFilesComplete(github, repo, pr.number, files.length) };
@@ -54,7 +56,7 @@ async function checkFilesComplete(github, repo, number, listed) {
   if (listed < LISTED_FILES_AT_MOST) return null;
   let changed;
   try {
-    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`));
+    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`, { permission: PULLS }));
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     return `PR ${number} has ${listed} files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;

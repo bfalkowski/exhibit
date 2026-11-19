@@ -170,7 +170,7 @@ One merged PR per line, with these fields:
 - `files`: path, additions and deletions for each file
 - `classification`: `kinds` holds the kinds of change under the current policy. `classification.fix` is true when the PR is a fix.
 - `reviews`: `list` holds the `state`, `author` and `source` of each review, oldest first. `source` is `review` for a GitHub review, or `comment` for a review posted as a PR comment. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`, from both sources.
-- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state.
+- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state. A reader of `ci`, such as the S5 backtest, must allow for two things: an app that posts both a check run and a commit status with the same name shows up twice, and a commit status can give the conclusion `error`, which a check run never gives.
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
 - `szz`: for fix PRs, the introducing PRs, the lines, the blame output for each line, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
@@ -199,11 +199,20 @@ What each version fills:
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
 
-- A `retry-after` header. It holds whole seconds or an HTTP date, and `exhibit history` waits that long or until that time.
+- A `retry-after` header. It holds whole seconds, or an HTTP date such as `Thu, 19 Nov 2026 10:00:30 GMT`, and `exhibit history` waits that long or until that time. A value in any other form, such as `1.5`, counts as no `retry-after` header.
 - No requests left until `x-ratelimit-reset`. `exhibit history` waits until one second after that time.
-- A message that names a secondary rate limit, with neither of these headers. `exhibit history` waits one minute, as GitHub's docs say.
+- A message that names a secondary rate limit, with neither of these headers. GitHub's docs say to wait at least one minute, and longer each time the limit comes back. So the first wait is one minute, the second two minutes, and the third four minutes. Each wait gets a random extra of up to a quarter of it, so the requests that hit the limit together do not all ask again at the same moment. The longest such wait is five minutes.
 
 If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too.
+
+`exhibit history` reads `GITHUB_TOKEN`. A fine-grained token needs these repository permissions:
+
+- Metadata: read. GitHub gives it to every fine-grained token.
+- Pull requests: read, for the PRs, their files, reviews and comments, and for the PRs of a commit (SZZ).
+- Checks: read, for the check runs.
+- Commit statuses: read, for the commit statuses.
+
+A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks.
 
 ### 8.4 `.exhibit/labels.jsonl`
 

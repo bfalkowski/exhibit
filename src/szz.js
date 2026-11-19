@@ -64,7 +64,7 @@ export function createPrFinder({ lines, repo, github }) {
 async function askGitHub(github, repo, sha) {
   // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
   // means the same here: the repo itself was read a moment before.
-  const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422] });
+  const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], permission: 'Pull requests: read' });
   // A commit can sit in more than one PR, such as a release PR that copies main to another
   // branch. The first PR merged brought it in.
   const merged = pulls.filter((pr) => pr.merged_at).sort((a, b) => a.merged_at.localeCompare(b.merged_at));

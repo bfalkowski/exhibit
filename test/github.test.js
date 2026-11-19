@@ -70,7 +70,7 @@ test('a 403 for a secondary rate limit with no wait headers waits one minute, th
     { status: 403, headers: { 'x-ratelimit-remaining': '4000' }, body: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' } },
     { status: 200, body: [1] }
   ]);
-  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
   assert.deepEqual(await github.getAll('/x'), [1]);
   assert.deepEqual(s.waits, [60_000]);
 });
@@ -78,9 +78,9 @@ test('a 403 for a secondary rate limit with no wait headers waits one minute, th
 test('it stops after three waits for a secondary rate limit', async () => {
   const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
   const s = scripted([limited, limited, limited, limited]);
-  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
   await assert.rejects(github.getAll('/x'), (error) => error instanceof ToolError && /403/.test(error.message) && /secondary rate limit/.test(error.message));
-  assert.deepEqual(s.waits, [60_000, 60_000, 60_000]);
+  assert.deepEqual(s.waits, [60_000, 120_000, 240_000]);
 });
 
 test('a retry-after given as an HTTP date waits until that time, then asks again', async () => {
@@ -101,4 +101,30 @@ test('a retry-after date that has passed asks again at once', async () => {
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => Date.parse('2026-11-19T10:00:00Z') });
   assert.deepEqual(await github.getAll('/x'), [1]);
   assert.deepEqual(s.waits, [0]);
+});
+
+test('a retry-after that is not whole seconds or an HTTP date is no retry-after', async () => {
+  // Date.parse('1.5') gives a date in 2001. Read as a date, it would make the client ask again at once.
+  const s = scripted([{ status: 429, headers: { 'retry-after': '1.5' }, body: { message: 'slow down' } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => Date.parse('2026-11-19T10:00:00Z') });
+  await assert.rejects(github.getAll('/x'), (error) => error instanceof ToolError && /429/.test(error.message));
+  assert.deepEqual(s.waits, []);
+});
+
+test('each wait for a secondary rate limit is twice the one before, plus a random spread', async () => {
+  const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
+  const s = scripted([limited, limited, limited, { status: 200, body: [1] }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0.5 });
+  assert.deepEqual(await github.getAll('/x'), [1]);
+  // 60, 120 and 240 seconds, each plus half of the most spread: a quarter of that wait.
+  assert.deepEqual(s.waits, [67_500, 135_000, 270_000]);
+});
+
+test('a 403 that is not a rate limit names the permission the request needs', async () => {
+  const s = scripted([{ status: 403, body: { message: 'Resource not accessible by personal access token' } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(
+    github.getAll('/repos/o/r/commits/abc/status', { listField: 'statuses', permission: 'Commit statuses: read' }),
+    (error) => error instanceof ToolError && /403/.test(error.message) && /"Commit statuses: read"/.test(error.message)
+  );
 });
