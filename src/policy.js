@@ -51,8 +51,20 @@ function withDefaults(policy) {
     settings: { ...settings, fix_signals: settings.fix_signals ?? [...DEFAULT_FIX_SIGNALS] },
     kinds: policy.kinds ?? {}
   };
+  if (result.version === null) delete result.version;
   if (result.default === null) delete result.default;
+  for (const rules of [...Object.values(result.kinds), result.default ?? { needs: [] }]) {
+    rules.needs = rules.needs.map(bareWhenEmpty);
+  }
   return result;
+}
+
+// "- failing-before:" with nothing after the colon is YAML { failing-before: null }. Give it as
+// the bare name, so a reader of needs sees only two shapes: a name, or a name with its fields.
+function bareWhenEmpty(item) {
+  if (item === null || typeof item !== 'object') return item;
+  const [type, fields] = Object.entries(item)[0];
+  return fields === null ? type : item;
 }
 
 // Turns one schema problem into a sentence that names the field, such as

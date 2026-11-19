@@ -33,7 +33,7 @@ export function schemaProblems(schema, value, path = []) {
     if (!ok) return [...problems, { path, what: `must be ${allowed.join(' or ')}, not ${actual}` }];
   }
   if (schema.enum !== undefined && !schema.enum.some((item) => item === value)) {
-    add(`must be ${words(schema.enum)}, not ${JSON.stringify(value)}`);
+    add(`must be ${words(schema.enum)}, not ${shown(value)}`);
   }
   if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
     add(`must be at least ${schema.minimum}`);
@@ -70,9 +70,15 @@ export function schemaProblems(schema, value, path = []) {
   return problems;
 }
 
-// ['low', 'medium', 'high'] → "low, medium or high".
+// JSON.stringify turns NaN and infinity into null, so name them here.
+function shown(value) {
+  return typeof value === 'number' && !Number.isFinite(value) ? String(value) : JSON.stringify(value);
+}
+
+// ['low', 'medium', 'high'] → "low, medium or high". A null in the list is left out: it stands
+// for a key with nothing after it, which a person does not need to be told about.
 function words(list) {
-  const shown = list.map((item) => (typeof item === 'string' ? item : JSON.stringify(item)));
+  const shown = list.filter((item) => item !== null).map((item) => (typeof item === 'string' ? item : JSON.stringify(item)));
   return shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} or ${shown.at(-1)}`;
 }
 

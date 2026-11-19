@@ -169,7 +169,10 @@ test('readPolicy refuses a mutation min of NaN or infinity', async (t) => {
 test('a key with nothing under it is the same as no key', async (t) => {
   assert.deepEqual(await readPolicy(folderWith(t, 'settings:\nkinds:\ndefault:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
   const policy = await readPolicy(folderWith(t, kind('    needs:\n      - failing-before:\n      - tests-before-after:\n')));
-  assert.deepEqual(policy.kinds['relay-core'].needs, [{ 'failing-before': null }, { 'tests-before-after': null }]);
+  assert.deepEqual(policy.kinds['relay-core'].needs, ['failing-before', 'tests-before-after']);
+  assert.deepEqual(await readPolicy(folderWith(t, 'version:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
+  const withDefault = await readPolicy(folderWith(t, 'default:\n  risk: low\n  needs:\n    - failing-before:\n'));
+  assert.deepEqual(withDefault.default.needs, ['failing-before']);
 });
 
 test('readPolicy refuses a fix signal with a line break, without showing the schema regex', async (t) => {
@@ -181,4 +184,9 @@ test('the evidence item rules are the same under kinds and under default', () =>
   const underKinds = schema.properties.kinds.additionalProperties.properties.needs;
   const underDefault = schema.properties.default.properties.needs;
   assert.deepEqual(underDefault, underKinds);
+});
+
+test('readPolicy names NaN and infinity in a version message, not null', async (t) => {
+  await refuses(t, 'version: .nan\n', /^evidence\.yml version must be 3, not NaN\.$/);
+  await refuses(t, 'version: .inf\n', /^evidence\.yml version must be 3, not Infinity\.$/);
 });

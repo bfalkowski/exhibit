@@ -8,9 +8,10 @@
   "properties": {
     "version": {
       "enum": [
-        3
+        3,
+        null
       ],
-      "description": "The format of the file. This Exhibit reads format 3 only."
+      "description": "The format of the file. This Exhibit reads format 3 only. null, from version: with nothing after it, is the same as no version."
     },
     "settings": {
       "type": [
