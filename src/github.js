@@ -6,6 +6,8 @@ const API = 'https://api.github.com';
 const MAX_WAITS = 3;
 // A wait longer than this fails instead, so a run never hangs for most of an hour.
 const LONGEST_WAIT_MS = 15 * 60 * 1000;
+// GitHub's docs say to wait at least one minute after a secondary rate limit that names no time.
+const SECONDARY_LIMIT_WAIT_MS = 60 * 1000;
 
 // A small GitHub REST client. It takes the fetch function as a parameter, so tests can pass one
 // that replays recorded responses. `getAll` follows the Link header's rel="next" URL exactly as
@@ -36,7 +38,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
   async function getJson(url, emptyOn = []) {
     let response = await request(url);
     for (let waits = 0; !response.ok && waits < MAX_WAITS; waits++) {
-      const ms = rateLimitWait(response, now());
+      const ms = await rateLimitWait(response, now());
       if (ms === null || ms > LONGEST_WAIT_MS) break;
       await sleep(ms);
       response = await request(url);
@@ -83,18 +85,33 @@ function notShaped(url, shape) {
 }
 
 // Returns how many milliseconds GitHub asks us to wait before we ask again, or null when the
-// reply is not a rate limit. GitHub says to wait in one of two ways: a retry-after header in
-// seconds, or no requests left until the x-ratelimit-reset time (in Unix seconds).
-function rateLimitWait(response, nowMs) {
+// reply is not a rate limit. GitHub says to wait in one of three ways:
+// - a retry-after header, in whole seconds or as an HTTP date;
+// - no requests left until the x-ratelimit-reset time (in Unix seconds);
+// - a message that names a secondary rate limit, with neither header. Then we wait one minute.
+async function rateLimitWait(response, nowMs) {
   if (response.status !== 403 && response.status !== 429) return null;
   const retryAfter = response.headers.get('retry-after');
   if (retryAfter !== null && /^\d+$/.test(retryAfter)) return Number(retryAfter) * 1000;
+  const retryAt = retryAfter === null ? NaN : Date.parse(retryAfter);
+  if (!Number.isNaN(retryAt)) return Math.max(0, retryAt - nowMs);
   const reset = response.headers.get('x-ratelimit-reset');
   if (response.headers.get('x-ratelimit-remaining') === '0' && reset !== null && /^\d+$/.test(reset)) {
     // One second more, so the wait ends after the reset and not just before it.
     return Math.max(0, Number(reset) * 1000 - nowMs) + 1000;
   }
+  if (/secondary rate limit/i.test(await messageOf(response.clone()))) return SECONDARY_LIMIT_WAIT_MS;
   return null;
+}
+
+// Returns the message field of a JSON error reply, or '' when there is none.
+async function messageOf(response) {
+  try {
+    return String((await response.json())?.message ?? '');
+  } catch {
+    // The body was not JSON. The status alone says enough.
+    return '';
+  }
 }
 
 function nextLink(header) {
@@ -104,12 +121,7 @@ function nextLink(header) {
 }
 
 async function apiError(response, url) {
-  let detail = '';
-  try {
-    detail = (await response.json()).message ?? '';
-  } catch {
-    // The body was not JSON. The status alone says enough.
-  }
+  const detail = await messageOf(response);
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
   if (response.status === 401) return new ToolError(`${what}. GITHUB_TOKEN was refused: make a new token and set it.`);
   if (response.status === 403 || response.status === 429) {
