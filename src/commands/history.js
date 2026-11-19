@@ -2,8 +2,10 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { readFixSignals } from '../fix-signals.js';
+import { createGitHub } from '../github.js';
 import { readHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
+import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
 
 const OUTPUT = '.exhibit/history.jsonl';
@@ -15,6 +17,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // signals in evidence.yml, or the defaults. Every line must pass the schema before the file is
 // written, so a failed run leaves no partial file and keeps an older one.
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
+// Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
+// clone, every szz is null, and it says so in one line on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
@@ -23,7 +27,16 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
   const fixSignals = await readFixSignals(cwd);
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const lines = await readHistory({ repo: options.repo, token, fetch, since: options.since, limit: options.limit, fixSignals, warn });
+  const read = await readHistory({ repo: options.repo, token, fetch, since: options.since, limit: options.limit, fixSignals, warn });
+
+  const root = await cloneRoot(cwd, options.repo);
+  let lines;
+  if (root) {
+    lines = await addSzz(read, { dir: root, repo: options.repo, github: createGitHub({ token, fetch }), warn });
+  } else {
+    lines = read.map((line) => ({ ...line, szz: null }));
+    stderr.write(`exhibit: note: SZZ did not run, because this folder is not a clone of ${options.repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`);
+  }
 
   const problems = lines.flatMap((line) => checkHistoryLine(line).map((problem) => `PR ${line.number} ${problem}`));
   if (problems.length > 0) {
@@ -34,8 +47,13 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
 
   await writeAtomically(join(cwd, OUTPUT), lines.map((line) => JSON.stringify(line) + '\n').join(''));
 
-  if (options.json) stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT }) + '\n');
-  else stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.\n`);
+  const szz = root ? { fix_prs: lines.filter((line) => line.classification.fix).length, linked: lines.filter((line) => line.szz?.links.length > 0).length } : null;
+  if (options.json) {
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz }) + '\n');
+  } else {
+    const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs.` : '';
+    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n`);
+  }
 }
 
 function parseOptions(argv) {

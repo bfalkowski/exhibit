@@ -172,7 +172,7 @@ One merged PR per line, with these fields:
 - `reviews`: `list` holds the `state`, `author` and `source` of each review, oldest first. `source` is `review` for a GitHub review, or `comment` for a review posted as a PR comment. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`, from both sources.
 - `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state.
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
-- `szz`: for fix PRs, the introducing PRs, the lines, and a confidence score
+- `szz`: for fix PRs, the introducing PRs, the lines, the blame output for each line, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
 
 The schema for one line is `schema/history-line.schema.json`. `exhibit history` checks every line against it before it writes the file. If a line fails, it writes nothing and exits 2.
@@ -188,7 +188,13 @@ What each version fills:
   - A comment with no verdict is not a review, and is not in `reviews`.
   - The comment reviews and the GitHub reviews are merged into one list by time: `created_at` for a comment, `submitted_at` for a review. At the same time, the review comes first.
 - **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`. A history file from before S2 has no `classification`, so it fails the schema. Run `exhibit history` again: it writes the whole file new, so the new file has `classification` on every line.
-- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
+- **S2, SZZ:** every line has `szz` (section 9.2), and the schema requires it. It is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds three fields:
+  - `blamed_commit`: the commit that `git blame` ran on, the first parent of `merge_sha`.
+  - `links`: one for each introducing PR, highest confidence first. A link has `pr`, `confidence` and `lines`.
+  - `unlinked_lines`: the lines whose commit is in no merged PR, such as a commit pushed straight to the main branch.
+
+  Each line has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
+- **Later slices:** the kinds of change in `classification` (S4), `evidence_section` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
 
@@ -235,12 +241,16 @@ One escaped defect per line, with these fields:
 
 ### 9.2 SZZ
 
-1. For each fix PR, take the lines it deleted or changed.
-2. Drop changes that are whitespace only, comments only, or moved lines.
-3. Run `git blame` on the parent of the fix's first commit to find the commit that last changed each line.
-4. Map each commit to its PR, through the merge commit or the GitHub API.
-5. Drop introducing commits that are newer than the bug report, when the bug report has a date.
-6. Give each link a confidence score from the share of the fix's lines that point to the same PR.
+`exhibit history` runs SZZ only when it runs inside a clone of the repo: a git repo with a remote that points at the repo on GitHub, in any URL form. Otherwise it writes `szz: null` on every line and says so in one line on stderr. The run still succeeds.
+
+1. For each fix PR, take the lines it deleted or changed. These are the old lines in `git diff -U0 -M` from the first parent of `merge_sha` to `merge_sha`. A renamed file keeps its old path. A line the fix only added has nothing to blame.
+2. Drop changes that are whitespace only, comments only, or moved lines. *Not built yet: ticket 8.*
+3. Run `git blame` on the parent of the fix's first commit to find the commit that last changed each line. Exhibit blames the first parent of `merge_sha`: the main branch just before the fix. For a squash merge, that is the parent of the fix's one commit. For a merge commit, it is the main branch just before the merge, so the line numbers match the diff in step 1. Git runs with settings that ignore a clone's own diff and blame config, such as `blame.ignoreRevsFile`.
+4. Map each commit to its PR. First, a commit that is the `merge_sha` of a PR in the history belongs to that PR: a squash merge. Then Exhibit asks GitHub for the pull requests that hold the commit, and keeps the merged PR that merged first. It asks once for each commit. A commit that no merged PR holds, or that GitHub does not know (a 422 or 404 reply), goes to `unlinked_lines`.
+5. Drop introducing commits that are newer than the bug report, when the bug report has a date. *Not built yet: ticket 8.*
+6. Give each link a confidence score: the number of the fix's lines that point to that PR, divided by all of the fix's blamed lines. Unlinked lines count in the total, so the scores add up to 1 only when every line has a PR.
+
+When a fix's `merge_sha` is not in the clone, or a git command fails for that fix, Exhibit writes `szz: null` for that PR, prints a warning that names it and the reason, and goes on with the other PRs. In a shallow clone, such as the default checkout in GitHub Actions, it prints one warning first: blame there can give old lines to the shallow boundary commit, so links can be wrong. A change to a submodule pointer has no lines, so SZZ skips it. A PR merged with "rebase and merge" is not handled yet, because its `merge_sha` is its last commit only (ticket 27).
 
 Every link is shown with its lines and blame output. In `exhibit label`, the person can reject it.
 
@@ -400,8 +410,54 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 1. The package name. `exhibit` may be taken on npm. A scoped name such as `@bfalkowski/exhibit` is the fallback.
 2. The license.
 3. Where the hidden suite lives, and how CI gets access to it.
-4. How to detect fix PRs in repos that use no labels.
+4. How to detect fix PRs in repos that use no labels. Section 17.3 lists one lead: an oracle built from fixes that name the change that added the bug.
 5. Whether to sign `evidence.json`, for example with Sigstore, so a session cannot forge it.
 6. Whether to add "cost of the next change" (tokens and review rounds per ticket, by area) as a measure of code quality later.
 7. Whether workflow artifacts are enough for storage, given their retention limit, or whether the data branch is always needed.
 8. Whether SZZ in S2 needs the real merge-base of each PR. `base_sha` is the tip of the base branch, not the merge-base. If S2 needs it, it cannot compute it from a history line alone. `git merge-base` needs the PR's head commit, and a line has only `base_sha` and `merge_sha`. `merge_sha` is not the head: for a squash merge it is not on the PR branch at all. So S2 would either read each PR's head SHA from GitHub again, or the history schema would gain a `head_sha` field (or a `merge_base` field) that `exhibit history` fills.
+
+## 17. Related work
+
+The search for this section was done on 2026-11-19. It was not complete. Vendor tools and patents may hold more.
+
+No work found so far does the whole loop: learn a policy from one repo's escaped defects, check each PR against it with a measure of how strong the tests are, test the policy on history, and give the numbers for a rung. Each part has prior work. This section lists it, so that Exhibit can reuse what is known and cite it.
+
+### 17.1 Closest in goal
+
+| Work | What it does | How Exhibit is different |
+|---|---|---|
+| [RADAR](https://arxiv.org/abs/2605.30208), Meta, 2026 | Decides which diffs can land with no human review. Its stages are eligibility rules, static heuristics, a learned Diff Risk Score, an LLM review agent and deterministic checks. It reports 331,720 diffs landed out of 535,290, with about 1/3 of the revert rate and 1/50 of the incident rate of other diffs. RADAR picks low-risk diffs, so these rates compare unlike groups. | RADAR scores risk with a model and an LLM. Exhibit asks for evidence for each kind of change, from rules learned from the repo's own escaped defects. The RADAR paper describes no measure of test strength and no random sample of the diffs that landed. |
+| [ARCTIC](https://arxiv.org/abs/2607.29516), Meta, 2026 | Predicts what a diff is meant to do, measures how far the code drifts from that, and points to the code that most needs review. When drift is low and nothing is flagged, the author can confirm the diff and land it on a faster path. | ARCTIC helps a person review less. Exhibit decides, for one kind of change at a time, when nobody needs to read the code. |
+| [Diff risk scoring](https://arxiv.org/abs/2410.06351), Meta, ICSE 2025 | Scores each diff for the risk that it causes an incident, and holds back the riskiest diffs during code freezes. | A risk score says which PRs to look at. Exhibit says what evidence a PR must show. A risk score could be a later input when Exhibit classifies a change. |
+
+### 17.2 Write-ups from practice
+
+| Work | What it says | How Exhibit is different |
+|---|---|---|
+| [Reading evidence instead of code](https://developertoolkit.ai/en/ladder/evidence-not-diffs/), Autonomy Ladder guide, 2026 | Read four things in place of the diff: the spec delta, the acceptance results, oracle strength and runtime signals. Run mutation testing on changed files with Stryker or mutmut. Ask whether the decisive check existed before the change. Keep a trust log that moves classes of change up or down. | The ideas are very close to Exhibit's. The guide gives them as prompts and a log kept by hand. Exhibit makes them a CLI with a policy file, a backtest and numbers. |
+| [Make Every PR Prove Itself](https://builders.abnormal.ai/p/make-every-pr-prove-itself), Abnormal, 2026 | Each agent PR shows evidence from a near-production test environment, such as real API responses and screenshots. Misses that become incidents are written back into the checks. | Reviewers still review each PR. The checks are not measured. |
+| Lauren Tan's trust ladder, in [a talk with Matt Pocock](https://www.youtube.com/watch?v=MN9dGgmLyso) | Give agents more as verification earns trust. Near the top, agents merge their own PRs and a person samples them after they land. | Exhibit gives the numbers for each step, for one kind of change at a time. |
+
+### 17.3 Prior work for each part
+
+| Part of Exhibit | Prior work | What Exhibit can take from it |
+|---|---|---|
+| SZZ (section 9.2) | [Śliwerski, Zimmermann and Zeller](https://www.st.cs.uni-saarland.de/papers/msr2005/), MSR 2005 | The method. |
+| How accurate SZZ is | [Rosa et al.](https://arxiv.org/abs/2102.03300), ICSE 2021: an oracle built from fix commits whose message names the commit that added the bug | A way to test SZZ links. The same idea may help with open question 4, because a ticket in the office can name the PR that a bug came from. |
+| What wrong SZZ links do | [Fan et al.](https://ink.library.smu.edu.sg/sis_research/4494), TSE 2019: changes that SZZ labels wrongly change the results of just-in-time defect prediction | Wrong links change the results that come after them. This is why a person can reject a link in `exhibit label`. |
+| Risk of a change | [Kamei et al.](https://sail.cs.queensu.ca/data/pdfs/TSE_ALarge-ScaleEmpiricalStudyOfJust-in-TimeQualityAssurance.pdf), TSE 2013: just-in-time defect prediction | Predicts risky changes from change metrics. A possible later input when Exhibit classifies a change. |
+| Mutation on changed lines (section 9.5) | [State of Mutation Testing at Google](https://research.google/pubs/state-of-mutation-testing-at-google/), ICSE SEIP 2018, and [Practical Mutation Testing at Scale](https://research.google/pubs/practical-mutation-testing-at-scale-a-view-from-google/), TSE 2021 | Google mutates only changed code during code review. It removes mutants that are likely to be irrelevant, and limits the mutants for each line and each review. Exhibit can copy these filters. |
+| Whether mutants point to real bugs | [Does mutation testing improve testing practices?](https://arxiv.org/abs/2103.07189), Google, 2021, and [Just et al.](https://homes.cs.washington.edu/~mernst/pubs/mutation-effectiveness-fse2014-abstract.html), FSE 2014 | The Google study found that, for changes that added bugs, mutation testing would have shown a surviving mutant that could have stopped the bug. This supports the catch rate as evidence. |
+| Closing a gap that mutation finds | [ACH](https://arxiv.org/abs/2501.12862), Meta, FSE 2025: an LLM plants faults for a named concern and writes tests that catch them | A possible later step: when mutants survive, draft a test that catches them. |
+| A test that failed before (section 9.4) | [SWT-Bench](https://arxiv.org/abs/2406.12952), NeurIPS 2024: a test counts when it fails before the fix and passes after it | The same check. Fixes that passed such tests more than doubled SWE-Agent's precision. |
+| Error analysis (`exhibit label`) | [Orthogonal Defect Classification](https://www.chillarege.com/node/23), IBM, TSE 1992: put defects into classes, and use what triggered each defect to measure how well inspection or testing works | An old, tested way to turn defect codes into a measure of the checks. |
+| Rule of three (section 9.10) | [Hanley and Lippman-Hand](https://doi.org/10.1001/jama.1983.03330370053031), JAMA 1983 | The source of the 3/n bound. |
+| Stranger test (section 12) | [AIDev](https://arxiv.org/abs/2507.15003), 2025: over 456,000 PRs by five coding agents, Claude Code among them | Public repos with many agent PRs, to run `exhibit history` on. |
+
+### 17.4 Scale and stakes
+
+The field test is small, and the cost of a miss is low. Building58 and edd-platform are personal projects with one maintainer and no other users. When a bug reaches main, the maintainer files a ticket. Nobody is paged at night, and no customer sees an outage. RADAR's numbers come from production systems, where a miss can be an incident.
+
+The escaped defects are also only the bugs that a session or the maintainer noticed. No production monitoring finds the others.
+
+So a rung that Exhibit's numbers support here says little about a repo where a miss costs more. A team with real users needs more PRs for each kind of change, a smaller miss bound before rung 3, and outcomes such as reverts and incidents next to the policy misses.

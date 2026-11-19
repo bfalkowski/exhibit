@@ -13,7 +13,8 @@ const SECONDARY_LIMIT_WAIT_MS = 60 * 1000;
 // that replays recorded responses. `getAll` follows the Link header's rel="next" URL exactly as
 // GitHub gives it, until there is no next page, and returns the items of every page in order.
 // Most lists come as a JSON list. A few, such as check runs, come as an object that holds the
-// list in one field: pass that field's name as `listField`.
+// list in one field: pass that field's name as `listField`. `emptyOn` lists HTTP statuses that
+// mean "nothing here", such as 422 for a commit GitHub does not know: they give an empty list.
 // `getOne` returns the object at one path.
 // `sleep` and `now` are parameters too, so tests can check a rate-limit wait without waiting.
 export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now }) {
@@ -34,7 +35,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
 
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
-  async function getJson(url) {
+  async function getJson(url, emptyOn = []) {
     let response = await request(url);
     for (let waits = 0; !response.ok && waits < MAX_WAITS; waits++) {
       const ms = await rateLimitWait(response, now());
@@ -42,6 +43,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
       await sleep(ms);
       response = await request(url);
     }
+    if (emptyOn.includes(response.status)) return { reply: [], response };
     if (!response.ok) throw await apiError(response, url);
     try {
       return { reply: await response.json(), response };
@@ -50,17 +52,17 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     }
   }
 
-  async function get(url, listField) {
-    const { reply, response } = await getJson(url);
+  async function get(url, listField, emptyOn) {
+    const { reply, response } = await getJson(url, emptyOn);
     const items = listField === undefined ? reply : reply?.[listField];
     if (!Array.isArray(items)) throw notShaped(url, 'a JSON list');
     return { items, next: nextLink(response.headers.get('link')) };
   }
 
-  async function getAll(path, { listField } = {}) {
+  async function getAll(path, { listField, emptyOn } = {}) {
     const items = [];
     for (let url = API + path; url; ) {
-      const page = await get(url, listField);
+      const page = await get(url, listField, emptyOn);
       items.push(...page.items);
       url = page.next;
     }

@@ -1,7 +1,7 @@
 // A small JSON Schema checker for the keywords Exhibit's schemas use. A schema that uses any other
 // keyword makes it throw, so a rule is never skipped without anyone knowing.
 const NOTES = new Set(['$schema', '$id', 'title', 'description']);
-const RULES = new Set(['type', 'required', 'properties', 'additionalProperties', 'items', 'minimum', 'pattern']);
+const RULES = new Set(['type', 'required', 'properties', 'additionalProperties', 'items', 'minimum', 'maximum', 'pattern']);
 
 // Returns a list of problems, each as "<where>: <what>". An empty list means the value passes.
 export function checkSchema(schema, value, where = '/') {
@@ -19,6 +19,9 @@ export function checkSchema(schema, value, where = '/') {
   }
   if (typeof value === 'number' && schema.minimum !== undefined && value < schema.minimum) {
     problems.push(`${where}: must be at least ${schema.minimum}`);
+  }
+  if (typeof value === 'number' && schema.maximum !== undefined && value > schema.maximum) {
+    problems.push(`${where}: must be at most ${schema.maximum}`);
   }
   if (typeof value === 'string' && schema.pattern !== undefined && !new RegExp(schema.pattern, 'u').test(value)) {
     problems.push(`${where}: does not match ${schema.pattern}`);
