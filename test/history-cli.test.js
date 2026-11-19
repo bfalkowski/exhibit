@@ -1,9 +1,9 @@
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
@@ -14,10 +14,27 @@ const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/github/${name}.json`, import.meta.url));
 
+// Makes a new empty folder. The folder is removed when the test that made it ends.
+const madeFolders = [];
+function newFolder() {
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  madeFolders.push(dir);
+  return dir;
+}
+// writeHistoryReplay writes its file into a new folder of its own, so remove that folder too.
+function historyReplay(repo, name) {
+  const path = writeHistoryReplay(repo, name);
+  madeFolders.push(dirname(path));
+  return path;
+}
+afterEach(() => {
+  for (const dir of madeFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 // Runs `exhibit ...args` in a new empty folder, with a fetch that replays the named fixture.
 // token: null runs it with no GITHUB_TOKEN at all.
 // fixturePath: a fixture file built by a test, in place of a named one.
-function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = mkdtempSync(join(tmpdir(), 'exhibit-')) } = {}) {
+function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder() } = {}) {
   const env = { ...process.env, EXHIBIT_TEST_FIXTURE: fixturePath };
   delete env.GITHUB_TOKEN;
   if (token !== null) env.GITHUB_TOKEN = token;
@@ -45,7 +62,7 @@ test('history marks fix PRs with the default signals when there is no evidence.y
 });
 
 test('a custom fix_signals list in evidence.yml replaces the defaults', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  const cwd = newFolder();
   writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [title:rename]\n');
   const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(run.status, 0, run.stderr);
@@ -55,7 +72,7 @@ test('a custom fix_signals list in evidence.yml replaces the defaults', () => {
 });
 
 test('a malformed fix_signals gives exit 2 with a message, and writes no file', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  const cwd = newFolder();
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [bug]\n');
   const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(run.status, 2);
@@ -94,7 +111,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir });
-  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: historyReplay(repo, 'fixture/shop'), cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
   assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 6 of 6 fix PRs.\n');
@@ -119,7 +136,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
-  const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: historyReplay(repo, 'fixture/shop'), cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 6 } });
 });
@@ -143,7 +160,7 @@ test('--json prints a short machine summary', () => {
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  const cwd = newFolder();
   mkdirSync(join(cwd, '.exhibit'));
   writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), 'old\n');
   const run = exhibit(['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken', cwd });
@@ -196,7 +213,7 @@ test('bad arguments give exit 2 and say what is wrong', () => {
 });
 
 test('a folder that cannot be written gives exit 2 and a message, not a stack trace', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-'));
+  const cwd = newFolder();
   writeFileSync(join(cwd, '.exhibit'), 'a plain file where the folder should be');
   const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(run.status, 2);
