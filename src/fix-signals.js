@@ -8,8 +8,8 @@ const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 const KEY = '[a-z][a-z0-9_]*-\\d+';
 const LEADING_KEY = new RegExp(`^(?:\\[${KEY}\\]:?\\s*|\\(${KEY}\\):?\\s*|${KEY}(?::\\s*|\\s+))`);
 
-// Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's title, its label
-// names and its branch name. The first signal in the list that matches is recorded, so a person
+// Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's number, its title,
+// its label names and its branch name. The first signal in the list that matches is recorded, so a person
 // can see why the PR counts as a fix. Matching ignores case.
 export function classifyFix(pr, signals) {
   const fixSignal = signals.find((signal) => matches(pr, signal)) ?? null;
@@ -24,6 +24,7 @@ function matches(pr, signal) {
   if (type === 'title') return startsWithWord(pr.title.trim().toLowerCase(), value);
   if (type === 'title_after_key') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value);
   if (type === 'branch') return pr.branch.toLowerCase().startsWith(value);
+  if (type === 'pr') return String(pr.number) === value;
   return false;
 }
 

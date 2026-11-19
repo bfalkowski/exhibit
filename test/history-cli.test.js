@@ -84,6 +84,26 @@ test('a title_after_key signal is recorded in classification, and the line passe
   assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_key:rename']]);
 });
 
+test('a pr: signal marks the PR with that number as a fix, next to the other signals', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [label:bug, title:fix, branch:fix/, pr:3, pr:5]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  // PR 5 has the label bug, and label:bug comes first in the list.
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[5, 'label:bug'], [3, 'pr:3']]);
+});
+
+test('a pr: signal that is not a PR number gives exit 2 with a message, and writes no file', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, pr:abc]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./);
+  assert.ok(!existsSync(run.historyPath));
+});
+
 test('a title_after_key signal with no value gives exit 2 with a message, and writes no file', (t) => {
   const cwd = newFolder(t);
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, "title_after_key:"]\n');

@@ -9,7 +9,9 @@ import { ToolError } from './tool-error.js';
 const POLICY = 'evidence.yml';
 const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
 const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'probe'];
-const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch'];
+const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr'];
+// A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
+const PR_NUMBER = /^[1-9]\d*$/;
 
 // Reads the policy, evidence.yml, in `cwd` and checks it against schema/evidence.schema.json
 // (spec 8.1). Every command reads the policy with this one function, so they all see it the same
@@ -99,9 +101,9 @@ function checkSignals(signals) {
   if (signals.length === 0) throw new ToolError(`${where} needs at least one signal. Leave it out to use the defaults [${DEFAULT_FIX_SIGNALS.join(', ')}].`);
   signals.forEach((signal, i) => {
     const at = `${where}[${i}]`;
-    if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.`);
+    if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.${spaceHint(signal)}`);
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key: or branch:.`);
+    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch: or pr:.`);
     const value = signal.slice(type.length + 1);
     if (/[\r\n]/.test(value)) throw new ToolError(`${at} is ${JSON.stringify(signal)}. A signal must be on one line.`);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
@@ -110,7 +112,18 @@ function checkSignals(signals) {
     // creates or renames the label, and git refuses a space in a branch name. So refuse
     // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
+    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
   });
+}
+
+// In a YAML list, "pr: 96" with a space after the colon is a mapping, not text. Returns a hint
+// that shows the signal with no space, or '' for any other value.
+function spaceHint(value) {
+  if (!isMapping(value)) return '';
+  const entries = Object.entries(value);
+  if (entries.length !== 1) return '';
+  const [type, rest] = entries[0];
+  return SIGNAL_TYPES.includes(type) ? ` Write it with no space after the colon, as in ${type}:${rest}.` : '';
 }
 
 function isMapping(value) {
