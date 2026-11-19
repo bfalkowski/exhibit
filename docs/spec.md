@@ -119,7 +119,19 @@ Rules:
 - A PR that matches no kind uses `default`.
 - `merge_without_reading: allowed` holds only if every matched kind allows it.
 - `source` lists the defect IDs a rule came from. The backtest uses it to find leaks (section 9.9).
-- Exhibit validates the file against a JSON schema and refuses to run on an invalid policy.
+- Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
+  - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
+  - `version` must be 3, the only format this Exhibit reads.
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) and `mutation_budget_seconds` (a whole number, 1 or more).
+  - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
+  - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
+  - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
+  - `needs` is a list of evidence items, and it may be empty. An item is a bare name (`tests-before-after` or `failing-before`), or a mapping with one key: the item type, with its fields. `- failing-before:` with nothing after the colon is the same as the bare name.
+  - `failing-before` may have `when`: a list of `fix` and `feature`.
+  - `mutation` must have `min`, a number from 0 to 1. NaN (`.nan`) and infinity (`.inf`) are not numbers here.
+  - `probe` must have `name` and `run`. It may have `artifacts` (a list of paths) and `author: hidden`.
+  - An item type that is not one of the four is an error.
+- An invalid policy makes the command exit 2. The message names each bad field and says what is wrong, one field on each line, for example `evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".` A file that is not valid YAML gives exit 2 too. A bad `fix_signals` is the one exception: Exhibit checks it first, and its message shows only that problem, as it did before the whole file was checked.
 
 Evidence item types in version 1:
 
@@ -317,7 +329,7 @@ The cache does not remove old entries. Deleting the folder is always safe: the n
   - `title_after_key:fix` works like `title:fix`, but first skips a ticket key at the start of the title. Many teams start a title with a key, such as "T-170: Fix the crash", so `title:fix` never matches them. A key is letters and digits, a hyphen, and digits, such as `T-170` or `KEY-123`. It may be in square brackets or parentheses, and a colon or a space follows it. So `title_after_key:fix` matches "T-170: Fix the crash", "KEY-123: fix the parser" and "[KEY-123] fix the parser". It does not match "T-170: Add prefix fixer" or "T-170: Improve fixtures", by the same word rule as `title:`. A title with no key matches the same way as with `title:fix`. A number alone, such as "79:", is not a key. This type is not in the defaults: a person adds it to `fix_signals`, for example `[label:bug, title_after_key:fix, branch:fix/]`.
   - `branch:fix/` matches a head branch whose name starts with `fix/`.
   - All matching ignores case.
-- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads only this one setting from the file, and the other settings are not checked until slice S4.
+- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads and checks the whole file (section 8.1), so it refuses an invalid policy even when `fix_signals` is fine.
 - A `fix_signals` that is not a list, is empty, has a signal that does not start with `label:`, `title:`, `title_after_key:` or `branch:`, or has a space before or after the value (such as "label: bug") makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
 - A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
 - A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
