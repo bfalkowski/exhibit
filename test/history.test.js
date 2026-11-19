@@ -218,3 +218,12 @@ test('getOne turns a reply that is not a JSON object into a tool error', async (
     await assert.rejects(github.getOne('/repos/acme/big/pulls/9'), (error) => error instanceof ToolError && /not a JSON object/.test(error.message), text);
   }
 });
+
+test('readHistory warns about a comment whose only verdict is in a quoted line, and leaves it out', async () => {
+  const warnings = [];
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')), warn: (text) => warnings.push(text) });
+  assert.deepEqual(lines.find((l) => l.number === 5).reviews, { change_request_rounds: 0, list: [] });
+  assert.deepEqual(warnings, [
+    'PR 5: the comment by dev5 at 2026-02-20T10:00:00Z gives the verdict fix only in a quoted line, so it does not count as a review.'
+  ]);
+});
