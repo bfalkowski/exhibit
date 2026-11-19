@@ -30,7 +30,7 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // mean "nothing here", such as 422 for a commit GitHub does not know: they give an empty list.
 // `permission` names the token permission that the request needs, such as "Checks: read". A 403
 // that is not a rate limit then says which permission a fine-grained token may lack.
-// `getOne` returns the object at one path.
+// `getOne` returns the object at one path, or null for a status in its `emptyOn`.
 // `sleep`, `now` and `random` are parameters too, so tests can check a rate-limit wait without waiting.
 export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
   async function request(url) {
@@ -88,10 +88,11 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return items;
   }
 
-  // Returns the one JSON object at `path`, such as a single PR.
-  async function getOne(path, { permission } = {}) {
+  // Returns the one JSON object at `path`, such as a single PR. A status in `emptyOn` gives null.
+  async function getOne(path, { emptyOn = [], permission } = {}) {
     const url = API + path;
-    const { reply } = await getJson(url, [], permission);
+    const { reply, response } = await getJson(url, emptyOn, permission);
+    if (emptyOn.includes(response.status)) return null;
     if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) throw notShaped(url, 'a JSON object');
     return reply;
   }

@@ -106,7 +106,8 @@ export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
       continue;
     }
     try {
-      out.push({ ...line, szz: await szzForFix(dir, line, findPr) });
+      const reportedAt = await bugReportDate(line, { repo, github });
+      out.push({ ...line, szz: await szzForFix(dir, line, findPr, reportedAt) });
     } catch (error) {
       if (!(error instanceof GitError)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
@@ -125,28 +126,38 @@ async function hasCommit(dir, sha) {
   }
 }
 
-// SZZ blames the main branch just before the fix, takes the lines the fix deleted or changed
-// there, and groups them by the PR that last changed each one.
-async function szzForFix(dir, fix, findPr) {
+// SZZ blames the main branch just before the fix (mainBeforeFix), takes the lines the fix
+// deleted or changed there, drops the ones that carry no bug, blames the rest, drops the lines
+// whose commit came after the bug report, and groups what is left by the PR that last changed
+// each line.
+async function szzForFix(dir, fix, findPr, reportedAt) {
   const blamed = await mainBeforeFix(dir, fix, findPr);
-  const removed = parseRemovedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
+  const { counted, dropped } = countedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
 
   const blamedLines = [];
-  for (const [path, numbers] of removed) {
+  for (const [path, numbers] of counted) {
     blamedLines.push(...(await blameLines(dir, blamed, path, numbers)));
   }
+  const { kept, dropped: newer } = dropNewerLines(blamedLines, reportedAt);
+  const droppedLines = [...dropped, ...newer];
 
   const byPr = new Map();
   const unlinked = [];
-  for (const line of blamedLines) {
+  for (const line of kept) {
     const pr = await findPr(line.blame.commit);
     if (pr === null) unlinked.push(line);
     else byPr.set(pr, [...(byPr.get(pr) ?? []), line]);
   }
   const links = [...byPr]
-    .map(([pr, prLines]) => ({ pr, confidence: prLines.length / blamedLines.length, lines: prLines }))
+    .map(([pr, prLines]) => ({ pr, confidence: prLines.length / kept.length, lines: prLines }))
     .sort((a, b) => b.confidence - a.confidence || a.pr - b.pr);
-  return { blamed_commit: blamed, links, unlinked_lines: unlinked };
+  return {
+    blamed_commit: blamed,
+    links,
+    unlinked_lines: unlinked,
+    dropped_lines: droppedLines,
+    no_link_reason: kept.length === 0 ? noLinkReason(droppedLines) : null
+  };
 }
 
 // Returns the commit on the main branch just before the fix. A merge commit or a squash commit
@@ -165,39 +176,223 @@ async function mainBeforeFix(dir, fix, findPr) {
   return (await git(dir, ['rev-parse', `${first}^1`])).trim();
 }
 
-// Reads a `git diff -U0` and returns, for each old file path, the old line numbers the diff
-// deleted or changed. A hunk header "@@ -12,3 +12,1 @@" means old lines 12 to 14.
-// A new file (--- /dev/null) has no old lines. A rename keeps the old path.
+// The reasons a line is dropped, in the order no_link_reason names them, with the words for each.
+const REASONS = [
+  ['whitespace', 'whitespace'],
+  ['comment', 'comments'],
+  ['moved', 'moved lines'],
+  ['newer than the bug report', 'lines newer than the bug report']
+];
+
+// Says why a fix with no lines left has no links, such as "whitespace only" or
+// "whitespace and moved lines only". null when the fix deleted or changed no lines at all.
+function noLinkReason(dropped) {
+  const words = REASONS.filter(([reason]) => dropped.some((line) => line.reason === reason)).map(([, word]) => word);
+  if (words.length === 0) return null;
+  const list = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+  return `${list} only`;
+}
+
+// Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
+// "Fixes #12" or "closes: #7". Only issues in the same repo count.
+export function bugReportNumbers(body) {
+  const numbers = [];
+  for (const match of (body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)\b/gi)) {
+    const number = Number(match[1]);
+    if (!numbers.includes(number)) numbers.push(number);
+  }
+  return numbers;
+}
+
+// Returns when the fix's bug was reported: the newest creation time of the issues its body
+// links, or null when it links none. A linked number that is a PR, or that GitHub does not
+// know, gives no date. With more than one report, a commit can have brought the bug only when
+// it came before the newest one.
+async function bugReportDate(fix, { repo, github }) {
+  let newest = null;
+  for (const number of bugReportNumbers(fix.body)) {
+    const issue = await github.getOne(`/repos/${repo}/issues/${number}`, { emptyOn: [404, 410] });
+    if (issue === null || issue.pull_request || typeof issue.created_at !== 'string') continue;
+    if (newest === null || Date.parse(issue.created_at) > Date.parse(newest)) newest = issue.created_at;
+  }
+  return newest;
+}
+
+// Splits blamed lines by the bug report date (spec 9.2, step 5). A line whose commit was
+// written after the bug was reported cannot have brought the bug, so it is dropped.
+// With no date, every line is kept.
+export function dropNewerLines(blamedLines, reportedAt) {
+  if (reportedAt === null) return { kept: blamedLines, dropped: [] };
+  const limit = Date.parse(reportedAt);
+  const kept = [];
+  const dropped = [];
+  for (const line of blamedLines) {
+    if (Date.parse(line.blame.author_time) > limit) {
+      dropped.push({ path: line.path, line: line.line, text: line.text, reason: 'newer than the bug report' });
+    } else {
+      kept.push(line);
+    }
+  }
+  return { kept, dropped };
+}
+
+// Reads a fix's `git diff -U0` and returns the lines it deleted or changed, split in two
+// (spec 9.2, steps 1 and 2):
+// - `counted`: for each old file path, the old line numbers that SZZ blames.
+// - `dropped`: the lines that carry no bug, each with { path, line, text, reason }.
+// A line is dropped for one of three reasons, checked in this order:
+// - "whitespace": the same hunk adds it back with only whitespace changed.
+// - "moved": another hunk, in any file, adds it back with at most whitespace changed, or the
+//   same hunk adds it back with the very same text. A blank line that no other hunk adds back
+//   is "whitespace". In a Python file the indent at the start of a line is code for both rules.
+// - "comment": it is only a comment, and the fix does not turn it back into code.
+// Each added line pairs with one deleted line at most. A renamed file keeps its old path.
+export function countedLines(diff) {
+  const hunks = parseHunks(diff);
+  const added = hunks.flatMap((hunk, at) => {
+    const comments = markComments(hunk.added, hunk.newPath);
+    return hunk.added.map((text, i) => ({ at, text, key: squash(text, hunk.newPath), comment: comments[i], used: false }));
+  });
+  const deleted = hunks.flatMap((hunk, at) => {
+    const comments = markComments(hunk.deleted.map((row) => row.text), hunk.oldPath);
+    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null }));
+  });
+
+  // Finds an added line with the same text, give or take whitespace, in the same hunk or in
+  // another one, and uses it up.
+  // Returns the matched line, or undefined.
+  const pair = (line, sameHunk) => {
+    const match = added.find((row) => !row.used && row.key === line.key && (row.at === line.at) === sameHunk);
+    if (match) match.used = true;
+    return match;
+  };
+  // A line that the same hunk adds back with the very same text only changed its place.
+  for (const line of deleted) {
+    const match = line.key === '' ? undefined : pair(line, true);
+    if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
+  }
+  // A blank line that another hunk adds back moved with the block around it.
+  for (const line of deleted) {
+    if (line.reason === null && pair(line, false) !== undefined) line.reason = 'moved';
+    else if (line.reason === null && line.key === '') line.reason = 'whitespace';
+  }
+  // The words of each added code line, with no whitespace at all. A comment's words have no
+  // indent, so the indent of a Python line must not count here.
+  const code = new Set(added.filter((row) => !row.comment && row.key !== '').map((row) => row.text.replace(/\s+/g, '')));
+  for (const line of deleted) {
+    if (line.reason === null && line.comment && !code.has(uncomment(line.text).replace(/\s+/g, ''))) line.reason = 'comment';
+  }
+
+  const counted = new Map();
+  const dropped = [];
+  for (const { path, line, text, reason } of deleted) {
+    if (reason !== null) dropped.push({ path, line, text, reason });
+    else counted.set(path, [...(counted.get(path) ?? []), line]);
+  }
+  return { counted, dropped };
+}
+
+// The text with whitespace taken out, so two lines that differ only in whitespace match. In
+// Python the indent says which block a line is in, so it is code and stays.
+const squash = (text, path) => {
+  const words = text.replace(/\s+/g, '');
+  const indent = words !== '' && commentStyle(path) === 'hash' ? /^\s*/.exec(text)[0] : '';
+  return indent + words;
+};
+
+// The words inside a comment line, without its comment marks.
+const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').replace(/\*+\/$/, '');
+
+// Version 1 knows the comments of JavaScript and TypeScript, and of Python.
+function commentStyle(path) {
+  const ext = /\.([^./]+)$/.exec(path ?? '')?.[1]?.toLowerCase();
+  if (['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'].includes(ext)) return 'slash';
+  if (ext === 'py') return 'hash';
+  return null;
+}
+
+// A row that ends a block comment: it starts or ends with "*/". A "*/" in the middle of a row,
+// such as in the regex /a*/, does not count.
+const closesBlock = (text) => {
+  const rest = text.trim();
+  return rest.startsWith('*/') || rest.endsWith('*/');
+};
+
+// Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
+// changed rows, so a block comment can open before the hunk. A row that starts with "*" counts
+// as a row of such a block only when the row or a later row of the hunk closes the block (a
+// later row that starts or ends with "*/"), or when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as
+// "* qty;" after a line that ends in "price".
+function markComments(texts, path) {
+  const style = commentStyle(path);
+  if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
+  if (style !== 'slash') return texts.map(() => false);
+  let inBlock = false;
+  return texts.map((text, i) => {
+    let rest = text.trim();
+    if (!inBlock) {
+      if (rest.startsWith('//')) return true;
+      if (/^\*(\s|\/|$)/.test(rest)) {
+        const end = rest.indexOf('*/');
+        if (end !== -1) return rest.slice(end + 2).trim() === '';
+        return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some(closesBlock);
+      }
+      if (!rest.startsWith('/*')) return false;
+      rest = rest.slice(2);
+    }
+    const end = rest.indexOf('*/');
+    inBlock = end === -1;
+    if (inBlock) return true;
+    const after = rest.slice(end + 2).trim();
+    return after === '' || after.startsWith('//');
+  });
+}
+
+// Reads a `git diff -U0` into hunks: { oldPath, newPath, deleted, added }. `deleted` holds
+// { line, text } with the old line numbers, and `added` holds the added texts. A hunk header
+// "@@ -12,3 +12,1 @@" means old lines 12 to 14. A new file has a null oldPath, and a deleted
+// file a null newPath.
 // A "--- " row is a file header only before the file's first hunk. Inside a hunk it is a deleted
 // line that starts with "-- ", such as a SQL comment.
-export function parseRemovedLines(diff) {
-  const removed = new Map();
-  let path = null;
-  let inHeader = false;
+function parseHunks(diff) {
+  const hunks = [];
+  let oldPath = null;
+  let newPath = null;
+  let hunk = null;
+  let next = 0;
   for (const row of diff.split('\n')) {
     if (row.startsWith('diff --git ')) {
-      inHeader = true;
-      path = null;
+      hunk = null;
+      oldPath = null;
+      newPath = null;
       continue;
     }
-    if (inHeader && row.startsWith('--- ')) {
-      // Git ends the path with a tab when it holds a space.
-      const name = unquote(row.slice(4).replace(/\t$/, ''));
-      path = name === '/dev/null' ? null : name.replace(/^a\//, '');
+    if (hunk === null && row.startsWith('--- ')) {
+      oldPath = headerPath(row, 'a/');
       continue;
     }
-    const hunk = /^@@ -(\d+)(?:,(\d+))? /.exec(row);
-    if (!hunk) continue;
-    inHeader = false;
-    if (path === null) continue;
-    const start = Number(hunk[1]);
-    const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-    if (count === 0) continue;
-    const numbers = removed.get(path) ?? [];
-    for (let i = 0; i < count; i++) numbers.push(start + i);
-    removed.set(path, numbers);
+    if (hunk === null && row.startsWith('+++ ')) {
+      newPath = headerPath(row, 'b/');
+      continue;
+    }
+    const header = /^@@ -(\d+)(?:,\d+)? /.exec(row);
+    if (header) {
+      hunk = { oldPath, newPath, deleted: [], added: [] };
+      hunks.push(hunk);
+      next = Number(header[1]);
+      continue;
+    }
+    if (hunk === null) continue;
+    if (row.startsWith('-') && oldPath !== null) hunk.deleted.push({ line: next++, text: row.slice(1) });
+    else if (row.startsWith('+')) hunk.added.push(row.slice(1));
   }
-  return removed;
+  return hunks;
+}
+
+function headerPath(row, prefix) {
+  // Git ends the path with a tab when it holds a space.
+  const name = unquote(row.slice(4).replace(/\t$/, ''));
+  return name === '/dev/null' ? null : name.replace(new RegExp(`^${prefix}`), '');
 }
 
 // Git puts a path in double quotes, with C escapes, when it holds a tab, a newline, a quote or a
