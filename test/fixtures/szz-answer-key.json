@@ -33,6 +33,15 @@
       "introducing_prs": [],
       "case": "comments only",
       "lines": ["src/format.js: two comment lines get new words"]
+    },
+    {
+      "fix_pr": 12,
+      "introducing_prs": [1, 11],
+      "case": "a fix merged with rebase and merge",
+      "lines": [
+        "src/cart.js: return items.length; (added by PR 1, a merge commit; the fix's first commit changes it, and its second commit changes it again)",
+        "src/stock.js: return item.qty >= 0; (added by PR 11, a rebase merge, in the first of its two commits)"
+      ]
     }
   ]
 }
