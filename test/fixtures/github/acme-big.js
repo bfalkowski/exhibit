@@ -66,8 +66,9 @@ export function writeBigFixture() {
   };
   for (const pull of pulls) {
     recordFiles(replies, pull.number, pull.changed_files);
-    // No reviews and no check runs: these PRs are here for their files only.
+    // No reviews, no comments and no check runs: these PRs are here for their files only.
     replies[`/repos/acme/big/pulls/${pull.number}/reviews?per_page=100`] = { status: 200, headers: {}, body: [] };
+    replies[`/repos/acme/big/issues/${pull.number}/comments?per_page=100`] = { status: 200, headers: {}, body: [] };
     replies[`/repos/acme/big/commits/${pull.head.sha}/check-runs?per_page=100`] = { status: 200, headers: {}, body: { total_count: 0, check_runs: [] } };
     // PR 7 has no reply for itself on purpose: a request for it fails the test.
     if (pull.changed_files >= LISTED_AT_MOST) replies[`/repos/acme/big/pulls/${pull.number}`] = { status: 200, headers: {}, body: pull };

@@ -37,12 +37,14 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
       { path: 'test/cache.test.js', additions: 64, deletions: 0 }
     ],
     reviews: {
-      change_request_rounds: 2,
+      change_request_rounds: 3,
       list: [
-        { state: 'CHANGES_REQUESTED', author: 'rev1' },
-        { state: 'COMMENTED', author: 'dev7' },
-        { state: 'CHANGES_REQUESTED', author: 'rev1' },
-        { state: 'APPROVED', author: 'rev2' }
+        { state: 'CHANGES_REQUESTED', author: 'rev3', source: 'comment' },
+        { state: 'CHANGES_REQUESTED', author: 'rev1', source: 'review' },
+        { state: 'COMMENTED', author: 'dev7', source: 'review' },
+        { state: 'CHANGES_REQUESTED', author: 'rev1', source: 'review' },
+        { state: 'APPROVED', author: 'rev2', source: 'review' },
+        { state: 'APPROVED', author: 'rev3', source: 'comment' }
       ]
     },
     ci: [
@@ -59,15 +61,38 @@ test('a PR with no reviews gets an empty list and zero rounds', async () => {
   assert.deepEqual(lines.find((l) => l.number === 5).reviews, { change_request_rounds: 0, list: [] });
 });
 
-test('a PR with two change requests and one approval gets two rounds', async () => {
+test('a PR with two change requests and one approval gets two rounds from its reviews', async () => {
   const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
-  assert.equal(lines.find((l) => l.number === 7).reviews.change_request_rounds, 2);
+  const fromReviews = lines.find((l) => l.number === 7).reviews.list.filter((r) => r.source === 'review');
+  assert.equal(fromReviews.filter((r) => r.state === 'CHANGES_REQUESTED').length, 2);
+});
+
+test('a review posted as a PR comment with the verdict fix is a round', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.deepEqual(lines.find((l) => l.number === 1).reviews, {
+    change_request_rounds: 1,
+    list: [{ state: 'CHANGES_REQUESTED', author: 'rev3', source: 'comment' }]
+  });
+});
+
+test('comment reviews come from every page, in time order with the reviews, and other comments are left out', async () => {
+  const fetch = replayFetch(fixture('acme-widgets'));
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch });
+  const pr7 = lines.find((l) => l.number === 7).reviews;
+  // The Dev's reply says "Verdict fix" but starts with an office marker, and the CI note has no
+  // verdict, so neither is in the list.
+  assert.deepEqual(pr7.list.filter((r) => r.source === 'comment'), [
+    { state: 'CHANGES_REQUESTED', author: 'rev3', source: 'comment' },
+    { state: 'APPROVED', author: 'rev3', source: 'comment' }
+  ]);
+  assert.equal(pr7.change_request_rounds, 3);
+  assert.ok(fetch.calls.some((c) => c.key === '/repositories/4242/issues/7/comments?per_page=100&page=2'));
 });
 
 test('a dismissed change request is not a round, and a deleted reviewer is null', async () => {
   const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
   assert.equal(lines.find((l) => l.number === 4).reviews.change_request_rounds, 0);
-  assert.deepEqual(lines.find((l) => l.number === 3).reviews.list, [{ state: 'APPROVED', author: null }]);
+  assert.deepEqual(lines.find((l) => l.number === 3).reviews.list, [{ state: 'APPROVED', author: null, source: 'review' }]);
 });
 
 test('a PR with no check runs gets an empty ci list', async () => {
@@ -106,8 +131,8 @@ test('readHistory with since and limit asks for the files of the kept PRs only',
   assert.deepEqual(lines.map((l) => l.number), [7, 4]);
   const fileCalls = fetch.calls.filter((c) => c.key.includes('/files'));
   assert.deepEqual(fileCalls.map((c) => c.key.match(/pulls\/(\d+)/)[1]).sort(), ['4', '7', '7']);
-  const otherCalls = fetch.calls.filter((c) => c.key.includes('/reviews') || c.key.includes('/check-runs'));
-  assert.ok(otherCalls.every((c) => /(pulls\/|c{39})[47]\b/.test(c.key)), otherCalls.map((c) => c.key).join(', '));
+  const otherCalls = fetch.calls.filter((c) => c.key.includes('/reviews') || c.key.includes('/comments') || c.key.includes('/check-runs'));
+  assert.ok(otherCalls.every((c) => /(pulls\/|issues\/|c{39})[47]\b/.test(c.key)), otherCalls.map((c) => c.key).join(', '));
 });
 
 test('readHistory keeps a PR merged at exactly the since time', async () => {

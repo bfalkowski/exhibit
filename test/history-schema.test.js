@@ -15,7 +15,7 @@ const good = () => ({
   base_sha: 'b'.repeat(40),
   merge_sha: 'a'.repeat(40),
   files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],
-  reviews: { change_request_rounds: 1, list: [{ state: 'CHANGES_REQUESTED', author: 'rev1' }, { state: 'APPROVED', author: null }] },
+  reviews: { change_request_rounds: 1, list: [{ state: 'CHANGES_REQUESTED', author: 'rev1', source: 'review' }, { state: 'APPROVED', author: null, source: 'comment' }] },
   ci: [{ name: 'test', conclusion: 'success' }, { name: 'lint', conclusion: null }],
   classification: { fix: false, fix_signal: null },
   szz: null
@@ -60,6 +60,13 @@ test('a review state must be one GitHub uses, and the rounds a count', () => {
   line.reviews.list[0].state = 'LGTM';
   line.reviews.change_request_rounds = -1;
   assert.equal(checkHistoryLine(line).length, 2);
+});
+
+test('each review says whether it came from the reviews list or from a PR comment', () => {
+  const line = good();
+  delete line.reviews.list[0].source;
+  line.reviews.list[1].source = 'chat';
+  assert.deepEqual(checkHistoryLine(line), ['/reviews/list/0: misses the field source', '/reviews/list/1/source: does not match ^(review|comment)$']);
 });
 
 test('each problem names where it is', () => {

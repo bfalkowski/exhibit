@@ -104,5 +104,15 @@
       "total_count": 0,
       "check_runs": []
     }
+  },
+  "/repos/acme/broken/issues/1/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/broken/issues/2/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
   }
 }
