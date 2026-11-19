@@ -6,7 +6,7 @@
 // know gets a 422.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -52,7 +52,8 @@ export function commitPullsFetch(built, repo) {
 /**
  * Writes a replay file (the format of test-support/replay-fetch.js) that serves the whole
  * fixture repo as GitHub would: the PR list, each PR's files, reviews, comments, check runs and
- * commit statuses, and "pull requests for a commit". Returns its path.
+ * commit statuses, and "pull requests for a commit". Returns the path of the file, and `cleanup`,
+ * which removes its folder: call it when the test ends, for example with t.after(cleanup).
  */
 export function writeHistoryReplay(built, repo) {
   const replies = commitPullsReplies(built, repo);
@@ -84,7 +85,8 @@ export function writeHistoryReplay(built, repo) {
     replies[`/repos/${repo}/commits/${head}/check-runs?per_page=100`] = { status: 200, headers: {}, body: { total_count: 0, check_runs: [] } };
     replies[`/repos/${repo}/commits/${head}/status?per_page=100`] = { status: 200, headers: {}, body: { state: 'pending', statuses: [], total_count: 0 } };
   }
-  const path = join(mkdtempSync(join(tmpdir(), 'exhibit-replay-')), 'shop.json');
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-replay-'));
+  const path = join(dir, 'shop.json');
   writeFileSync(path, JSON.stringify(replies));
-  return path;
+  return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

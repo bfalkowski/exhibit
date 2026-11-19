@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
@@ -20,12 +20,6 @@ function newFolder() {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-'));
   madeFolders.push(dir);
   return dir;
-}
-// writeHistoryReplay writes its file into a new folder of its own, so remove that folder too.
-function historyReplay(repo, name) {
-  const path = writeHistoryReplay(repo, name);
-  madeFolders.push(dirname(path));
-  return path;
 }
 afterEach(() => {
   for (const dir of madeFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -111,7 +105,9 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir });
-  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: historyReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
   assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 6 of 6 fix PRs.\n');
@@ -136,7 +132,9 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
-  const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: historyReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 6, skipped: 0 } });
 });
@@ -149,7 +147,8 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
   t.after(() => rmSync(shallow, { recursive: true, force: true }));
   execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.'], { cwd: shallow });
   execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/fixture/shop.git'], { cwd: shallow });
-  const fixturePath = writeHistoryReplay(repo, 'fixture/shop');
+  const { path: fixturePath, cleanup } = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(cleanup);
 
   const text = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
   assert.equal(text.status, 0, text.stderr);
