@@ -64,11 +64,22 @@ test('a malformed fix_signals gives exit 2 with a message, and writes no file', 
   assert.ok(!existsSync(run.historyPath));
 });
 
-test('a PR with more files than GitHub lists gives a warning on stderr that names it, and still exits 0', () => {
-  const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: writeBigFixture() });
+test('a PR with more files than GitHub lists gives a warning on stderr that names it, and still exits 0', (t) => {
+  const big = writeBigFixture();
+  t.after(big.cleanup);
+  const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
   assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null });
+  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+});
+
+test('a failed request for the file count gives a warning, not a failed run', (t) => {
+  const big = writeBigFixture({ unreadable: [9] });
+  t.after(big.cleanup);
+  const run = exhibit(['history', '--repo', 'acme/big'], { fixturePath: big.path });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stderr, /^exhibit: warning: PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short\. Exhibit could not read how many files it changed: GitHub answered 500/);
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
