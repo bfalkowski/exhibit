@@ -4,7 +4,7 @@
   "title": "One line of .exhibit/history.jsonl",
   "description": "One merged PR (spec section 8.3). This version fills the PR fields, files, reviews, ci, classification and szz. The fields that later tickets fill may be absent or null.",
   "type": "object",
-  "required": ["number", "title", "body", "author", "labels", "merged_at", "base_sha", "merge_sha", "files", "reviews", "ci", "classification"],
+  "required": ["number", "title", "body", "author", "labels", "merged_at", "base_sha", "merge_sha", "files", "reviews", "ci", "classification", "szz"],
   "additionalProperties": false,
   "properties": {
     "number": { "type": "integer", "minimum": 1 },

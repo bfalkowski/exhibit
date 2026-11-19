@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { checkHistoryLine } from '../src/history-schema.js';
+
+const schema = JSON.parse(readFileSync(new URL('../schema/history-line.schema.json', import.meta.url), 'utf8'));
 
 const good = () => ({
   number: 7,
@@ -14,7 +17,8 @@ const good = () => ({
   files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],
   reviews: { change_request_rounds: 1, list: [{ state: 'CHANGES_REQUESTED', author: 'rev1' }, { state: 'APPROVED', author: null }] },
   ci: [{ name: 'test', conclusion: 'success' }, { name: 'lint', conclusion: null }],
-  classification: { fix: false, fix_signal: null }
+  classification: { fix: false, fix_signal: null },
+  szz: null
 });
 
 test('a line with the fields this version fills passes', () => {
@@ -94,4 +98,12 @@ test('szz holds links, each with a confidence from 0 to 1 and lines that carry t
   const noBlame = { ...line };
   delete noBlame.blame;
   assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, unlinked_lines: [noBlame] } }), ['/szz/unlinked_lines/0: misses the field blame']);
+});
+
+test('every line has szz, and the schema describes a line the same way in links and unlinked_lines', () => {
+  const line = good();
+  delete line.szz;
+  assert.deepEqual(checkHistoryLine(line), ['/: misses the field szz']);
+  const szz = schema.properties.szz.properties;
+  assert.deepEqual(szz.links.items.properties.lines.items, szz.unlinked_lines.items);
 });

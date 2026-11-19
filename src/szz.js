@@ -13,9 +13,17 @@ const PLAIN = [
   '-c', 'blame.markIgnoredLines=false'
 ];
 
+// A git command that failed. SZZ catches it for one fix PR, warns, and goes on with the others.
+class GitError extends Error {}
+
 async function git(dir, args) {
-  const { stdout } = await run('git', [...PLAIN, ...args], { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
-  return stdout;
+  try {
+    const { stdout } = await run('git', [...PLAIN, ...args], { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+    return stdout;
+  } catch (error) {
+    const reason = (error.stderr ?? '').trim().split('\n')[0] || error.message;
+    throw new GitError(`git failed: git ${args[0]}: ${reason}`);
+  }
 }
 
 // Returns the top folder of the git clone that holds `dir`, when one of its remotes points at
@@ -54,7 +62,8 @@ export function createPrFinder({ lines, repo, github }) {
 }
 
 async function askGitHub(github, repo, sha) {
-  // GitHub answers 422 for a commit it does not know, such as one that was never pushed.
+  // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
+  // means the same here: the repo itself was read a moment before.
   const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422] });
   // A commit can sit in more than one PR, such as a release PR that copies main to another
   // branch. The first PR merged brought it in.
@@ -63,10 +72,15 @@ async function askGitHub(github, repo, sha) {
 }
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
-// not a fix gets null. A fix whose merge commit is not in the clone gets null and a warning.
+// not a fix gets null. A fix whose merge commit is not in the clone, or where git fails, gets
+// null and a warning. A shallow clone gives one warning first, because blame there can give
+// old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of `repo`, as cloneRoot returns it.
 export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
   const findPr = createPrFinder({ lines, repo, github });
+  if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
+    warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
+  }
   const out = [];
   for (const line of lines) {
     if (!line.classification?.fix) {
@@ -78,7 +92,13 @@ export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
       out.push({ ...line, szz: null });
       continue;
     }
-    out.push({ ...line, szz: await szzForFix(dir, line, findPr) });
+    try {
+      out.push({ ...line, szz: await szzForFix(dir, line, findPr) });
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
+      out.push({ ...line, szz: null });
+    }
   }
   return out;
 }
@@ -97,7 +117,7 @@ async function hasCommit(dir, sha) {
 // on that side, blames them there, and groups them by the PR that last changed each one.
 async function szzForFix(dir, fix, findPr) {
   const blamed = (await git(dir, ['rev-parse', `${fix.merge_sha}^1`])).trim();
-  const removed = parseRemovedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
+  const removed = parseRemovedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
 
   const blamedLines = [];
   for (const [path, numbers] of removed) {
@@ -120,18 +140,28 @@ async function szzForFix(dir, fix, findPr) {
 // Reads a `git diff -U0` and returns, for each old file path, the old line numbers the diff
 // deleted or changed. A hunk header "@@ -12,3 +12,1 @@" means old lines 12 to 14.
 // A new file (--- /dev/null) has no old lines. A rename keeps the old path.
+// A "--- " row is a file header only before the file's first hunk. Inside a hunk it is a deleted
+// line that starts with "-- ", such as a SQL comment.
 export function parseRemovedLines(diff) {
   const removed = new Map();
   let path = null;
+  let inHeader = false;
   for (const row of diff.split('\n')) {
-    if (row.startsWith('--- ')) {
+    if (row.startsWith('diff --git ')) {
+      inHeader = true;
+      path = null;
+      continue;
+    }
+    if (inHeader && row.startsWith('--- ')) {
       // Git ends the path with a tab when it holds a space.
       const name = unquote(row.slice(4).replace(/\t$/, ''));
       path = name === '/dev/null' ? null : name.replace(/^a\//, '');
       continue;
     }
     const hunk = /^@@ -(\d+)(?:,(\d+))? /.exec(row);
-    if (!hunk || path === null) continue;
+    if (!hunk) continue;
+    inHeader = false;
+    if (path === null) continue;
     const start = Number(hunk[1]);
     const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
     if (count === 0) continue;

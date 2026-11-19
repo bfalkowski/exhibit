@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGitHub } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
-import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
+import { addSzz, cloneRoot, createPrFinder, parseRemovedLines } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 import { commitPullsFetch } from './fixtures/szz-github.js';
@@ -188,4 +188,69 @@ test('cloneRoot', async (t) => {
     assert.equal(await cloneRoot(other, REPO), null);
     assert.equal(await cloneRoot(mkdtempSync(join(tmpdir(), 'exhibit-plain-')), REPO), null);
   });
+});
+
+test('parseRemovedLines reads a deleted line that starts with "-- " as a line, not a file header', () => {
+  const diff = [
+    'diff --git a/q.sql b/q.sql',
+    'index 1111111..2222222 100644',
+    '--- a/q.sql',
+    '+++ b/q.sql',
+    '@@ -2 +1,0 @@',
+    '--- old comment',
+    '@@ -7 +6 @@',
+    '-select 1;',
+    '+select 2;',
+    'diff --git a/b.js b/b.js',
+    'index 3333333..4444444 100644',
+    '--- a/b.js',
+    '+++ b/b.js',
+    '@@ -1 +1 @@',
+    '-a',
+    '+b',
+    ''
+  ].join('\n');
+  assert.deepEqual([...parseRemovedLines(diff)], [['q.sql', [2, 7]], ['b.js', [1]]]);
+});
+
+// A repo with one commit, then a fix commit that changes a file and moves a submodule pointer.
+function repoWithSubmoduleBump() {
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-sub-'));
+  git(dir, ['init', '--quiet', '--initial-branch=main']);
+  const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
+  writeFileSync(join(dir, 'a.js'), 'one;\ntwo;\n');
+  git(dir, ['add', 'a.js']);
+  git(dir, ['update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},sub`]);
+  commit('Add a.js and sub');
+  writeFileSync(join(dir, 'a.js'), 'one;\nTWO;\n');
+  git(dir, ['add', 'a.js']);
+  git(dir, ['update-index', '--cacheinfo', `160000,${'2'.repeat(40)},sub`]);
+  commit('Fix a.js and bump sub');
+  return dir;
+}
+
+const noPrs = () => createGitHub({ token: 't', fetch: async () => new Response('{"message":"No commit found"}', { status: 422 }) });
+
+test('a fix that moves a submodule pointer blames only its file lines', async () => {
+  const dir = repoWithSubmoduleBump();
+  const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
+  const warnings = [];
+  const [line] = await addSzz([fix], { dir, repo: REPO, github: noPrs(), warn: (text) => warnings.push(text) });
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(line.szz.unlinked_lines.map((l) => [l.path, l.line, l.text]), [['a.js', 2, 'two;']]);
+});
+
+test('in a shallow clone, a fix whose parent is missing gets szz: null and a warning, and the run goes on', async (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
+  git(shallow, ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.']);
+  const fix10 = repo.history.find((pr) => pr.number === 10);
+  const warnings = [];
+  const github = createGitHub({ token: 't', fetch: commitPullsFetch(repo, REPO) });
+  const [line] = await addSzz([fix10], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
+  assert.equal(line.szz, null);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /^This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong\. Run git fetch --unshallow, then run history again\.$/);
+  assert.match(warnings[1], /^PR 10: SZZ skipped, because git failed: .+/);
 });

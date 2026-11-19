@@ -260,7 +260,9 @@ function build(dir) {
       files: diffFiles(run(['diff', '--numstat', `${opened.get(number)}...${head}`])),
       reviews: { change_request_rounds: 0, list: [] },
       ci: [],
-      classification: { fix: pr.fix === true, fix_signal: pr.fix ? 'label:bug' : null }
+      classification: { fix: pr.fix === true, fix_signal: pr.fix ? 'label:bug' : null },
+      // SZZ fills this. The fixture's records are the history before SZZ runs.
+      szz: null
     });
   }
   return history;
