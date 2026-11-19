@@ -394,8 +394,54 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 1. The package name. `exhibit` may be taken on npm. A scoped name such as `@bfalkowski/exhibit` is the fallback.
 2. The license.
 3. Where the hidden suite lives, and how CI gets access to it.
-4. How to detect fix PRs in repos that use no labels.
+4. How to detect fix PRs in repos that use no labels. Section 17.3 lists one lead: an oracle built from fixes that name the change that added the bug.
 5. Whether to sign `evidence.json`, for example with Sigstore, so a session cannot forge it.
 6. Whether to add "cost of the next change" (tokens and review rounds per ticket, by area) as a measure of code quality later.
 7. Whether workflow artifacts are enough for storage, given their retention limit, or whether the data branch is always needed.
 8. Whether SZZ in S2 needs the real merge-base of each PR. `base_sha` is the tip of the base branch, not the merge-base. If S2 needs it, either compute it with `git merge-base` from `base_sha` and the PR's head, or add a `merge_base` field to the history schema.
+
+## 17. Related work
+
+The search for this section was done on 2026-11-19. It was not complete. Vendor tools and patents may hold more.
+
+No work found so far does the whole loop: learn a policy from one repo's escaped defects, check each PR against it with a measure of how strong the tests are, test the policy on history, and give the numbers for a rung. Each part has prior work. This section lists it, so that Exhibit can reuse what is known and cite it.
+
+### 17.1 Closest in goal
+
+| Work | What it does | How Exhibit is different |
+|---|---|---|
+| [RADAR](https://arxiv.org/abs/2605.30208), Meta, 2026 | Decides which diffs can land with no human review. Its stages are eligibility rules, static heuristics, a learned Diff Risk Score, an LLM review agent and deterministic checks. It reports 331,720 diffs landed out of 535,290, with about 1/3 of the revert rate and 1/50 of the incident rate of other diffs. RADAR picks low-risk diffs, so these rates compare unlike groups. | RADAR scores risk with a model and an LLM. Exhibit asks for evidence for each kind of change, from rules learned from the repo's own escaped defects. The RADAR paper describes no measure of test strength and no random sample of the diffs that landed. |
+| [ARCTIC](https://arxiv.org/abs/2607.29516), Meta, 2026 | Predicts what a diff is meant to do, measures how far the code drifts from that, and points to the code that most needs review. When drift is low and nothing is flagged, the author can confirm the diff and land it on a faster path. | ARCTIC helps a person review less. Exhibit decides, for one kind of change at a time, when nobody needs to read the code. |
+| [Diff risk scoring](https://arxiv.org/abs/2410.06351), Meta, ICSE 2025 | Scores each diff for the risk that it causes an incident, and holds back the riskiest diffs during code freezes. | A risk score says which PRs to look at. Exhibit says what evidence a PR must show. A risk score could be a later input when Exhibit classifies a change. |
+
+### 17.2 Write-ups from practice
+
+| Work | What it says | How Exhibit is different |
+|---|---|---|
+| [Reading evidence instead of code](https://developertoolkit.ai/en/ladder/evidence-not-diffs/), Autonomy Ladder guide, 2026 | Read four things in place of the diff: the spec delta, the acceptance results, oracle strength and runtime signals. Run mutation testing on changed files with Stryker or mutmut. Ask whether the decisive check existed before the change. Keep a trust log that moves classes of change up or down. | The ideas are very close to Exhibit's. The guide gives them as prompts and a log kept by hand. Exhibit makes them a CLI with a policy file, a backtest and numbers. |
+| [Make Every PR Prove Itself](https://builders.abnormal.ai/p/make-every-pr-prove-itself), Abnormal, 2026 | Each agent PR shows evidence from a near-production test environment, such as real API responses and screenshots. Misses that become incidents are written back into the checks. | Reviewers still review each PR. The checks are not measured. |
+| Lauren Tan's trust ladder, in [a talk with Matt Pocock](https://www.youtube.com/watch?v=MN9dGgmLyso) | Give agents more as verification earns trust. Near the top, agents merge their own PRs and a person samples them after they land. | Exhibit gives the numbers for each step, for one kind of change at a time. |
+
+### 17.3 Prior work for each part
+
+| Part of Exhibit | Prior work | What Exhibit can take from it |
+|---|---|---|
+| SZZ (section 9.2) | [Śliwerski, Zimmermann and Zeller](https://www.st.cs.uni-saarland.de/papers/msr2005/), MSR 2005 | The method. |
+| How accurate SZZ is | [Rosa et al.](https://arxiv.org/abs/2102.03300), ICSE 2021: an oracle built from fix commits whose message names the commit that added the bug | A way to test SZZ links. The same idea may help with open question 4, because a ticket in the office can name the PR that a bug came from. |
+| What wrong SZZ links do | [Fan et al.](https://ink.library.smu.edu.sg/sis_research/4494), TSE 2019: changes that SZZ labels wrongly change the results of just-in-time defect prediction | Wrong links change the results that come after them. This is why a person can reject a link in `exhibit label`. |
+| Risk of a change | [Kamei et al.](https://sail.cs.queensu.ca/data/pdfs/TSE_ALarge-ScaleEmpiricalStudyOfJust-in-TimeQualityAssurance.pdf), TSE 2013: just-in-time defect prediction | Predicts risky changes from change metrics. A possible later input when Exhibit classifies a change. |
+| Mutation on changed lines (section 9.5) | [State of Mutation Testing at Google](https://research.google/pubs/state-of-mutation-testing-at-google/), ICSE SEIP 2018, and [Practical Mutation Testing at Scale](https://research.google/pubs/practical-mutation-testing-at-scale-a-view-from-google/), TSE 2021 | Google mutates only changed code during code review. It removes mutants that are likely to be irrelevant, and limits the mutants for each line and each review. Exhibit can copy these filters. |
+| Whether mutants point to real bugs | [Does mutation testing improve testing practices?](https://arxiv.org/abs/2103.07189), Google, 2021, and [Just et al.](https://homes.cs.washington.edu/~mernst/pubs/mutation-effectiveness-fse2014-abstract.html), FSE 2014 | The Google study found that, for changes that added bugs, mutation testing would have shown a surviving mutant that could have stopped the bug. This supports the catch rate as evidence. |
+| Closing a gap that mutation finds | [ACH](https://arxiv.org/abs/2501.12862), Meta, FSE 2025: an LLM plants faults for a named concern and writes tests that catch them | A possible later step: when mutants survive, draft a test that catches them. |
+| A test that failed before (section 9.4) | [SWT-Bench](https://arxiv.org/abs/2406.12952), NeurIPS 2024: a test counts when it fails before the fix and passes after it | The same check. Fixes that passed such tests more than doubled SWE-Agent's precision. |
+| Error analysis (`exhibit label`) | [Orthogonal Defect Classification](https://www.chillarege.com/node/23), IBM, TSE 1992: put defects into classes, and use what triggered each defect to measure how well inspection or testing works | An old, tested way to turn defect codes into a measure of the checks. |
+| Rule of three (section 9.10) | [Hanley and Lippman-Hand](https://doi.org/10.1001/jama.1983.03330370053031), JAMA 1983 | The source of the 3/n bound. |
+| Stranger test (section 12) | [AIDev](https://arxiv.org/abs/2507.15003), 2025: over 456,000 PRs by five coding agents, Claude Code among them | Public repos with many agent PRs, to run `exhibit history` on. |
+
+### 17.4 Scale and stakes
+
+The field test is small, and the cost of a miss is low. Building58 and edd-platform are personal projects with one maintainer and no other users. When a bug reaches main, the maintainer files a ticket. Nobody is paged at night, and no customer sees an outage. RADAR's numbers come from production systems, where a miss can be an incident.
+
+The escaped defects are also only the bugs that a session or the maintainer noticed. No production monitoring finds the others.
+
+So a rung that Exhibit's numbers support here says little about a repo where a miss costs more. A team with real users needs more PRs for each kind of change, a smaller miss bound before rung 3, and outcomes such as reverts and incidents next to the policy misses.
