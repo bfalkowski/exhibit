@@ -522,5 +522,94 @@
         }
       ]
     }
+  },
+  "/repos/acme/widgets/issues/7/comments?per_page=100": {
+    "status": 200,
+    "headers": {
+      "link": "<https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=2>; rel=\"last\""
+    },
+    "body": [
+      {
+        "id": 7001,
+        "user": {
+          "login": "rev3",
+          "type": "User"
+        },
+        "created_at": "2026-02-28T10:00:00Z",
+        "updated_at": "2026-02-28T10:00:00Z",
+        "author_association": "OWNER",
+        "body": "Review of ccccccc. Verdict: fix (one blocking finding).\n\nWhat I ran: npm test. The cache never drops an old widget."
+      },
+      {
+        "id": 7002,
+        "user": {
+          "login": "dev7",
+          "type": "User"
+        },
+        "created_at": "2026-02-28T11:00:00Z",
+        "updated_at": "2026-02-28T11:00:00Z",
+        "author_association": "OWNER",
+        "body": "<!-- office:dev -->\nThanks. Verdict fix is right, and the cache now drops old widgets in ddddddd."
+      }
+    ]
+  },
+  "/repositories/4242/issues/7/comments?per_page=100&page=2": {
+    "status": 200,
+    "headers": {
+      "link": "<https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=1>; rel=\"prev\", <https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=1>; rel=\"first\""
+    },
+    "body": [
+      {
+        "id": 7003,
+        "user": {
+          "login": "rev3",
+          "type": "User"
+        },
+        "created_at": "2026-03-02T09:00:00Z",
+        "updated_at": "2026-03-02T09:00:00Z",
+        "author_association": "OWNER",
+        "body": "## Review of ddddddd\n\nVerdict: merge. Nothing blocks."
+      },
+      {
+        "id": 7004,
+        "user": null,
+        "created_at": "2026-03-02T10:00:00Z",
+        "updated_at": "2026-03-02T10:00:00Z",
+        "author_association": "OWNER",
+        "body": "CI note: the first run failed one flaky test, then passed."
+      }
+    ]
+  },
+  "/repos/acme/widgets/issues/1/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "id": 1001,
+        "user": {
+          "login": "rev3",
+          "type": "User"
+        },
+        "created_at": "2026-02-20T10:00:00Z",
+        "updated_at": "2026-02-20T10:00:00Z",
+        "author_association": "OWNER",
+        "body": "## Review of ccccccc: verdict fix\n\nThe test fails on an empty list."
+      }
+    ]
+  },
+  "/repos/acme/widgets/issues/3/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/widgets/issues/4/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/widgets/issues/5/comments?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
   }
 }
