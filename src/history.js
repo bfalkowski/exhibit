@@ -1,6 +1,7 @@
 import { commentReviews } from './comment-reviews.js';
 import { classifyFix, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
 import { createGitHub } from './github.js';
+import { ToolError } from './tool-error.js';
 
 // How many PRs ask for their files, reviews, comments and check runs at the same time.
 const PRS_AT_ONCE = 8;
@@ -40,9 +41,17 @@ export async function readHistory({ repo, token, fetch, since, limit, fixSignals
 
 // Returns a warning when GitHub listed fewer files than the PR changed, or null. The list of PRs
 // has no changed_files count, so only a PR whose list reached GitHub's limit is asked for it.
+// The count is only for this warning. So when that request fails, the run goes on, and the
+// warning says that the count is unknown and the list may be cut short.
 async function checkFilesComplete(github, repo, number, listed) {
   if (listed < LISTED_FILES_AT_MOST) return null;
-  const { changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`);
+  let changed;
+  try {
+    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`));
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return `PR ${number} has ${listed} files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
+  }
   if (!(changed > listed)) return null;
   return `PR ${number} changed ${changed} files, but GitHub listed only the first ${listed}, so its files field is cut short.`;
 }
