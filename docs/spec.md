@@ -259,25 +259,28 @@ A classic token needs the `repo` scope for a private repo, and no scope for a pu
 One labeled escaped defect per line, with these fields:
 
 - `id`: `D-` and the fix PR's number, with zeros in front to make at least three digits. PR 4 gives `D-004`, PR 58 gives `D-058`, and PR 1234 gives `D-1234`. A PR's number never changes, so the `id` stays the same when `exhibit history` runs again, with `--full` too. Policy rules cite these IDs in `source` (section 8.1).
-- `fix_pr`: the fix PR's number. `introducing_prs`: the numbers of the PRs that SZZ linked to the fix, highest confidence first.
+- `fix_pr`: the fix PR's number. `introducing_prs`: the numbers of the PRs that SZZ linked to the fix and the person kept, highest confidence first. It is empty when the person rejected every link.
+- `rejected_prs`: the numbers of the PRs that SZZ linked to the fix and the person rejected, highest confidence first. It is empty when the person kept every link. Lines written before a person could reject a link have no `rejected_prs`, and read as if it were empty.
 - `code`: a short description of what went wrong. One line of at most 200 characters.
 - `category`: one line of at most 60 characters.
 - `would_have_caught`: the evidence that would have caught it. One line of at most 500 characters.
 - `labeled_by`: `person`, or `claude_draft_confirmed`, or `claude_draft_edited`. Today it is always `person`.
-- `szz_link_rejected`: true if the person rejected the link. Today it is always false: a later S3 ticket lets the person reject a link.
+- `szz_link_rejected`: true when the person rejected at least one link of the defect, and false when they kept every link. A defect can have more than one link, so `rejected_prs` says which links. `exhibit label` checks that `szz_link_rejected` is true exactly when `rejected_prs` is not empty.
 - `labeled_at`: the time of the label, in UTC.
 
-The schema for one line is `schema/labels-line.schema.json`. `exhibit label` also checks that `id` matches `fix_pr`.
+The schema for one line is `schema/labels-line.schema.json`. `exhibit label` also checks that `id` matches `fix_pr`, and that `szz_link_rejected` matches `rejected_prs`.
 
 How `exhibit label` works:
 
 - It shows each defect that has no line in the file yet, one at a time: the fix PR, its title and web page, the commit that SZZ blamed, and each introducing PR with its confidence. Under each introducing PR are its lines and what `git blame` said about each one, as in the report, at most 5 lines for each link.
-- For each defect it asks three questions: the code, the category, and the evidence that would have caught it. For the category, it lists the categories used so far, from the file and from this run. The person types a number from the list, or a new category. An empty answer is asked again.
+- SZZ makes false links, for example from refactors and moved code (section 15). So for each link of the defect, it first asks the person to keep it (`k`) or reject it (`r`), with the link's PR and confidence. Any other answer is asked again. A rejected link goes to `rejected_prs` and not to `introducing_prs`. When the person rejects every link, the defect is still a real bug, with no known introducing PR: the person can still give it a code, or skip it. The rejections are not fed back into SZZ or the report. The backtest (section 9.9) reads them.
+- Then it asks three questions: the code, the category, and the evidence that would have caught it. For the category, it lists the categories used so far, from the file and from this run. The person types a number from the list, or a new category. An empty answer is asked again.
 - It checks the label against the schema, then adds it to the end of the file at once. So quitting halfway keeps the labels given so far. A label that fails the schema is not written: `exhibit label` exits 2 and names the problem, and the file keeps its earlier lines.
-- `s` at the first question skips a defect. `q` at any question, or the end of the input, quits. The defect it was on is not written. The next run shows the skipped defects and the defects it did not reach, and no defect that has a line.
+- `s` at a link question or at the code question skips a defect. `q` at any question, or the end of the input, quits. The defect it was on is not written. The next run shows the skipped defects and the defects it did not reach, and no defect that has a line.
 - At the end it says how many defects it labeled and skipped, and how many still have no code. With `--json`, it shows the defects and the questions on stderr, and prints one summary line on stdout: `{ "shown": 3, "labeled": 2, "skipped": 1, "open": 1, "output": ".exhibit/labels.jsonl" }`. `shown` counts the defects it showed, and `open` counts the defects still with no line in the file.
 - It exits 2 with a message that says to run `exhibit history` first when there is no `.exhibit/history.jsonl`, or when the history has no SZZ links. It exits 2 too when a history line fails the history schema, or a labels line is not JSON or fails the labels schema. It then names the line, and writes nothing.
 - A line for a defect that is no longer in the history, for example after a run of `exhibit history` with a smaller `--limit`, stays in the file.
+- `exhibit history` never changes this file. So when it runs again and SZZ links the fix to the same PRs, a rejected link stays rejected: the line keeps its `rejected_prs`, and `exhibit label` does not ask about the defect again.
 
 ### 8.5 Report
 

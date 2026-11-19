@@ -28,7 +28,7 @@ const readLabels = (cwd) => readFileSync(labelsPath(cwd), 'utf8').trimEnd().spli
 function scripted(answers) {
   const asked = [];
   const ask = async (defect, context) => {
-    asked.push({ id: defect.id, categories: context.categories, text: context.text });
+    asked.push({ id: defect.id, links: defect.links, categories: context.categories, text: context.text });
     if (asked.length > answers.length) throw new Error(`asked about ${defect.id}, but the script has no answer left`);
     return answers[asked.length - 1];
   };
@@ -65,8 +65,8 @@ test('scripted answers give the expected labels file', async (t) => {
   assert.deepEqual(asked.map((a) => a.id), ['D-012', 'D-007', 'D-006']);
   assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 1, open: 1 });
   assert.deepEqual(readLabels(cwd), [
-    { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], code: 'Discount math used percent as money', category: 'arithmetic', would_have_caught: 'A test with a 10% discount on 50', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' },
-    { id: 'D-006', fix_pr: 6, introducing_prs: [1], code: 'Tax rounded before the total', category: 'arithmetic', would_have_caught: 'A test that pins the rounding', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' }
+    { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math used percent as money', category: 'arithmetic', would_have_caught: 'A test with a 10% discount on 50', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' },
+    { id: 'D-006', fix_pr: 6, introducing_prs: [1], rejected_prs: [], code: 'Tax rounded before the total', category: 'arithmetic', would_have_caught: 'A test that pins the rounding', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' }
   ]);
   for (const line of readLabels(cwd)) assert.deepEqual(checkLabelLine(line), [], line.id);
 });
@@ -157,4 +157,41 @@ test('no history file, or a history with no SZZ links, says to run exhibit histo
   await assert.rejects(labelDefects({ cwd: empty, ask: scripted([]).ask }), /Run exhibit history first/);
   const noLinks = shopText().trimEnd().split('\n').map((line) => JSON.stringify({ ...JSON.parse(line), szz: null }) + '\n').join('');
   await assert.rejects(labelDefects({ cwd: folderWithHistory(t, noLinks), ask: scripted([]).ask }), /has no SZZ links.*Run exhibit history first/s);
+});
+
+test('rejecting one of two links leaves one introducing PR and records the other as rejected', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask, asked } = scripted([{ ...answer('Discount math used percent as money', 'arithmetic', 'A test with a 10% discount on 50'), rejected_prs: [11] }, 'quit']);
+  await labelDefects({ cwd, ask, now: () => NOW });
+  // Each defect comes with its links, so the person can keep or reject each one.
+  assert.deepEqual(asked[0].links, [{ pr: 1, confidence: 0.5 }, { pr: 11, confidence: 0.5 }]);
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.introducing_prs, line.rejected_prs, line.szz_link_rejected], [[1], [11], true]);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('rejecting every link still saves the defect, with no introducing PR', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ ...answer('Discount math used percent as money', 'arithmetic', 'A test with a 10% discount on 50'), rejected_prs: [1, 11] }, 'quit']);
+  assert.deepEqual(await labelDefects({ cwd, ask, now: () => NOW }), { shown: 2, labeled: 1, skipped: 0, open: 2 });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.id, line.introducing_prs, line.rejected_prs, line.szz_link_rejected], ['D-012', [], [1, 11], true]);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('a rejected PR that is not a link of the defect is refused', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ ...answer('a', 'b', 'c'), rejected_prs: [99] }]);
+  await assert.rejects(labelDefects({ cwd, ask, now: () => NOW }), /PR 99 is not a link of D-012/);
+});
+
+test('the labels schema checks that szz_link_rejected matches rejected_prs', () => {
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [11], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: true, labeled_at: '2026-11-19T10:00:00.000Z' };
+  assert.deepEqual(checkLabelLine(line), []);
+  assert.deepEqual(checkLabelLine({ ...line, szz_link_rejected: false }), ['/szz_link_rejected: must be true, because rejected_prs is not empty']);
+  assert.deepEqual(checkLabelLine({ ...line, rejected_prs: [] }), ['/szz_link_rejected: must be false, because rejected_prs is empty']);
+  // A line written before S3 has no rejected_prs, and still passes.
+  const old = { ...line, szz_link_rejected: false };
+  delete old.rejected_prs;
+  assert.deepEqual(checkLabelLine(old), []);
 });
