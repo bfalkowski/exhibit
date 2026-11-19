@@ -36,14 +36,15 @@
         "change_request_rounds": { "type": "integer", "minimum": 0, "description": "How many reviews in list have the state CHANGES_REQUESTED." },
         "list": {
           "type": "array",
-          "description": "Each review, oldest first.",
+          "description": "Each review, oldest first: the GitHub reviews and the PR comments that give a verdict (spec 8.3).",
           "items": {
             "type": "object",
-            "required": ["state", "author"],
+            "required": ["state", "author", "source"],
             "additionalProperties": false,
             "properties": {
               "state": { "type": "string", "pattern": "^(APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED|PENDING)$" },
-              "author": { "type": ["string", "null"], "description": "The login. null when the account was deleted." }
+              "author": { "type": ["string", "null"], "description": "The login. null when the account was deleted." },
+              "source": { "type": "string", "pattern": "^(review|comment)$", "description": "review: from GitHub's reviews list. comment: a PR comment that gives a verdict. A fix verdict has the state CHANGES_REQUESTED and a merge verdict APPROVED." }
             }
           }
         }
@@ -64,7 +65,7 @@
     },
     "classification": {
       "type": "object",
-      "description": "Whether the PR is a fix, by the fix signals (spec 9.1). Slice S4 adds the kinds of change.",
+      "description": "Whether the PR is a fix, by the fix signals (spec 9.1). No other field is allowed, so slice S4 must add the kinds of change here and update spec 8.3.",
       "required": ["fix", "fix_signal"],
       "additionalProperties": false,
       "properties": {
