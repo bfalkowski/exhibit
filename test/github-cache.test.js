@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitHub } from '../src/github.js';
@@ -134,4 +134,55 @@ test('the cache folder is exhibit/github in the user\'s cache folder', () => {
   assert.equal(cacheFolder({ env: {}, platform: 'darwin', home: '/h' }), join('/h', 'Library', 'Caches', 'exhibit', 'github'));
   assert.equal(cacheFolder({ env: {}, platform: 'linux', home: '/h' }), join('/h', '.cache', 'exhibit', 'github'));
   assert.equal(cacheFolder({ env: { LOCALAPPDATA: 'C:\\L' }, platform: 'win32', home: '/h' }), join('C:\\L', 'exhibit', 'github'));
+});
+
+// GitHub's ETag covers the body only, not the Link header. So when a full last page gets a new
+// page after it, the full page still answers 304, and its saved Link has no rel="next".
+test('a full last page served from the cache is asked again with no If-None-Match, so a new page after it is not missed', async () => {
+  const dir = newFolder();
+  const replies = { '/c?per_page=2': { etag: '"body-1-2"', body: [1, 2] } };
+  const github = recorded(replies);
+  assert.deepEqual(await client(github.fetch, dir).getAll('/c?per_page=2'), [1, 2]);
+
+  // A third comment goes on page 2. Page 1 has the same body, so the same ETag, and a new Link.
+  replies['/c?per_page=2'] = { etag: '"body-1-2"', body: [1, 2], link: '<https://api.github.com/c?per_page=2&page=2>; rel="next"' };
+  replies['/c?per_page=2&page=2'] = { etag: '"body-3"', body: [3] };
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getAll('/c?per_page=2'), [1, 2, 3]);
+  assert.deepEqual(github.calls.slice(1).map((call) => [call.path, call.headers['if-none-match']]), [
+    ['/c?per_page=2', '"body-1-2"'],
+    ['/c?per_page=2', undefined],
+    ['/c?per_page=2&page=2', undefined]
+  ]);
+  assert.deepEqual(second.counts(), { requests: 3, not_modified: 1 });
+
+  // Page 1 now has a saved rel="next", so the next run trusts its 304s.
+  const third = client(github.fetch, dir);
+  assert.deepEqual(await third.getAll('/c?per_page=2'), [1, 2, 3]);
+  assert.deepEqual(third.counts(), { requests: 2, not_modified: 2 });
+});
+
+test('a last page that is not full is trusted on a 304', async () => {
+  const dir = newFolder();
+  const github = recorded({ '/c?per_page=3': { etag: '"a"', body: [1, 2] } });
+  await client(github.fetch, dir).getAll('/c?per_page=3');
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getAll('/c?per_page=3'), [1, 2]);
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1 });
+});
+
+test('the cache narrows a folder that was there before to the user alone, and each file too', { skip: process.platform === 'win32' }, async () => {
+  const dir = join(newFolder(), 'github');
+  mkdirSync(dir, { mode: 0o755 });
+  chmodSync(dir, 0o755);
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  await client(github.fetch, dir).getOne('/repos/o/r');
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+  for (const name of readdirSync(dir)) assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600, name);
+});
+
+test('a request that never reached GitHub is not counted', async () => {
+  const github = createGitHub({ token: TOKEN, fetch: async () => { throw new Error('offline'); } });
+  await assert.rejects(github.getOne('/repos/o/r'), /could not reach GitHub/);
+  assert.deepEqual(github.counts(), { requests: 0, not_modified: 0 });
 });

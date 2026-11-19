@@ -345,7 +345,8 @@ test('--no-cache gets no 304s and writes no cache folder', () => {
 });
 
 test('a run that fails says how many GitHub requests it made', () => {
-  const run = exhibit(['history', '--repo', 'acme/widgets'], { fixtureName: 'acme-broken' });
+  const run = exhibit(['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken' });
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /exhibit: note: this run made \d+ GitHub requests, and 0 got a 304\.\n/);
+  assert.match(run.stderr, /does not fit the history schema/);
+  assert.match(run.stderr, /exhibit: note: this run made [1-9]\d* GitHub requests, and 0 got a 304\.\n/);
 });

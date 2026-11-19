@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,6 +29,7 @@ export function cacheFolder({ env = process.env, platform = process.platform, ho
 // stops a run.
 export function createReplyCache({ dir, token }) {
   const tokenKey = sha256(`exhibit token\n${token}`);
+  let folderMade = false;
   const pathOf = (url) => join(dir, `${sha256(`${tokenKey}\n${url}`)}.json`);
 
   async function read(url) {
@@ -48,8 +49,13 @@ export function createReplyCache({ dir, token }) {
     const path = pathOf(url);
     const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     try {
-      // Only this user can read the cache: it can hold replies about private repos.
-      await mkdir(dir, { recursive: true, mode: 0o700 });
+      // Only this user can read the cache: it can hold replies about private repos. mkdir sets the
+      // mode only on a new folder, so chmod also narrows a folder that was there before.
+      if (!folderMade) {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await chmod(dir, 0o700);
+        folderMade = true;
+      }
       await writeFile(temporary, JSON.stringify({ url, etag, headers, body }), { mode: 0o600 });
       await rename(temporary, path);
     } catch {
