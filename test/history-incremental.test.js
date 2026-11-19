@@ -1,11 +1,16 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { history } from '../src/commands/history.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
+import { buildSzzRepo } from './fixtures/szz-repo.js';
+import { writeHistoryReplay } from './fixtures/github/szz-replies.js';
+import { gitEnv } from './fixtures/git-env.js';
 
 // These tests run `exhibit history` twice in the same folder, as a person does from day to day.
 // Between the runs, the recorded GitHub replies change: a new merge, or a late review. The
@@ -253,4 +258,35 @@ test('the window is seven days before the newest merge in the file', async () =>
   const second = await run(cwd, gh);
   // November 7 at 12:00 is exactly seven days before November 14 at 12:00, so PR 3 is in it.
   assert.deepEqual(prsAsked(second.asked), [3, 4]);
+});
+
+test('a fix line kept with szz null gets SZZ once a later run is inside a clone', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  const replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(replay.cleanup);
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = (cwd) => spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd, env: gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+
+  // The first run is outside a clone, so every line gets szz: null.
+  const outside = newFolder();
+  const first = run(outside);
+  assert.equal(first.status, 0, first.stderr);
+  const lines = readFileSync(join(outside, '.exhibit/history.jsonl'), 'utf8').trim().split('\n').map((row) => JSON.parse(row));
+  assert.ok(lines.every((line) => line.szz === null));
+
+  // The fixture's PRs are an hour apart, so all of them sit in the 7-day window. Moving the old
+  // file a year ahead puts every PR before the window, so the next run keeps every line, as on a
+  // repo with more than a week of history.
+  const ahead = lines.map((line) => ({ ...line, merged_at: line.merged_at.replace(/^2026/, '2027') }));
+  mkdirSync(join(shop.dir, '.exhibit'), { recursive: true });
+  writeFileSync(join(shop.dir, '.exhibit/history.jsonl'), ahead.map((line) => JSON.stringify(line)).join('\n') + '\n');
+
+  const second = run(shop.dir);
+  assert.equal(second.status, 0, second.stderr);
+  const out = JSON.parse(second.stdout);
+  assert.equal(out.read, 0);
+  assert.deepEqual(out.szz, { fix_prs: 6, linked: 3, skipped: 0 });
 });

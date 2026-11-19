@@ -56,8 +56,10 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
   const root = await cloneRoot(cwd, forge);
   let lines;
   if (root) {
-    // SZZ runs only on the lines with no szz yet. The commit-to-PR map still sees every line.
-    const done = await addSzz(read.filter((line) => line.szz === undefined), { dir: root, forge, warn, known: read });
+    // SZZ runs on the lines with no szz yet, and on fix lines whose szz is null because SZZ did
+    // not run for them before, such as after a first run outside a clone. The commit-to-PR map
+    // still sees every line.
+    const done = await addSzz(read.filter((line) => line.szz === undefined || (line.szz === null && line.classification.fix)), { dir: root, forge, warn, known: read });
     const byNumber = new Map(done.map((line) => [line.number, line]));
     lines = read.map((line) => byNumber.get(line.number) ?? line);
   } else {
