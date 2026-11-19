@@ -265,19 +265,33 @@ test('moved: when a fix only moves a block that its own hunk partly adds back, a
 });
 
 test('moved: a line that a block passes over leaves the added line of the other hunk to another block', () => {
-  // Hunk 20 adds "b();" once. Line 11 already pairs with the "b();" that its own hunk adds back,
-  // so the block from line 30 gets the one in hunk 20.
+  // Line 11 pairs with the "b();" that its own hunk adds back. So the block from line 30 gets the
+  // "b();" of hunk 20, and line 10 alone moves only one line with words, so it counts.
   const hunks = [
     { at: 10, deleted: ['a();', 'b();'], added: ['b();'] },
     { at: 20, added: ['a();', 'b();', 'c();'] },
     { at: 30, deleted: ['b();', 'c();'] }
   ];
   const withChange = countedLines(diff({ path: 'a.js', hunks: [...hunks, { at: 40, deleted: ['x = 1;'], added: ['x = 2;'] }] }));
-  assert.deepEqual(counted(withChange), [['a.js', [40]]]);
-  assert.deepEqual(dropped(withChange), [10, 11, 30, 31].map((line) => ['a.js', line, 'moved']));
-  // With nothing else, the fix only moves lines inside its file, so all four lines count.
+  assert.deepEqual(counted(withChange), [['a.js', [10, 40]]]);
+  assert.deepEqual(dropped(withChange), [11, 30, 31].map((line) => ['a.js', line, 'moved']));
   const alone = countedLines(diff({ path: 'a.js', hunks }));
-  assert.deepEqual(counted(alone), [['a.js', [10, 11, 30, 31]]]);
+  assert.deepEqual(counted(alone), [['a.js', [10]]]);
+});
+
+test('moved: a line that a block passes over does not count toward its two lines with words', () => {
+  // The block at line 30 moves only one line with words, "c();", so it does not take the "c();"
+  // of hunk 20 from the real block at line 40.
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [
+      { at: 20, added: ['c();', 'a();', 'a();'] },
+      { at: 30, deleted: ['c();', 'a();'], added: ['a();'] },
+      { at: 40, deleted: ['c();', 'a();'] }
+    ] },
+    { path: 'z.js', hunks: [{ at: 1, deleted: ['x = 1;'], added: ['x = 2;'] }] }
+  ));
+  assert.deepEqual(counted(result), [['a.js', [30]], ['z.js', [1]]]);
+  assert.deepEqual(dropped(result), [['a.js', 31, 'moved'], ['a.js', 40, 'moved'], ['a.js', 41, 'moved']]);
 });
 
 test('moved: a re-indent in one hunk stays whitespace when another hunk deletes a copy of the lines', () => {
