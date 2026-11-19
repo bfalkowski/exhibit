@@ -27,7 +27,7 @@ function commitPullsReplies({ dir, history }, repo) {
     replies[`/repos/${repo}/commits/${sha}/pulls?per_page=100`] = {
       status: 200,
       headers: {},
-      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha }))
+      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha, base: { ref: 'main', sha: pr.base_sha } }))
     };
   }
   return replies;

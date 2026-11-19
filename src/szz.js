@@ -54,21 +54,27 @@ export async function cloneRoot(dir, repo) {
 export function createPrFinder({ lines, repo, github }) {
   const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line.number]));
   const asked = new Map();
+  let mainBranch = null;
+  // The repo's default branch, asked for once and only when a commit sits in two merged PRs.
+  const defaultBranch = () => (mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch));
   return (sha) => {
     if (byMergeSha.has(sha)) return Promise.resolve(byMergeSha.get(sha));
-    if (!asked.has(sha)) asked.set(sha, askGitHub(github, repo, sha));
+    if (!asked.has(sha)) asked.set(sha, askGitHub(github, repo, sha, defaultBranch));
     return asked.get(sha);
   };
 }
 
-async function askGitHub(github, repo, sha) {
+async function askGitHub(github, repo, sha, defaultBranch) {
   // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
   // means the same here: the repo itself was read a moment before.
   const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422] });
-  // A commit can sit in more than one PR, such as a release PR that copies main to another
-  // branch. The first PR merged brought it in.
   const merged = pulls.filter((pr) => pr.merged_at).sort((a, b) => a.merged_at.localeCompare(b.merged_at));
-  return merged.length > 0 ? merged[0].number : null;
+  if (merged.length < 2) return merged.length === 1 ? merged[0].number : null;
+  // A commit can sit in more than one merged PR, such as a fix merged into a release branch and
+  // then a PR that merges the release branch into main. Only a PR into the default branch brought
+  // it to main, so the first of those wins. When none went there, the first PR merged wins.
+  const main = await defaultBranch();
+  return (merged.find((pr) => pr.base?.ref === main) ?? merged[0]).number;
 }
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is

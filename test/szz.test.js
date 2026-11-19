@@ -150,15 +150,43 @@ test('commit-to-PR mapping', async (t) => {
     assert.equal(await find('0000000000000000000000000000000000000001'), null);
   });
 
-  await t.test('only merged PRs count, and the first one merged wins', async () => {
-    const pulls = [
-      { number: 9, merged_at: null },
-      { number: 8, merged_at: '2026-02-01T00:00:00Z' },
-      { number: 7, merged_at: '2026-01-01T00:00:00Z' }
-    ];
-    const fetch = async () => new Response(JSON.stringify(pulls), { status: 200, headers: { 'content-type': 'application/json' } });
-    const find = createPrFinder({ lines: [], repo, github: createGitHub({ token: 't', fetch }) });
-    assert.equal(await find('b'.repeat(40)), 7);
+  await t.test('one merged PR wins with no request for the default branch', async () => {
+    const { fetch, github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    await find('18ce79d6f068f5fc57cf63497ea5f398356eab68');
+    assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58/commits/18ce79d6f068f5fc57cf63497ea5f398356eab68/pulls?per_page=100']);
+  });
+});
+
+// A commit can sit in merged PRs on different base branches, such as a fix merged into a release
+// branch and then a PR that merges the release branch into main. Only the PR into the default
+// branch brought the commit to main.
+test('commit-to-PR mapping across base branches', async (t) => {
+  const recorded = fileURLToPath(new URL('./fixtures/github/release-flow-commit-pulls.json', import.meta.url));
+  const repo = 'fixture/release-flow';
+  const github = () => {
+    const fetch = replayFetch(recorded);
+    return { fetch, github: createGitHub({ token: 't', fetch }) };
+  };
+
+  await t.test('the merged PR into the default branch wins, even when a PR into another branch merged first', async () => {
+    const { github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    assert.equal(await find('1'.repeat(40)), 31);
+  });
+
+  await t.test('when no merged PR went to the default branch, the first one merged wins', async () => {
+    const { github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    assert.equal(await find('2'.repeat(40)), 40);
+  });
+
+  await t.test('the default branch is asked for once', async () => {
+    const { fetch, github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    await find('1'.repeat(40));
+    await find('2'.repeat(40));
+    assert.equal(fetch.calls.filter((call) => call.key === '/repos/fixture/release-flow').length, 1);
   });
 });
 
