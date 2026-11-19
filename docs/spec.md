@@ -194,7 +194,7 @@ What each version fills:
   - `unlinked_lines`: the lines whose commit is in no merged PR, such as a commit pushed straight to the main branch.
 
   Each line has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
-- **Later slices:** the kinds of change in `classification` (S4), `evidence_section` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
+- **Later slices:** `evidence_section` and `exhibit` are filled by later slices. Until then they are absent, and the schema allows them only as null. The kinds of change come in slice S4. Until then `classification` has no `kinds` field, not even as null: the schema refuses any field in `classification` other than `fix` and `fix_signal`. S4 must add `kinds` to `classification` in the schema and update this section.
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
 
