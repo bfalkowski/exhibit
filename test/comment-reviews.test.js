@@ -38,3 +38,16 @@ test('a comment with no verdict is not a review', () => {
   assert.equal(commentVerdict(''), null);
   assert.equal(commentVerdict(null), null);
 });
+
+test('backticks, hyphens and equals signs may come between the word verdict and the verdict', () => {
+  assert.equal(commentVerdict('Verdict: `merge`\n\nNothing blocks.'), 'merge');
+  assert.equal(commentVerdict('Verdict - fix\n\nThe test fails.'), 'fix');
+  assert.equal(commentVerdict('Verdict = fix\n\nThe test fails.'), 'fix');
+  assert.equal(commentVerdict('## Review of b8ebe79 - `merge`\n\nNothing blocks.'), 'merge');
+});
+
+test('a verdict in a quoted line does not count', () => {
+  assert.equal(commentVerdict('> Verdict: fix\n\nFixed in abc1234.'), null);
+  assert.equal(commentVerdict('  > ## Review of b8ebe79: fix\n\nFixed in abc1234.'), null);
+  assert.equal(commentVerdict('> Verdict: fix\n\nI checked it again. Verdict: merge.'), 'merge');
+});
