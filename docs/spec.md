@@ -229,7 +229,7 @@ When GitHub says to wait, `exhibit history` waits and asks again, at most three 
 - No requests left until `x-ratelimit-reset`. `exhibit history` waits until one second after that time.
 - A message that names a secondary rate limit, with neither of these headers. GitHub's docs say to wait at least one minute, and longer each time the limit comes back. So the first wait for a secondary limit is one minute, the second two minutes, and the third four minutes. Waits of the other two kinds do not count here. Each wait gets a random extra of up to a quarter of it, so the requests that hit the limit together do not all ask again at the same moment. The longest such wait is five minutes.
 
-If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too. The one exception is the request for one PR's file count (S1, first half, above): there it warns and goes on, and exits 0.
+If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After three waits it stops and exits 2 too. The one exception is the request for one PR's file count (S1, first half, above): there it warns and goes on, and does not stop the run for it.
 
 `exhibit history` reads `GITHUB_TOKEN`. A fine-grained token needs these repository permissions:
 

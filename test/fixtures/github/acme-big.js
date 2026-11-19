@@ -62,7 +62,9 @@ function recordFiles(replies, number, changedFiles) {
 // Writes the fixture to a new temp folder. Returns the path of the file, and `cleanup`, which
 // removes the folder: call it when the test ends, for example with t.after(cleanup).
 // `unreadable` lists PR numbers whose reply for the PR itself is a 500, as when GitHub has a problem.
-export function writeBigFixture({ unreadable = [] } = {}) {
+// `countReplies` maps a PR number to the reply for the PR itself, such as a rate limit. It wins
+// over `unreadable`.
+export function writeBigFixture({ unreadable = [], countReplies = {} } = {}) {
   const pulls = [pr(9, 3412), pr(8, 3000), pr(7, 2)];
   const replies = {
     '/repos/acme/big/pulls?state=closed&per_page=100': { status: 200, headers: {}, body: pulls.map(listed) }
@@ -76,9 +78,9 @@ export function writeBigFixture({ unreadable = [] } = {}) {
     replies[`/repos/acme/big/commits/${pull.head.sha}/status?per_page=100`] = { status: 200, headers: {}, body: { state: 'pending', statuses: [], total_count: 0 } };
     // PR 7 has no reply for itself on purpose: a request for it fails the test.
     if (pull.changed_files >= LISTED_AT_MOST) {
-      replies[`/repos/acme/big/pulls/${pull.number}`] = unreadable.includes(pull.number)
+      replies[`/repos/acme/big/pulls/${pull.number}`] = countReplies[pull.number] ?? (unreadable.includes(pull.number)
         ? { status: 500, headers: {}, body: { message: 'Server Error' } }
-        : { status: 200, headers: {}, body: pull };
+        : { status: 200, headers: {}, body: pull });
     }
   }
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-fixture-'));
