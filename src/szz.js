@@ -265,7 +265,8 @@ export function dropNewerLines(blamedLines, reportedAt) {
 //   each other in the same order, with at most whitespace changed. The block needs two or more
 //   lines with a letter or a digit. A blank line that no other hunk adds back is "whitespace".
 //   In a Python file the indent at the start of a line is code for both rules.
-// - "comment": it is only a comment, and the fix does not turn it back into code.
+// - "comment": it is only a comment, and the fix does not turn it back into code. Or only the
+//   comment at its end changed: the same hunk adds a line with the same code.
 // When no line is left, but some lines with words moved inside their own file, those moved
 // lines count: the fix changed only their place, so their place was the bug.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
@@ -333,6 +334,27 @@ export function countedLines(diff) {
   const code = new Set(added.filter((row) => !row.comment && row.key !== '').map((row) => row.text.replace(/\s+/g, '')));
   for (const line of deleted) {
     if (line.reason === null && line.comment && !code.has(uncomment(line.text).replace(/\s+/g, ''))) line.reason = 'comment';
+  }
+  // A code line where only the comment at its end changed, such as "x = 1; // old note" to
+  // "x = 1;": the same hunk adds a code line with the same code once the comments come off both
+  // lines, give or take whitespace. The added code lines are indexed by hunk and code, as above.
+  const codeOf = (text, path) => squash(stripComments(text, path), path);
+  const byCode = new Map();
+  for (const row of added) {
+    if (row.comment) continue;
+    const id = `${row.at}\n${codeOf(row.text, hunks[row.at].oldPath)}`;
+    if (!byCode.has(id)) byCode.set(id, hunkRows());
+    byCode.get(id).rows.push(row);
+  }
+  for (const line of deleted) {
+    if (line.reason !== null || line.comment) continue;
+    const key = codeOf(line.text, line.path);
+    if (key === '') continue;
+    const match = byCode.get(`${line.at}\n${key}`)?.firstUnused();
+    if (match) {
+      match.used = true;
+      line.reason = 'comment';
+    }
   }
   // A fix that only moves lines inside a file, such as an export moved above the code that
   // needs it, would get no link at all. Its moved lines are the change, so they count.
@@ -419,8 +441,8 @@ const squash = (text, path) => {
   return indent + words;
 };
 
-// Takes the whitespace out of a line of code, except inside a string. A comment after the code
-// ends the string search, so its whitespace goes. Each line is read alone, so the next line of a
+// Takes the whitespace out of a line of code, except inside a string. A comment after the code,
+// which starts after whitespace as in stripComments, ends the string search, so its whitespace goes. Each line is read alone, so the next line of a
 // string that spans lines, such as a template literal, reads as code. A quote mark that opens no
 // string, such as an apostrophe in JSX text, keeps the whitespace after it.
 function squashCode(text, style) {
@@ -430,7 +452,8 @@ function squashCode(text, style) {
   let quote = null;
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
-    if (quote === null && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
+    const spaced = i === 0 || /\s/.test(text[i - 1]);
+    if (quote === null && spaced && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
     if (quote === null && /\s/.test(char)) continue;
     out += char;
     if (quote === null && quotes.includes(char)) {
@@ -448,6 +471,38 @@ function squashCode(text, style) {
 
 // The words inside a comment line, without its comment marks.
 const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').replace(/\*+\/$/, '');
+
+// The line without its comments: a "//" or "#" comment to the end of the line, and in
+// JavaScript a "/* */" comment. Text in quotes is code, so a "//" or "#" in a string stays. A
+// comment mark counts only at the start of the line or after a space, so "http://a" stays too:
+// a line can be part of a string that opened on an earlier line, which this cannot see.
+function stripComments(text, path) {
+  const style = commentStyle(path);
+  if (style === null) return text;
+  const quotes = style === 'slash' ? '\'"`' : '\'"';
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote !== null) {
+      out += ch;
+      if (ch === '\\') out += text[++i] ?? '';
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (quotes.includes(ch)) quote = ch;
+    const spaced = i === 0 || /\s/.test(text[i - 1]);
+    if (spaced && (style === 'hash' ? ch === '#' : text.startsWith('//', i))) break;
+    if (spaced && style === 'slash' && text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
 
 // Version 1 knows the comments of JavaScript and TypeScript, and of Python.
 function commentStyle(path) {

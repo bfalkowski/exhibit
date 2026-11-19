@@ -39,7 +39,7 @@ test('classification must say whether the PR is a fix and which signal matched',
   assert.deepEqual(checkHistoryLine({ ...good(), classification: null }), ['/classification: must be object, not null']);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: 'yes', fix_signal: 'bug' } }).sort(), [
     '/classification/fix: must be boolean, not string',
-    '/classification/fix_signal: does not match ^(label|title|branch):.+$'
+    '/classification/fix_signal: does not match ^(label|title|title_after_key|branch):.+$'
   ]);
 });
 

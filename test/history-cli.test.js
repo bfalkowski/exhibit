@@ -39,6 +39,8 @@ function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fix
 
 const notAClone = (repo) => `exhibit: note: SZZ did not run, because this folder is not a clone of ${repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`;
 const QUOTED_VERDICT_WARNING = 'exhibit: warning: PR 5: the comment by dev5 at 2026-02-20T10:00:00Z gives the verdict fix only in a quoted line, so it does not count as a review.\n';
+const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
+const WROTE_REPORT = 'Wrote the report to .exhibit/report.md and .exhibit/report.html.\n';
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', () => {
@@ -67,6 +69,25 @@ test('a custom fix_signals list in evidence.yml replaces the defaults', () => {
   assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title:rename']]);
 });
 
+test('a title_after_key signal is recorded in classification, and the line passes the schema', () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [title_after_key:rename]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_key:rename']]);
+});
+
+test('a title_after_key signal with no value gives exit 2 with a message, and writes no file', () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, "title_after_key:"]\n');
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "title_after_key:", which needs a value/);
+  assert.ok(!existsSync(run.historyPath));
+});
+
 test('a malformed fix_signals gives exit 2 with a message, and writes no file', () => {
   const cwd = newFolder();
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [bug]\n');
@@ -83,7 +104,7 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
@@ -113,7 +134,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
-  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\n');
+  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\n' + WROTE_REPORT);
 
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
@@ -134,6 +155,36 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   assert.equal(fix8.szz.no_link_reason, 'whitespace only');
 });
 
+test('inside a clone, history writes report.md and report.html with the escaped defects', (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
+  assert.equal(run.status, 0, run.stderr);
+  const markdown = readFileSync(join(repo.dir, REPORT.markdown), 'utf8');
+  const html = readFileSync(join(repo.dir, REPORT.html), 'utf8');
+  assert.match(markdown, /^# Escaped defects in fixture\/shop\n\nExhibit read 12 merged PRs\. 6 of them are fix PRs\. SZZ linked 3 of them/);
+  assert.deepEqual([...markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1])), [12, 7, 6]);
+  assert.deepEqual([...html.matchAll(/<h3>Fix PR (\d+):/g)].map((m) => Number(m[1])), [12, 7, 6]);
+});
+
+test('outside a clone, the report says that SZZ did not run', () => {
+  const run = exhibit(['history', '--repo', 'acme/widgets']);
+  assert.equal(run.status, 0, run.stderr);
+  const markdown = readFileSync(join(run.cwd, REPORT.markdown), 'utf8');
+  assert.match(markdown, /SZZ did not run, because history ran outside a clone of the repo\./);
+  assert.doesNotMatch(markdown, /^### Fix PR/m);
+});
+
+test('a run that fails writes no report', () => {
+  const run = exhibit(['history', '--repo', 'acme/widgets'], { fixtureName: 'acme-broken' });
+  assert.equal(run.status, 2);
+  assert.equal(existsSync(join(run.cwd, REPORT.markdown)), false);
+  assert.equal(existsSync(join(run.cwd, REPORT.html)), false);
+});
+
 test('--json gives the SZZ counts inside a clone', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
@@ -142,7 +193,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 } });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 }, report: REPORT });
 });
 
 test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (t) => {
@@ -158,12 +209,12 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const text = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\n');
+  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\n' + WROTE_REPORT);
   assert.equal(text.stderr.match(/SZZ skipped/g).length, 6);
 
   const json = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 } });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 }, report: REPORT });
 });
 
 test('--since keeps PRs merged on or after the date', () => {
@@ -181,7 +232,7 @@ test('--limit keeps the newest N merged PRs', () => {
 test('--json prints a short machine summary', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', () => {
