@@ -19,6 +19,8 @@ const SECONDARY_LIMIT_WAIT_MS = 60 * 1000;
 // Each secondary-limit wait gets a random extra of up to this part of it, so requests that hit
 // the limit together do not all ask again at the same moment.
 const SECONDARY_LIMIT_SPREAD = 0.25;
+// The reply headers that the cache saves: the client reads the next page from link.
+const SAVED_HEADERS = ['content-type', 'link'];
 // The one form of HTTP date that GitHub sends, as in "Thu, 19 Nov 2026 10:00:30 GMT".
 const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
@@ -32,27 +34,58 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // that is not a rate limit then says which permission a fine-grained token may lack.
 // `getOne` returns the object at one path, or null for a status in its `emptyOn`.
 // `sleep`, `now` and `random` are parameters too, so tests can check a rate-limit wait without waiting.
-export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
-  async function request(url) {
+// `cache` is a reply cache from src/github-cache.js, or undefined for none. With a cache, a
+// request for a URL that has an entry sends If-None-Match, and a 304 reply gives the saved body.
+// A 200 reply with an ETag replaces the entry. GitHub's ETag covers the body only, not the Link
+// header, so a full page from the cache with no next page is asked again (see `get`).
+// `counts()` returns how many requests went to GitHub, and how many of them got a 304.
+export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
+  const counts = { requests: 0, not_modified: 0 };
+
+  // A response that the client made from a saved entry, after a 304.
+  const fromCache = new WeakSet();
+
+  // `useSaved` false sends no If-None-Match. The reply still replaces the entry.
+  async function request(url, useSaved = true) {
+    const saved = cache && useSaved ? await cache.read(url) : null;
+    const headers = {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${token}`,
+      'x-github-api-version': '2022-11-28',
+      'user-agent': 'exhibit'
+    };
+    if (saved) headers['if-none-match'] = saved.etag;
+    let response;
     try {
-      return await fetch(url, {
-        headers: {
-          accept: 'application/vnd.github+json',
-          authorization: `Bearer ${token}`,
-          'x-github-api-version': '2022-11-28',
-          'user-agent': 'exhibit'
-        }
-      });
+      response = await fetch(url, { headers });
+      counts.requests++;
     } catch (error) {
       throw new ToolError(`could not reach GitHub (${error.message}). Check the network and try again.`);
     }
+    if (saved && response.status === 304) {
+      counts.not_modified++;
+      const cached = new Response(saved.body, { status: 200, headers: saved.headers });
+      fromCache.add(cached);
+      return cached;
+    }
+    const etag = response.headers.get('etag');
+    if (!cache || response.status !== 200 || !etag) return response;
+    // Only the headers that the client reads from a 200 are saved.
+    const body = await response.text();
+    const kept = {};
+    for (const name of SAVED_HEADERS) {
+      const value = response.headers.get(name);
+      if (value !== null) kept[name] = value;
+    }
+    await cache.write(url, { etag, body, headers: kept });
+    return new Response(body, { status: 200, headers: response.headers });
   }
 
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
   // A reply that is still a rate limit when the waits end does not blame a missing permission.
-  async function getJson(url, emptyOn = [], permission) {
-    let response = await request(url);
+  async function getJson(url, emptyOn = [], permission, useSaved = true) {
+    let response = await request(url, useSaved);
     let limited = false;
     for (let waits = 0, secondaryWaits = 0; !response.ok; waits++) {
       const wait = await rateLimitWait(response, now(), secondaryWaits, random);
@@ -60,7 +93,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
       if (!limited || waits === MAX_WAITS || wait.ms > LONGEST_WAIT_MS) break;
       if (wait.secondary) secondaryWaits++;
       await sleep(wait.ms);
-      response = await request(url);
+      response = await request(url, useSaved);
     }
     if (emptyOn.includes(response.status)) return { reply: [], response };
     if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
@@ -71,11 +104,22 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     }
   }
 
+  // Returns one page of a list: its items, and the URL of the next page or null.
+  // A 304 says the body is the same, but not the Link header. When a full last page gets a new
+  // page after it, the full page does not change, so it gets a 304, and its saved Link has no
+  // next page. So a full page from the cache with no next page is asked again, with no
+  // If-None-Match, to get the Link header as it is now. A page that is not full is the last one.
   async function get(url, listField, emptyOn, permission) {
-    const { reply, response } = await getJson(url, emptyOn, permission);
+    const page = await getPage(url, listField, emptyOn, permission, true);
+    if (page.cached && page.next === null && page.items.length >= pageSize(url)) return getPage(url, listField, emptyOn, permission, false);
+    return page;
+  }
+
+  async function getPage(url, listField, emptyOn, permission, useSaved) {
+    const { reply, response } = await getJson(url, emptyOn, permission, useSaved);
     const items = listField === undefined ? reply : reply?.[listField];
     if (!Array.isArray(items)) throw notShaped(url, 'a JSON list');
-    return { items, next: nextLink(response.headers.get('link')) };
+    return { items, next: nextLink(response.headers.get('link')), cached: fromCache.has(response) };
   }
 
   async function getAll(path, { listField, emptyOn, permission } = {}) {
@@ -97,7 +141,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return reply;
   }
 
-  return { getAll, getOne };
+  return { getAll, getOne, counts: () => ({ ...counts }) };
 }
 
 function notShaped(url, shape) {
@@ -137,6 +181,12 @@ async function messageOf(response) {
     // The body was not JSON. The status alone says enough.
     return '';
   }
+}
+
+// GitHub gives 30 items on a page when the URL names no per_page.
+function pageSize(url) {
+  const perPage = new URL(url).searchParams.get('per_page');
+  return perPage !== null && /^\d+$/.test(perPage) ? Number(perPage) : 30;
 }
 
 function nextLink(header) {
@@ -200,6 +250,10 @@ export function createGitHubForge({ repo, ...client }) {
     // The forge's name in a history line's forge field.
     name: 'github',
     repo,
+
+    // How many requests went to GitHub so far, and how many of them got a 304 from the cache:
+    // { requests, not_modified }.
+    counts: github.counts,
 
     // GitHub lists at most this many files for one PR. A shorter list is complete.
     mostFilesListed: 3000,
