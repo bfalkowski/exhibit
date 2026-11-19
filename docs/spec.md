@@ -168,7 +168,7 @@ One merged PR per line, with these fields:
 
 - `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha`
 - `files`: path, additions and deletions for each file
-- `classification`: the kinds of change under the current policy, and whether the PR is a fix
+- `classification`: `kinds` holds the kinds of change under the current policy. `classification.fix` is true when the PR is a fix.
 - `reviews`: `list` holds the `state` and `author` of each review, oldest first. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`.
 - `ci`: the `name` and `conclusion` of each check run on the PR's last head commit
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section

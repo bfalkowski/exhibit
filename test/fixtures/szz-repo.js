@@ -81,11 +81,12 @@ const RECEIPT = [
 ];
 const HEADER = ['// Formats money for receipts.', ''];
 
+// format.js as each PR leaves it: PR 4 adds it, and PRs 8, 9 and 10 change it.
 // The pad body starts with four spaces. PR 8 fixes only that.
-const FORMAT_V1 = lines(...HEADER, ...MONEY, '', ...PAD('    '), '', ...RECEIPT);
-const FORMAT_V2 = lines(...HEADER, ...MONEY, '', ...PAD('  '), '', ...RECEIPT);
-const FORMAT_V3 = lines(...HEADER, ...RECEIPT, '', ...MONEY, '', ...PAD('  '));
-const FORMAT_V4 = lines(
+const FORMAT_PR4 = lines(...HEADER, ...MONEY, '', ...PAD('    '), '', ...RECEIPT);
+const FORMAT_PR8 = lines(...HEADER, ...MONEY, '', ...PAD('  '), '', ...RECEIPT);
+const FORMAT_PR9 = lines(...HEADER, ...RECEIPT, '', ...MONEY, '', ...PAD('  '));
+const FORMAT_PR10 = lines(
   ...HEADER,
   ...RECEIPT,
   '',
@@ -118,7 +119,7 @@ const PRS = {
       { message: 'Add a default tax rate', files: { 'src/tax.js': TAX_V2 } }
     ] },
   4: { title: 'Add receipt formatting', author: 'ana', way: 'merge', fix: false,
-    commits: [{ message: 'Add money, pad and receipt', files: { 'src/format.js': FORMAT_V1 } }] },
+    commits: [{ message: 'Add money, pad and receipt', files: { 'src/format.js': FORMAT_PR4 } }] },
   5: { title: 'Add the shop entry point', author: 'ben', way: 'squash', fix: false,
     commits: [{ message: 'Add src/shop.js', files: { 'src/shop.js': SHOP } }] },
   6: { title: 'Fix subtotal to count quantity', author: 'cy', way: 'merge', fix: true,
@@ -132,11 +133,11 @@ const PRS = {
         files: { 'src/tax.js': TAX_V2.replace('Math.round(total + tax);', 'total + tax;') } }
     ] },
   8: { title: 'Fix indentation in pad', author: 'ben', way: 'merge', fix: true,
-    commits: [{ message: 'Indent pad with two spaces', files: { 'src/format.js': FORMAT_V2 } }] },
+    commits: [{ message: 'Indent pad with two spaces', files: { 'src/format.js': FORMAT_PR8 } }] },
   9: { title: 'Fix the order of receipt helpers', author: 'cy', way: 'squash', fix: true,
-    commits: [{ message: 'Move receipt to the top', files: { 'src/format.js': FORMAT_V3 } }] },
+    commits: [{ message: 'Move receipt to the top', files: { 'src/format.js': FORMAT_PR9 } }] },
   10: { title: 'Fix comments in format.js', author: 'ana', way: 'merge', fix: true,
-    commits: [{ message: 'Say more in the comments', files: { 'src/format.js': FORMAT_V4 } }] }
+    commits: [{ message: 'Say more in the comments', files: { 'src/format.js': FORMAT_PR10 } }] }
 };
 
 // The order of events. PR 3 opens before PR 2 merges, so its merge joins two lines of work.
