@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildReport, WEAK_HISTORY } from '../src/report.js';
+import { buildReport, defectText, escapedDefects, WEAK_HISTORY } from '../src/report.js';
 import { DEFAULT_FIX_SIGNALS } from '../src/fix-signals.js';
 import { SHOP_HISTORY, SHOP_REPO, shopHistoryText } from './fixtures/report/shop-history.js';
 
@@ -201,4 +201,14 @@ test('a fix PR that SZZ skipped is listed with no link, and counted in the summa
   assert.match(markdown, /SZZ skipped 1 of them/);
   assert.match(markdown, /PR 6 \(Fix subtotal to count quantity\): SZZ skipped it\. The warning from exhibit history says why\./);
   assert.deepEqual(factsIn(markdownText(markdown)).defects, [12, 7]);
+});
+
+test('the plain text of a defect shows control characters from a PR title as "?"', () => {
+  const lines = shopLines().map((line) => (line.number === 12 ? { ...line, title: 'Fix \u001b[31mred\u0007 text' } : line));
+  const fix = escapedDefects(lines)[0];
+  assert.match(defectText(fix, lines), /^Fix PR 12: Fix \?\[31mred\? text\n/);
+});
+
+test('escapedDefects lists the fix PRs with a link, newest first, as the report does', () => {
+  assert.deepEqual(escapedDefects(shopLines()).map((line) => line.number), [12, 7, 6]);
 });
