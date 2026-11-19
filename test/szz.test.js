@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGitHub } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
-import { addSzz, cloneRoot, createPrFinder, parseRemovedLines } from '../src/szz.js';
+import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 import { commitPullsFetch } from './fixtures/szz-github.js';
@@ -41,13 +41,24 @@ test('SZZ on the fixture repo', async (t) => {
     });
   }
 
-  // Ticket 8 drops whitespace-only, comment-only and moved lines. Until it lands, these fixes
-  // still give links.
+  // Whitespace-only, comment-only and moved lines carry no bug, so these fixes give no link,
+  // and szz says why.
   for (const fix of key.fixes.filter((f) => f.introducing_prs.length === 0)) {
-    await t.test(`makes no link: PR ${fix.fix_pr}, ${fix.case}`, { todo: 'ticket 8 drops these lines' }, () => {
-      assert.deepEqual(linkedPrs(byNumber.get(fix.fix_pr)), []);
+    await t.test(`makes no link: PR ${fix.fix_pr}, ${fix.case}`, () => {
+      const { szz } = byNumber.get(fix.fix_pr);
+      assert.deepEqual(szz.links, []);
+      assert.deepEqual(szz.unlinked_lines, []);
+      assert.equal(szz.no_link_reason, fix.case);
+      assert.ok(szz.dropped_lines.length > 0);
     });
   }
+
+  await t.test('a fix with links has no no_link_reason and drops nothing here', () => {
+    for (const number of [6, 7]) {
+      assert.equal(byNumber.get(number).szz.no_link_reason, null);
+      assert.deepEqual(byNumber.get(number).szz.dropped_lines, []);
+    }
+  });
 
   await t.test('finds links through squash merges and through merge commits', () => {
     // PR 2 is a squash merge: its commit is a merge SHA in the history. PR 1 and PR 3 are merge
@@ -121,6 +132,43 @@ test('SZZ gives szz: null and a warning when the fix merge commit is not in the 
   assert.deepEqual(warnings, [`PR 6: SZZ skipped, because its merge commit ${'f'.repeat(40)} is not in this clone. Run git fetch, then run history again.`]);
 });
 
+// Runs SZZ on fix PR 6 with a body that links issues, and a GitHub that also answers for them.
+// PR 1 added the line that PR 6 fixes, in a commit written at 2026-01-05T10:00:00Z.
+async function szzWithIssues(t, body, issues) {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  const pulls = commitPullsFetch(repo, REPO);
+  const fetch = async (url, init) => {
+    const number = /\/issues\/(\d+)$/.exec(new URL(url).pathname)?.[1];
+    if (number === undefined) return pulls(url, init);
+    const issue = issues[number];
+    return new Response(JSON.stringify(issue ?? { message: 'Not Found' }), { status: issue ? 200 : 404, headers: { 'content-type': 'application/json' } });
+  };
+  const fix6 = { ...repo.history.find((pr) => pr.number === 6), body };
+  const [line] = await addSzz([fix6], { dir: repo.dir, repo: REPO, github: createGitHub({ token: 't', fetch }) });
+  return line;
+}
+
+test('SZZ drops lines newer than the bug report that the fix links', async (t) => {
+  await t.test('a report from before the commit drops the line, and szz says why', async (t) => {
+    const { szz } = await szzWithIssues(t, 'Fixes #50', { 50: { number: 50, created_at: '2026-01-05T09:30:00Z' } });
+    assert.deepEqual(szz.links, []);
+    assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']]);
+    assert.equal(szz.no_link_reason, 'lines newer than the bug report only');
+  });
+
+  await t.test('a report from after the commit keeps the link', async (t) => {
+    const { szz } = await szzWithIssues(t, 'Closes #50', { 50: { number: 50, created_at: '2026-01-05T11:00:00Z' } });
+    assert.deepEqual(szz.links.map((link) => [link.pr, link.confidence]), [[1, 1]]);
+    assert.deepEqual(szz.dropped_lines, []);
+  });
+
+  await t.test('a linked PR, or an issue GitHub does not know, gives no date', async (t) => {
+    const { szz } = await szzWithIssues(t, 'Fixes #51, fixes #52', { 51: { number: 51, created_at: '2026-01-01T00:00:00Z', pull_request: {} } });
+    assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+});
+
 test('commit-to-PR mapping', async (t) => {
   const recorded = fileURLToPath(new URL('./fixtures/github/building58-commit-pulls.json', import.meta.url));
   const repo = 'bfalkowski/Building58';
@@ -188,29 +236,6 @@ test('cloneRoot', async (t) => {
     assert.equal(await cloneRoot(other, REPO), null);
     assert.equal(await cloneRoot(mkdtempSync(join(tmpdir(), 'exhibit-plain-')), REPO), null);
   });
-});
-
-test('parseRemovedLines reads a deleted line that starts with "-- " as a line, not a file header', () => {
-  const diff = [
-    'diff --git a/q.sql b/q.sql',
-    'index 1111111..2222222 100644',
-    '--- a/q.sql',
-    '+++ b/q.sql',
-    '@@ -2 +1,0 @@',
-    '--- old comment',
-    '@@ -7 +6 @@',
-    '-select 1;',
-    '+select 2;',
-    'diff --git a/b.js b/b.js',
-    'index 3333333..4444444 100644',
-    '--- a/b.js',
-    '+++ b/b.js',
-    '@@ -1 +1 @@',
-    '-a',
-    '+b',
-    ''
-  ].join('\n');
-  assert.deepEqual([...parseRemovedLines(diff)], [['q.sql', [2, 7]], ['b.js', [1]]]);
 });
 
 // A repo with one commit, then a fix commit that changes a file and moves a submodule pointer.

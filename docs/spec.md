@@ -188,12 +188,14 @@ What each version fills:
   - A comment with no verdict is not a review, and is not in `reviews`.
   - The comment reviews and the GitHub reviews are merged into one list by time: `created_at` for a comment, `submitted_at` for a review. At the same time, the review comes first.
 - **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`. A history file from before S2 has no `classification`, so it fails the schema. Run `exhibit history` again: it writes the whole file new, so the new file has `classification` on every line.
-- **S2, SZZ:** every line has `szz` (section 9.2), and the schema requires it. It is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds three fields:
+- **S2, SZZ:** every line has `szz` (section 9.2), and the schema requires it. It is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds five fields:
   - `blamed_commit`: the commit that `git blame` ran on, the first parent of `merge_sha`.
   - `links`: one for each introducing PR, highest confidence first. A link has `pr`, `confidence` and `lines`.
   - `unlinked_lines`: the lines whose commit is in no merged PR, such as a commit pushed straight to the main branch.
+  - `dropped_lines`: the lines that SZZ does not count, because they carry no bug (section 9.2, steps 2 and 5). Each has `path`, `line`, `text` and `reason`. The `reason` is `whitespace`, `comment`, `moved` or `newer than the bug report`.
+  - `no_link_reason`: why the fix has no links, when SZZ dropped every line it deleted or changed. It names the reasons, in the order whitespace, comments, moved lines, lines newer than the bug report, and ends with "only": for example "whitespace only", "moved lines only" or "whitespace and comments only". It is null when some lines are left, or when the fix deleted or changed no lines.
 
-  Each line has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
+  Each line in `links` and `unlinked_lines` has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
 - **Later slices:** the kinds of change in `classification` (S4), `evidence_section` and `exhibit`. Until then they are absent, and the schema allows them only as null. The schema refuses any other field in `classification`, so S4 must add `kinds` to `classification` in the schema and update this section.
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:
@@ -244,11 +246,18 @@ One escaped defect per line, with these fields:
 `exhibit history` runs SZZ only when it runs inside a clone of the repo: a git repo with a remote that points at the repo on GitHub, in any URL form. Otherwise it writes `szz: null` on every line and says so in one line on stderr. The run still succeeds.
 
 1. For each fix PR, take the lines it deleted or changed. These are the old lines in `git diff -U0 -M` from the first parent of `merge_sha` to `merge_sha`. A renamed file keeps its old path. A line the fix only added has nothing to blame.
-2. Drop changes that are whitespace only, comments only, or moved lines. *Not built yet: ticket 8.*
+2. Drop the lines that carry no bug. Each added line in the diff can explain one dropped line at most. Exhibit checks the rules in this order:
+   - **Whitespace.** The same hunk adds the line back, and only whitespace differs. A blank line is whitespace too, unless it moved.
+   - **Moved.** Another hunk, in the same file or another file, adds the line back. Only whitespace may differ.
+   - **Comment.** The line is only a comment, and the fix does not turn it back into code. A commented-out line that the fix makes code again counts, because the PR that commented it out may have brought the bug. Version 1 knows comments in JavaScript and TypeScript (`//` and `/* */`, in `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts` and `.cts` files) and in Python (`#`, in `.py` files). A hunk shows only changed lines, so a line inside a block comment that opens before the hunk counts as a comment only when it starts with `*`, as JSDoc lines do.
+
+   A fix that mixes a real change with these changes keeps only the real lines.
 3. Run `git blame` on the parent of the fix's first commit to find the commit that last changed each line. Exhibit blames the first parent of `merge_sha`: the main branch just before the fix. For a squash merge, that is the parent of the fix's one commit. For a merge commit, it is the main branch just before the merge, so the line numbers match the diff in step 1. Git runs with settings that ignore a clone's own diff and blame config, such as `blame.ignoreRevsFile`.
 4. Map each commit to its PR. First, a commit that is the `merge_sha` of a PR in the history belongs to that PR: a squash merge. Then Exhibit asks GitHub for the pull requests that hold the commit, and keeps the merged PR that merged first. It asks once for each commit. A commit that no merged PR holds, or that GitHub does not know (a 422 or 404 reply), goes to `unlinked_lines`.
-5. Drop introducing commits that are newer than the bug report, when the bug report has a date. *Not built yet: ticket 8.*
-6. Give each link a confidence score: the number of the fix's lines that point to that PR, divided by all of the fix's blamed lines. Unlinked lines count in the total, so the scores add up to 1 only when every line has a PR.
+5. Drop introducing commits that are newer than the bug report, when the bug report has a date. The bug report is an issue that the fix PR's body links with one of GitHub's closing words, such as "Fixes #12" or "closes: #7". Exhibit asks GitHub for each linked issue and takes its creation time. A line whose commit was written (its `author_time`) after that time is dropped. When the body links more than one issue, the newest one counts. A linked number that is a PR, or that GitHub does not know, gives no date. Issues in other repos are not read.
+6. Give each link a confidence score: the number of the fix's lines that point to that PR, divided by all of the fix's counted lines. Dropped lines are not in the count. Unlinked lines are, so the scores add up to 1 only when every line has a PR.
+
+A fix with no lines left after steps 2 and 5 gets no links, and its `no_link_reason` says why (section 8.3).
 
 When a fix's `merge_sha` is not in the clone, or a git command fails for that fix, Exhibit writes `szz: null` for that PR, prints a warning that names it and the reason, and goes on with the other PRs. In a shallow clone, such as the default checkout in GitHub Actions, it prints one warning first: blame there can give old lines to the shallow boundary commit, so links can be wrong. A change to a submodule pointer has no lines, so SZZ skips it. A PR merged with "rebase and merge" is not handled yet, because its `merge_sha` is its last commit only (ticket 27).
 

@@ -99,12 +99,26 @@ test('the checker refuses a schema keyword it does not know, so no rule is skipp
 
 test('szz holds links, each with a confidence from 0 to 1 and lines that carry their blame output', () => {
   const line = { path: 'src/a.js', line: 3, text: 'x;', blame: { commit: 'c'.repeat(40), original_path: 'src/a.js', original_line: 2, author: 'ana', author_time: '2026-01-05T09:00:00Z', summary: 'Add a' } };
-  const szz = { blamed_commit: 'd'.repeat(40), links: [{ pr: 4, confidence: 1, lines: [line] }], unlinked_lines: [] };
+  const szz = { blamed_commit: 'd'.repeat(40), links: [{ pr: 4, confidence: 1, lines: [line] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null };
   assert.deepEqual(checkHistoryLine({ ...good(), szz }), []);
   assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, links: [{ pr: 4, confidence: 1.5, lines: [line] }] } }), ['/szz/links/0/confidence: must be at most 1']);
   const noBlame = { ...line };
   delete noBlame.blame;
   assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, unlinked_lines: [noBlame] } }), ['/szz/unlinked_lines/0: misses the field blame']);
+});
+
+test('szz lists the dropped lines with a reason, and says why a fix has no links', () => {
+  const dropped = { path: 'src/a.js', line: 3, text: '  x;', reason: 'whitespace' };
+  const szz = { blamed_commit: 'd'.repeat(40), links: [], unlinked_lines: [], dropped_lines: [dropped], no_link_reason: 'whitespace only' };
+  assert.deepEqual(checkHistoryLine({ ...good(), szz }), []);
+  for (const reason of ['comments only', 'moved lines only', 'whitespace, comments and moved lines only', 'lines newer than the bug report only']) {
+    assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, no_link_reason: reason } }), [], reason);
+  }
+  assert.equal(checkHistoryLine({ ...good(), szz: { ...szz, no_link_reason: 'refactor only' } }).length, 1);
+  assert.equal(checkHistoryLine({ ...good(), szz: { ...szz, dropped_lines: [{ ...dropped, reason: 'refactor' }] } }).length, 1);
+  const noDropped = { ...szz };
+  delete noDropped.dropped_lines;
+  assert.deepEqual(checkHistoryLine({ ...good(), szz: noDropped }), ['/szz: misses the field dropped_lines']);
 });
 
 test('every line has szz, and the schema describes a line the same way in links and unlinked_lines', () => {

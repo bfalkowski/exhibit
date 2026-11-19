@@ -86,7 +86,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
-  assert.equal(run.stdout, 'Wrote 10 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 5 of 5 fix PRs.\n');
+  assert.equal(run.stdout, 'Wrote 10 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 2 of 5 fix PRs.\n');
 
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
@@ -99,6 +99,9 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   assert.equal(discount.blame.commit, lines.find((line) => line.number === 2).merge_sha);
   assert.equal(discount.blame.summary, 'Add discounts (#2)');
   assert.equal(lines.find((line) => line.number === 1).szz, null, 'a PR that is not a fix');
+  const fix8 = lines.find((line) => line.number === 8);
+  assert.deepEqual(fix8.szz.links, []);
+  assert.equal(fix8.szz.no_link_reason, 'whitespace only');
 });
 
 test('--json gives the SZZ counts inside a clone', (t) => {
@@ -107,7 +110,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
   const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 10, output: '.exhibit/history.jsonl', szz: { fix_prs: 5, linked: 5 } });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 10, output: '.exhibit/history.jsonl', szz: { fix_prs: 5, linked: 2 } });
 });
 
 test('--since keeps PRs merged on or after the date', () => {

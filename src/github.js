@@ -15,7 +15,7 @@ const SECONDARY_LIMIT_WAIT_MS = 60 * 1000;
 // Most lists come as a JSON list. A few, such as check runs, come as an object that holds the
 // list in one field: pass that field's name as `listField`. `emptyOn` lists HTTP statuses that
 // mean "nothing here", such as 422 for a commit GitHub does not know: they give an empty list.
-// `getOne` returns the object at one path.
+// `getOne` returns the object at one path, or null for a status in its `emptyOn`.
 // `sleep` and `now` are parameters too, so tests can check a rate-limit wait without waiting.
 export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now }) {
   async function request(url) {
@@ -69,10 +69,11 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return items;
   }
 
-  // Returns the one JSON object at `path`, such as a single PR.
-  async function getOne(path) {
+  // Returns the one JSON object at `path`, such as a single PR. A status in `emptyOn` gives null.
+  async function getOne(path, { emptyOn = [] } = {}) {
     const url = API + path;
-    const { reply } = await getJson(url);
+    const { reply, response } = await getJson(url, emptyOn);
+    if (emptyOn.includes(response.status)) return null;
     if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) throw notShaped(url, 'a JSON object');
     return reply;
   }
