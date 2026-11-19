@@ -1,15 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { parse } from 'yaml';
-import { ToolError } from './tool-error.js';
-
 // The signals spec 8.1 and 9.1 use when evidence.yml does not set settings.fix_signals.
 export const DEFAULT_FIX_SIGNALS = Object.freeze(['label:bug', 'title:fix', 'branch:fix/']);
 
-const POLICY = 'evidence.yml';
-const TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr'];
-// A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
-const PR_NUMBER = /^[1-9]\d*$/;
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 // A ticket key at the start of a title, such as "T-170: ", "KEY-123 ", "[KEY-123] " or "(KEY-123): ".
 // A bare key needs a colon or a space after it, so "T-170Fix" keeps its key. Titles are
@@ -44,63 +35,4 @@ function startsWithWord(title, prefix) {
   if (!title.startsWith(prefix)) return false;
   const next = title.charAt(prefix.length);
   return !(WORD_CHARACTER.test(prefix.at(-1)) && WORD_CHARACTER.test(next));
-}
-
-// Returns the fix signals for the repo in `cwd`: settings.fix_signals from its evidence.yml, or
-// the defaults when there is no file or the file does not set them. It reads only that setting.
-// A malformed list is a ToolError, so the run exits 2.
-export async function readFixSignals(cwd) {
-  let text;
-  try {
-    text = await readFile(join(cwd, POLICY), 'utf8');
-  } catch (error) {
-    if (error.code === 'ENOENT') return [...DEFAULT_FIX_SIGNALS];
-    throw new ToolError(`could not read ${POLICY}: ${error.message}`);
-  }
-
-  let policy;
-  try {
-    policy = parse(text);
-  } catch (error) {
-    throw new ToolError(`${POLICY} is not valid YAML: ${error.message}`);
-  }
-
-  const signals = isMapping(policy) && isMapping(policy.settings) ? policy.settings.fix_signals : undefined;
-  if (signals === undefined || signals === null) return [...DEFAULT_FIX_SIGNALS];
-  checkSignals(signals);
-  return signals;
-}
-
-function checkSignals(signals) {
-  const where = `${POLICY} settings.fix_signals`;
-  if (!Array.isArray(signals)) throw new ToolError(`${where} must be a list like [label:bug, title:fix, branch:fix/], not ${JSON.stringify(signals)}.`);
-  if (signals.length === 0) throw new ToolError(`${where} needs at least one signal. Leave it out to use the defaults [${DEFAULT_FIX_SIGNALS.join(', ')}].`);
-  signals.forEach((signal, i) => {
-    const at = `${where}[${i}]`;
-    if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.${spaceHint(signal)}`);
-    const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch: or pr:.`);
-    const value = signal.slice(type.length + 1);
-    if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
-    // A space at the start of the value can never match. A space at the end is easy to miss,
-    // and only a title could match it: GitHub trims the spaces from a label name when it
-    // creates or renames the label, and git refuses a space in a branch name. So refuse
-    // both, with a message that shows the fix.
-    if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
-    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
-  });
-}
-
-// In a YAML list, "pr: 96" with a space after the colon is a mapping, not text. Returns a hint
-// that shows the signal with no space, or '' for any other value.
-function spaceHint(value) {
-  if (!isMapping(value)) return '';
-  const entries = Object.entries(value);
-  if (entries.length !== 1) return '';
-  const [type, rest] = entries[0];
-  return TYPES.includes(type) ? ` Write it with no space after the colon, as in ${type}:${rest}.` : '';
-}
-
-function isMapping(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

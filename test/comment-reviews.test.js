@@ -93,6 +93,10 @@ test('a list item or a thematic break right after a quote line ends the quote', 
   assert.equal(commentVerdict('> quote\n---\nVerdict: fix'), 'fix');
   // A line that starts with # but is not a heading stays in the quote, as markdown shows it.
   assert.equal(commentVerdict('> Thanks.\n#123 is related. Verdict: fix'), null);
+  // A thematic break needs three of the same mark. GitHub keeps "-*-" in the quote.
+  assert.equal(commentVerdict('> quote\n-*-\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> quote\n- - -\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quote\n_ _ _\nVerdict: fix'), 'fix');
 });
 
 test('a hyphen verdict in a list item counts', () => {
@@ -107,4 +111,40 @@ test('a hyphen verdict in a list item counts', () => {
 test('a nested quote inside an alert box is still a quote', () => {
   assert.equal(commentVerdict('> [!NOTE]\n> ok\n> > Verdict: fix'), null);
   assert.equal(quotedVerdict('> [!NOTE]\n> ok\n> > Verdict: fix'), 'fix');
+});
+
+test('a line right after a nested quote in an alert box stays in the nested quote', () => {
+  // GitHub shows "Verdict: fix" in the nested quote here, with or without the ">".
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> Verdict: fix'), null);
+  assert.equal(quotedVerdict('> [!NOTE]\n> > quoted\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\nVerdict: fix'), null);
+  // A blank line, a heading or a list item in the alert box ends the nested quote.
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n>\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> # Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> - Verdict: fix'), 'fix');
+});
+
+test('a lazy line goes on a quote only when the quote ends in a paragraph', () => {
+  // GitHub shows "Verdict: fix" outside the quote here, because the quote ends in a blank quote
+  // line, a heading or a thematic break.
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> >\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > # Quoted heading\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > ---\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> # Quoted heading\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quoted\n>\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> ---\nVerdict: fix'), 'fix');
+  // A list item with text is a paragraph, so the line stays in the quote.
+  assert.equal(commentVerdict('> - item\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > - item\n> Verdict: fix'), null);
+  // A "> >" line is in the nested quote, even after a blank "> >" line.
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> >\n> > Verdict: fix'), null);
+  // A backtick fence has no backtick after its marks, so "```x```" is inline code in the text.
+  assert.equal(commentVerdict('> ```x``` is a quoted word\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > ```x``` said\n> Verdict: fix'), null);
+  assert.equal(commentVerdict('> quoted\n```x``` Verdict: fix'), null);
+  assert.equal(commentVerdict('> ```js\n> code\n> ```\nVerdict: fix'), 'fix');
+  // A fence may have more than three backticks.
+  assert.equal(commentVerdict('> ````\n> code\n> ````\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> ````js\n> code\n> ````\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > ````\n> > code\n> > ````\n> Verdict: fix'), 'fix');
 });
