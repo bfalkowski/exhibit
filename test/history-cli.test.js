@@ -9,6 +9,7 @@ import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { writeHistoryReplay } from './fixtures/szz-github.js';
+import { gitEnv } from './fixtures/git-env.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
@@ -28,9 +29,9 @@ afterEach(() => {
 // Runs `exhibit ...args` in a new empty folder, with a fetch that replays the named fixture.
 // token: null runs it with no GITHUB_TOKEN at all.
 // fixturePath: a fixture file built by a test, in place of a named one.
+// history runs git inside a clone, so it gets a clean env: see gitEnv.
 function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder() } = {}) {
-  const env = { ...process.env, EXHIBIT_TEST_FIXTURE: fixturePath };
-  delete env.GITHUB_TOKEN;
+  const env = gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: fixturePath });
   if (token !== null) env.GITHUB_TOKEN = token;
   const run = spawnSync(process.execPath, ['--import', preload, bin, ...args], { cwd, env, encoding: 'utf8' });
   return { ...run, cwd, historyPath: join(cwd, '.exhibit', 'history.jsonl') };
@@ -104,7 +105,7 @@ test('outside a clone, history writes szz: null on every line and says so in one
 test('inside a clone of the repo, history links each fix PR to the PRs that added its lines', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
-  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir });
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
   const replay = writeHistoryReplay(repo, 'fixture/shop');
   t.after(replay.cleanup);
   const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
@@ -131,7 +132,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
 test('--json gives the SZZ counts inside a clone', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
-  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
   const replay = writeHistoryReplay(repo, 'fixture/shop');
   t.after(replay.cleanup);
   const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
@@ -145,8 +146,8 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
   // A clone of depth 1 holds only the newest commit, so SZZ skips every fix.
   const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
   t.after(() => rmSync(shallow, { recursive: true, force: true }));
-  execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.'], { cwd: shallow });
-  execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/fixture/shop.git'], { cwd: shallow });
+  execFileSync('git', ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.'], { cwd: shallow, env: gitEnv(shallow) });
+  execFileSync('git', ['remote', 'set-url', 'origin', 'https://github.com/fixture/shop.git'], { cwd: shallow, env: gitEnv(shallow) });
   const { path: fixturePath, cleanup } = writeHistoryReplay(repo, 'fixture/shop');
   t.after(cleanup);
 
