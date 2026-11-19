@@ -313,35 +313,35 @@ function widgetsWithETags(dir) {
   return path;
 }
 
-test('a second run gets a 304 for every request, writes the same history, and says so', () => {
-  const cwd = newFolder();
-  const fixturePath = widgetsWithETags(newFolder());
-  const first = exhibit(['history', '--repo', 'acme/widgets'], { fixturePath, cwd });
+test('a second run gets a 304 for every request, writes the same history, and says so', (t) => {
+  const cwd = newFolder(t);
+  const fixturePath = widgetsWithETags(newFolder(t));
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { fixturePath, cwd });
   assert.equal(first.status, 0, first.stderr);
   assert.ok(first.stdout.endsWith(madeRequests(cwd, 31)), first.stdout);
   const history = readFileSync(first.historyPath, 'utf8');
 
-  const second = exhibit(['history', '--repo', 'acme/widgets', '--json'], { fixturePath, cwd });
+  const second = exhibit(t, ['history', '--repo', 'acme/widgets', '--json'], { fixturePath, cwd });
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 31, 31));
   assert.equal(readFileSync(second.historyPath, 'utf8'), history);
 });
 
-test('--no-cache gets no 304s and writes no cache folder', () => {
-  const cwd = newFolder();
-  const fixturePath = widgetsWithETags(newFolder());
+test('--no-cache gets no 304s and writes no cache folder', (t) => {
+  const cwd = newFolder(t);
+  const fixturePath = widgetsWithETags(newFolder(t));
   for (let run = 0; run < 2; run++) {
-    const text = exhibit(['history', '--repo', 'acme/widgets', '--no-cache'], { fixturePath, cwd });
+    const text = exhibit(t, ['history', '--repo', 'acme/widgets', '--no-cache'], { fixturePath, cwd });
     assert.equal(text.status, 0, text.stderr);
     assert.match(text.stdout, /\nMade 31 GitHub requests\. The cache was off\.\n$/);
   }
-  const json = exhibit(['history', '--repo', 'acme/widgets', '--no-cache', '--json'], { fixturePath, cwd });
+  const json = exhibit(t, ['history', '--repo', 'acme/widgets', '--no-cache', '--json'], { fixturePath, cwd });
   assert.deepEqual(JSON.parse(json.stdout).github, { requests: 31, not_modified: 0, cache: null });
   assert.equal(existsSync(cacheOf(cwd)), false);
 });
 
-test('a run that fails says how many GitHub requests it made', () => {
-  const run = exhibit(['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken' });
+test('a run that fails says how many GitHub requests it made', (t) => {
+  const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken' });
   assert.equal(run.status, 2);
   assert.match(run.stderr, /does not fit the history schema/);
   assert.match(run.stderr, /exhibit: note: this run made [1-9]\d* GitHub requests, and 0 got a 304\.\n/);
