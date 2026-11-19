@@ -38,6 +38,7 @@ function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fix
 }
 
 const notAClone = (repo) => `exhibit: note: SZZ did not run, because this folder is not a clone of ${repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`;
+const QUOTED_VERDICT_WARNING = 'exhibit: warning: PR 5: the comment by dev5 at 2026-02-20T10:00:00Z gives the verdict fix only in a quoted line, so it does not count as a review.\n';
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', () => {
@@ -98,7 +99,8 @@ test('a failed request for the file count gives a warning, not a failed run', (t
 test('outside a clone, history writes szz: null on every line and says so in one line', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets']);
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(run.stderr, notAClone('acme/widgets'));
+  // The fixture's PR 5 has a reply that quotes a verdict, so a warning comes first.
+  assert.equal(run.stderr, QUOTED_VERDICT_WARNING + notAClone('acme/widgets'));
   for (const line of readLines(run.historyPath)) assert.equal(line.szz, null, `PR ${line.number}`);
 });
 
