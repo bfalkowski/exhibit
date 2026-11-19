@@ -203,3 +203,15 @@ test('comments: a * row counts as a comment when the hunk closes the block or th
   assert.deepEqual(counted(result), []);
   assert.ok(result.dropped.every((d) => d.reason === 'comment'));
 });
+
+test('comments: an indented Python comment that the fix turns back into code counts', () => {
+  for (const [old, now] of [['    # return total', '    return total'], ['# return total', 'return total'], ['        # check(x)', '    check(x)']]) {
+    const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 5, deleted: [old], added: [now] }] }));
+    assert.deepEqual(counted(result), [['a.py', [5]]], old);
+  }
+});
+
+test('comments: a * row with a "*/" later in the hunk that does not close a block counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty;', 'const re = /a*/;'], added: ['  * qty * rate;', 'const re = /b*/;'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
+});

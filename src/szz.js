@@ -213,8 +213,9 @@ export function dropNewerLines(blamedLines, reportedAt) {
 // - `dropped`: the lines that carry no bug, each with { path, line, text, reason }.
 // A line is dropped for one of three reasons, checked in this order:
 // - "whitespace": the same hunk adds it back with only whitespace changed.
-// - "moved": another hunk, in any file, adds it back with at most whitespace changed.
-//   A blank line that no other hunk adds back is "whitespace".
+// - "moved": another hunk, in any file, adds it back with at most whitespace changed, or the
+//   same hunk adds it back with the very same text. A blank line that no other hunk adds back
+//   is "whitespace". In a Python file the indent at the start of a line is code for both rules.
 // - "comment": it is only a comment, and the fix does not turn it back into code.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
 export function countedLines(diff) {
@@ -246,9 +247,11 @@ export function countedLines(diff) {
     if (line.reason === null && pair(line, false) !== undefined) line.reason = 'moved';
     else if (line.reason === null && line.key === '') line.reason = 'whitespace';
   }
-  const code = new Set(added.filter((row) => !row.comment && row.key !== '').map((row) => row.key));
+  // The words of each added code line, with no whitespace at all. A comment's words have no
+  // indent, so the indent of a Python line must not count here.
+  const code = new Set(added.filter((row) => !row.comment && row.key !== '').map((row) => row.text.replace(/\s+/g, '')));
   for (const line of deleted) {
-    if (line.reason === null && line.comment && !code.has(squash(uncomment(line.text)))) line.reason = 'comment';
+    if (line.reason === null && line.comment && !code.has(uncomment(line.text).replace(/\s+/g, ''))) line.reason = 'comment';
   }
 
   const counted = new Map();
@@ -279,10 +282,17 @@ function commentStyle(path) {
   return null;
 }
 
+// A row that ends a block comment: it starts or ends with "*/". A "*/" in the middle of a row,
+// such as in the regex /a*/, does not count.
+const closesBlock = (text) => {
+  const rest = text.trim();
+  return rest.startsWith('*/') || rest.endsWith('*/');
+};
+
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. A row that starts with "*" counts
-// as a row of such a block only when the row or a later row of the hunk closes the block with
-// "*/", or when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as
+// as a row of such a block only when the row or a later row of the hunk closes the block (a
+// later row that starts or ends with "*/"), or when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as
 // "* qty;" after a line that ends in "price".
 function markComments(texts, path) {
   const style = commentStyle(path);
@@ -296,7 +306,7 @@ function markComments(texts, path) {
       if (/^\*(\s|\/|$)/.test(rest)) {
         const end = rest.indexOf('*/');
         if (end !== -1) return rest.slice(end + 2).trim() === '';
-        return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some((later) => later.includes('*/'));
+        return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some(closesBlock);
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
