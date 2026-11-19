@@ -123,3 +123,19 @@ test('a line right after a nested quote in an alert box stays in the nested quot
   assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> # Verdict: fix'), 'fix');
   assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> - Verdict: fix'), 'fix');
 });
+
+test('a lazy line goes on a quote only when the quote ends in a paragraph', () => {
+  // GitHub shows "Verdict: fix" outside the quote here, because the quote ends in a blank quote
+  // line, a heading or a thematic break.
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> >\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > # Quoted heading\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > ---\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> # Quoted heading\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quoted\n>\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> ---\nVerdict: fix'), 'fix');
+  // A list item with text is a paragraph, so the line stays in the quote.
+  assert.equal(commentVerdict('> - item\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > - item\n> Verdict: fix'), null);
+  // A "> >" line is in the nested quote, even after a blank "> >" line.
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> >\n> > Verdict: fix'), null);
+});
