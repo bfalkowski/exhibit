@@ -171,7 +171,7 @@ One merged PR per line, with these fields:
 - `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_ref`, `base_sha`, `head_sha`, `merge_sha`
 - `forge`: the forge the PR came from, and `url`: the PR's web page on that forge
 - `files`: path, additions and deletions for each file
-- `classification`: `classification.fix` is true when the PR is a fix, and `fix_signal` names the signal that matched. From S4, `kinds` will hold the kinds of change under the current policy. Today `classification` has no `kinds` field (see "Later slices" below).
+- `classification`: `fix` is true when the PR is a fix, and `fix_signal` names the signal that matched. `fix_signal` is null when no signal matched. From S4, `kinds` will hold the kinds of change under the current policy. Today `classification` has no `kinds` field (see "Later slices" below).
 - `reviews`: `list` holds the `state`, `author` and `source` of each review, oldest first. `source` is `review` for a GitHub review, or `comment` for a review posted as a PR comment. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`, from both sources.
 - `ci`: the `name` and `conclusion` of each check run on the PR's last head commit, then of each commit status on it. For a commit status, `name` is its context and `conclusion` is its state. A reader of `ci`, such as the S5 backtest, must allow for two things: an app that posts both a check run and a commit status with the same name shows up twice, and a commit status can give the conclusion `error`, which a check run never gives.
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
