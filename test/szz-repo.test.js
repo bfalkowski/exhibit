@@ -4,8 +4,24 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 
+// Ignore the runner's own git config, as the builder does. Settings such as
+// diff.noprefix or blame.ignoreRevsFile would change what diff and blame print.
 function git(dir, args) {
-  return execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+  return execFileSync('git', args, {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+  });
+}
+
+// The commit and its parents: one parent for a squash commit, two for a merge commit.
+function parentsOf(dir, sha) {
+  return git(dir, ['rev-list', '--parents', '-n', '1', sha]).trim().split(' ');
+}
+
+// The first commit on a PR's branch, oldest first from the PR's base.
+function firstCommit(dir, pr) {
+  return git(dir, ['rev-list', '--reverse', `${pr.base_sha}..refs/pull/${pr.number}/head`]).trim().split('\n')[0];
 }
 
 // Every ref and every commit, with its tree, parents, author and dates.
@@ -38,7 +54,7 @@ function deletedLines(dir, from, to) {
 function prOfCommit(dir, history, sha) {
   for (const pr of history) {
     if (pr.merge_sha === sha) return pr.number;
-    const parents = git(dir, ['rev-list', '--parents', '-n', '1', pr.merge_sha]).trim().split(' ');
+    const parents = parentsOf(dir, pr.merge_sha);
     if (parents.length === 3) {
       const branch = git(dir, ['rev-list', `${parents[1]}..${parents[2]}`]).trim().split('\n');
       if (branch.includes(sha)) return pr.number;
@@ -47,15 +63,21 @@ function prOfCommit(dir, history, sha) {
   return null;
 }
 
+// The commit that last touched each line a fix deleted, as { path, line, sha }.
+// It blames merge_sha^1. Spec 9.2 blames the parent of the fix's first commit;
+// a subtest checks that the two are the same commit.
+function blamedCommits(dir, fix) {
+  const parent = `${fix.merge_sha}^1`;
+  return deletedLines(dir, parent, fix.merge_sha).map(({ path, line }) => {
+    const out = git(dir, ['blame', '--porcelain', '-L', `${line},${line}`, parent, '--', path]);
+    return { path, line, sha: out.slice(0, 40) };
+  });
+}
+
 // The PRs that last touched the lines a fix deleted. This is a bare blame with no filters,
 // so it links the whitespace, move and comment cases too. SZZ must filter those out.
 function blamedPrs(dir, history, fix) {
-  const parent = `${fix.merge_sha}^1`;
-  const prs = new Set();
-  for (const { path, line } of deletedLines(dir, parent, fix.merge_sha)) {
-    const out = git(dir, ['blame', '--porcelain', '-L', `${line},${line}`, parent, '--', path]);
-    prs.add(prOfCommit(dir, history, out.slice(0, 40)));
-  }
+  const prs = new Set(blamedCommits(dir, fix).map(({ sha }) => prOfCommit(dir, history, sha)));
   return [...prs].sort((a, b) => a - b);
 }
 
@@ -99,7 +121,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
       }
       assert.match(pr.base_sha, /^[0-9a-f]{40}$/);
       assert.match(pr.merge_sha, /^[0-9a-f]{40}$/);
-      assert.equal(typeof pr.classification.is_fix, 'boolean');
+      assert.equal(typeof pr.classification.fix, 'boolean');
     }
   });
 
@@ -111,7 +133,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
   await t.test('PRs are merged both ways, and refs/pull/N/head keeps each branch', () => {
     const ways = new Set();
     for (const pr of history) {
-      const parents = git(dir, ['rev-list', '--parents', '-n', '1', pr.merge_sha]).trim().split(' ');
+      const parents = parentsOf(dir, pr.merge_sha);
       const way = parents.length === 3 ? 'merge' : 'squash';
       ways.add(way);
       const head = git(dir, ['rev-parse', `refs/pull/${pr.number}/head`]).trim();
@@ -140,8 +162,24 @@ test('the fixture repo and its records match the answer key', async (t) => {
   });
 
   await t.test('the answer key names every fix PR, and only fix PRs', () => {
-    const fixes = history.filter((pr) => pr.classification.is_fix).map((pr) => pr.number);
+    const fixes = history.filter((pr) => pr.classification.fix).map((pr) => pr.number);
     assert.deepEqual(key.fixes.map((f) => f.fix_pr).sort((a, b) => a - b), fixes);
+  });
+
+  await t.test('for each fix, merge_sha^1 is the parent of its first commit, where spec 9.2 blames', () => {
+    for (const fix of history.filter((pr) => pr.classification.fix)) {
+      const [, parent] = parentsOf(dir, firstCommit(dir, fix));
+      assert.equal(parent, git(dir, ['rev-parse', `${fix.merge_sha}^1`]).trim(), `PR ${fix.number}`);
+    }
+  });
+
+  await t.test("PR 7's tax.js line comes from the first of PR 3's two commits", () => {
+    const tax = blamedCommits(dir, byNumber.get(7)).filter(({ path }) => path === 'src/tax.js');
+    assert.equal(tax.length, 1);
+    const pr3 = byNumber.get(3);
+    const commits = git(dir, ['rev-list', `${pr3.base_sha}..refs/pull/3/head`]).trim().split('\n');
+    assert.equal(commits.length, 2);
+    assert.equal(tax[0].sha, firstCommit(dir, pr3));
   });
 
   await t.test('each fix changes lines that blame points to the expected PRs', () => {
