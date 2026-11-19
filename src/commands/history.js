@@ -1,11 +1,11 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { readFixSignals } from '../fix-signals.js';
 import { createGitHubForge, isRepoName } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
+import { readPolicy } from '../policy.js';
 import { buildReport } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
@@ -16,7 +16,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 
 // `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--no-cache] [--json]`
 // Writes one line for each merged PR to .exhibit/history.jsonl, and marks fix PRs by the fix
-// signals in evidence.yml, or the defaults. When the file is there from an earlier run, it reads
+// signals in evidence.yml, or the defaults. A bad evidence.yml stops the run before it asks
+// GitHub. When the file is there from an earlier run, it reads
 // only the PRs the file lacks and the PRs in the look-back window, and keeps the other lines
 // (spec 8.3). --full, or an old file that does not fit the schema, reads every PR again.
 // Every line must pass the schema before the file is
@@ -35,8 +36,8 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const token = env.GITHUB_TOKEN;
   if (!token) throw new ToolError('GITHUB_TOKEN is not set. Set it to a GitHub token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).');
 
-  // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
-  const fixSignals = await readFixSignals(cwd);
+  // Read and check the policy before asking GitHub, so a bad evidence.yml fails fast.
+  const fixSignals = (await readPolicy(cwd)).settings.fix_signals;
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;

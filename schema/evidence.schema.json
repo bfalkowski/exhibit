@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bfalkowski/exhibit/schema/evidence.schema.json",
+  "title": "The policy file evidence.yml",
+  "description": "Says what evidence each kind of change must show (spec section 8.1). Every key is optional, so an empty file is a valid policy. A key with nothing under it, such as kinds:, is the same as no key. Exhibit refuses to run on a file that does not pass this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "enum": [
+        3,
+        null
+      ],
+      "description": "The format of the file. This Exhibit reads format 3 only. null, from version: with nothing after it, is the same as no version."
+    },
+    "settings": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "test_command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command that runs the tests on the base and on the head (spec 9.3)."
+        },
+        "test_results": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The JUnit XML file that the test command writes."
+        },
+        "fix_signals": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(label|title|title_after_key|branch):\\S(.*\\S)?$"
+          },
+          "description": "The signals that mark a PR as a fix (spec 9.1). null or absent means the defaults [label:bug, title:fix, branch:fix/]."
+        },
+        "mutation_budget_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The time budget for one mutation run (spec 9.5)."
+        }
+      }
+    },
+    "kinds": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Each key names a kind of change, such as relay-core.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "match",
+          "risk",
+          "needs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "match": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Globs on the changed file paths."
+          },
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "description": "One evidence item. A bare name is tests-before-after or failing-before. An item with fields is a mapping with one key, the item type.",
+              "if": {
+                "type": "string"
+              },
+              "then": {
+                "enum": [
+                  "tests-before-after",
+                  "failing-before"
+                ]
+              },
+              "else": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 1,
+                "additionalProperties": false,
+                "properties": {
+                  "tests-before-after": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The tests ran on the base and on the head, and pass on the head (spec 9.3)."
+                  },
+                  "failing-before": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "description": "A test the PR added or changed fails on the base and passes on the head (spec 9.4).",
+                    "properties": {
+                      "when": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "enum": [
+                            "fix",
+                            "feature"
+                          ]
+                        },
+                        "description": "Limits the item to PRs classified as fix or feature."
+                      }
+                    }
+                  },
+                  "mutation": {
+                    "type": "object",
+                    "required": [
+                      "min"
+                    ],
+                    "additionalProperties": false,
+                    "description": "The catch rate on the changed lines is at least min (spec 9.5).",
+                    "properties": {
+                      "min": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  },
+                  "probe": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "run"
+                    ],
+                    "additionalProperties": false,
+                    "description": "A named command exits 0 on the head and writes its artifacts (spec 9.6).",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "run": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "artifacts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "author": {
+                        "enum": [
+                          "hidden"
+                        ],
+                        "description": "hidden: the builder cannot see the check (spec 9.7)."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "merge_without_reading": {
+            "enum": [
+              "never",
+              "allowed"
+            ]
+          },
+          "source": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "The defect IDs the rule came from (spec 9.9)."
+          }
+        }
+      }
+    },
+    "default": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The rules for a PR that matches no kind.",
+      "required": [
+        "risk",
+        "needs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "needs": {
+          "type": "array",
+          "items": {
+            "description": "One evidence item. A bare name is tests-before-after or failing-before. An item with fields is a mapping with one key, the item type.",
+            "if": {
+              "type": "string"
+            },
+            "then": {
+              "enum": [
+                "tests-before-after",
+                "failing-before"
+              ]
+            },
+            "else": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "tests-before-after": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "description": "The tests ran on the base and on the head, and pass on the head (spec 9.3)."
+                },
+                "failing-before": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "description": "A test the PR added or changed fails on the base and passes on the head (spec 9.4).",
+                  "properties": {
+                    "when": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "enum": [
+                          "fix",
+                          "feature"
+                        ]
+                      },
+                      "description": "Limits the item to PRs classified as fix or feature."
+                    }
+                  }
+                },
+                "mutation": {
+                  "type": "object",
+                  "required": [
+                    "min"
+                  ],
+                  "additionalProperties": false,
+                  "description": "The catch rate on the changed lines is at least min (spec 9.5).",
+                  "properties": {
+                    "min": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                },
+                "probe": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "run"
+                  ],
+                  "additionalProperties": false,
+                  "description": "A named command exits 0 on the head and writes its artifacts (spec 9.6).",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "run": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "artifacts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "author": {
+                      "enum": [
+                        "hidden"
+                      ],
+                      "description": "hidden: the builder cannot see the check (spec 9.7)."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "merge_without_reading": {
+          "enum": [
+            "never",
+            "allowed"
+          ]
+        },
+        "source": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

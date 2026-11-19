@@ -65,13 +65,13 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`. Each command exits 0 on success and 2 on a tool error.
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files and takes no `--repo`. Each command exits 0 on success and 2 on a tool error.
 
 | Command | What it does |
 |---|---|
 | `exhibit init` | Writes a starter `evidence.yml` and example workflow files. |
 | `exhibit history [--since DATE] [--limit N] [--full] [--no-cache]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. When the file is there, it reads only what is new (section 8.3). `--full` reads every PR again. `--no-cache` turns off the reply cache (section 8.6). |
-| `exhibit label [--claude]` | Shows each escaped defect that has no code yet. With `--claude`, Claude drafts a code and a category. The person confirms or edits each one. Writes `.exhibit/labels.jsonl`. |
+| `exhibit label [--json]` | Shows each escaped defect that has no code yet, one at a time, with its SZZ evidence. The person types a code, a category and the evidence that would have caught it, or skips the defect. Each label goes to `.exhibit/labels.jsonl` at once (section 8.4). A later S3 ticket adds `--claude`: Claude drafts a code and a category, and the person confirms or edits each one. |
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check [--base REF] [--head REF] [--pr N]` | Works out what the PR needs, collects the evidence, and writes `evidence.json` and `summary.md`. Exits 0 for `meets_policy` and 1 for `needs_person`. |
@@ -119,7 +119,19 @@ Rules:
 - A PR that matches no kind uses `default`.
 - `merge_without_reading: allowed` holds only if every matched kind allows it.
 - `source` lists the defect IDs a rule came from. The backtest uses it to find leaks (section 9.9).
-- Exhibit validates the file against a JSON schema and refuses to run on an invalid policy.
+- Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
+  - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
+  - `version` must be 3, the only format this Exhibit reads.
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) and `mutation_budget_seconds` (a whole number, 1 or more).
+  - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
+  - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
+  - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
+  - `needs` is a list of evidence items, and it may be empty. An item is a bare name (`tests-before-after` or `failing-before`), or a mapping with one key: the item type, with its fields. `- failing-before:` with nothing after the colon is the same as the bare name.
+  - `failing-before` may have `when`: a list of `fix` and `feature`.
+  - `mutation` must have `min`, a number from 0 to 1. NaN (`.nan`) and infinity (`.inf`) are not numbers here.
+  - `probe` must have `name` and `run`. It may have `artifacts` (a list of paths) and `author: hidden`.
+  - An item type that is not one of the four is an error.
+- An invalid policy makes the command exit 2. The message names each bad field and says what is wrong, one field on each line, for example `evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".` A file that is not valid YAML gives exit 2 too. A bad `fix_signals` is the one exception: Exhibit checks it first, and its message shows only that problem, as it did before the whole file was checked.
 
 Evidence item types in version 1:
 
@@ -186,9 +198,9 @@ What each version fills:
 - **S1, second half:** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs and no commit statuses has an empty `ci` list. A check run that has not finished has a null `conclusion`. Some CI services post commit statuses instead of check runs, so `ci` holds both: check runs first, then commit statuses. For commit statuses, GitHub gives only the newest status for each context. A status `conclusion` is `success`, `failure` or `error`, and a `pending` status has a null `conclusion`, the same as a check run that has not finished.
 - **Reviews posted as PR comments:** some rooms post each review as a PR comment, not as a GitHub review. On Building58 no merged PR has a GitHub review. So `exhibit history` also reads the PR's comments, and a comment that gives a verdict is a review with the `source` `comment`:
   - A verdict is the word `verdict`, then `merge` or `fix`, as in `Verdict: fix` or `**Verdict:** merge`. A colon, spaces, `*`, `_`, backticks and equals signs may come between them, as in ``Verdict: `merge` `` or `Verdict = fix`. A hyphen may come between them too, as in `Verdict - fix`, but only when the phrase starts the line, after any spaces, `>`, `#`, `*` or `_`, and after a list marker such as `-`, `+`, `*`, `1.` or `1)`. So `- Verdict - fix` and `1. Verdict - merge` count. In prose a hyphen is often a dash, so `The verdict - merge - waits on CI.` is not a verdict, and neither is `## Code review of b8ebe79 - merge`, where other words come before the phrase. A review heading with the verdict after the commit is a verdict too, as in `## Review of b8ebe79: merge`. Case does not matter.
-  - A line that starts with `>`, after any spaces, is a markdown quote of another comment, so its verdict does not count. A reply that quotes `> Verdict: fix` and then says `Fixed in abc1234` is not a review. A line right after a quote line is in the quote too, as markdown shows it, until a blank line, a heading, a code fence, a list item or a thematic break (`---`) ends the quote. Only plain text goes on a quote this way. Two kinds of line are not quotes:
+  - A line that starts with `>`, after any spaces, is a markdown quote of another comment, so its verdict does not count. A reply that quotes `> Verdict: fix` and then says `Fixed in abc1234` is not a review. A line right after a quote line is in the quote too, as markdown shows it, until a blank line, a heading, a code fence, a list item or a thematic break ends the quote. A thematic break is three or more of the same mark, `-`, `*` or `_`, as in `---`, so `-*-` stays in the quote. A backtick code fence has no backtick after its marks, so a line such as ```` ```x``` said ```` is text with inline code. Only plain text goes on a quote this way. And it goes on only when the quote's last line is text: after a blank quote line (`>`), a heading, a code fence or a thematic break in the quote, the next line is not in the quote. Two kinds of line are not quotes:
     - A line in a code fence (```` ``` ```` or `~~~`), even when it starts with `>`.
-    - A line of a GitHub alert box, such as `> [!IMPORTANT]` then `> Verdict: fix`. An alert box is the comment's own text, so its verdict counts. A quote nested in an alert box, as in `> > Verdict: fix`, is still a quote. The alert kinds are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`.
+    - A line of a GitHub alert box, such as `> [!IMPORTANT]` then `> Verdict: fix`. An alert box is the comment's own text, so its verdict counts. A quote nested in an alert box, as in `> > Verdict: fix`, is still a quote. A line right after a line of text in the nested quote, as in `> Verdict: fix`, is in the nested quote too, as GitHub shows it, until a blank line, a heading, a code fence, a list item or a thematic break in the alert box ends it. The alert kinds are `NOTE`, `TIP`, `IMPORTANT`, `WARNING` and `CAUTION`.
   - When a comment gives a verdict only in quoted lines, `exhibit history` does not count it, and prints a warning on stderr that names the PR, the comment's author and time, and the verdict. Most such comments are replies, but the warning lets a person find a review that quoted its own verdict.
   - The first verdict in the comment counts. `fix` gives the state `CHANGES_REQUESTED`, so it is a round. `merge` gives the state `APPROVED`.
   - A comment that starts with an `<!-- office:` marker, such as `<!-- office:dev -->`, is a room note or a Dev's reply, not a review, even when it repeats the verdict.
@@ -242,16 +254,30 @@ A classic token needs the `repo` scope for a private repo, and no scope for a pu
 
 ### 8.4 `.exhibit/labels.jsonl`
 
-One escaped defect per line, with these fields:
+`exhibit label` writes this file. It reads the escaped defects from `.exhibit/history.jsonl`: the fix PRs that SZZ linked to at least one introducing PR, newest fix first. This is the same list that the report shows (section 8.5), and the same code makes both.
 
-- `id`, such as `D-004`
-- `fix_pr`, `introducing_prs`
-- `code`: a short description of what went wrong
-- `category`
-- `would_have_caught`: the evidence that would have caught it
-- `labeled_by`: `person`, or `claude_draft_confirmed`, or `claude_draft_edited`
-- `szz_link_rejected`: true if the person rejected the link
-- `labeled_at`
+One labeled escaped defect per line, with these fields:
+
+- `id`: `D-` and the fix PR's number, with zeros in front to make at least three digits. PR 4 gives `D-004`, PR 58 gives `D-058`, and PR 1234 gives `D-1234`. A PR's number never changes, so the `id` stays the same when `exhibit history` runs again, with `--full` too. Policy rules cite these IDs in `source` (section 8.1).
+- `fix_pr`: the fix PR's number. `introducing_prs`: the numbers of the PRs that SZZ linked to the fix, highest confidence first.
+- `code`: a short description of what went wrong. One line of at most 200 characters.
+- `category`: one line of at most 60 characters.
+- `would_have_caught`: the evidence that would have caught it. One line of at most 500 characters.
+- `labeled_by`: `person`, or `claude_draft_confirmed`, or `claude_draft_edited`. Today it is always `person`.
+- `szz_link_rejected`: true if the person rejected the link. Today it is always false: a later S3 ticket lets the person reject a link.
+- `labeled_at`: the time of the label, in UTC.
+
+The schema for one line is `schema/labels-line.schema.json`. `exhibit label` also checks that `id` matches `fix_pr`.
+
+How `exhibit label` works:
+
+- It shows each defect that has no line in the file yet, one at a time: the fix PR, its title and web page, the commit that SZZ blamed, and each introducing PR with its confidence. Under each introducing PR are its lines and what `git blame` said about each one, as in the report, at most 5 lines for each link.
+- For each defect it asks three questions: the code, the category, and the evidence that would have caught it. For the category, it lists the categories used so far, from the file and from this run. The person types a number from the list, or a new category. An empty answer is asked again.
+- It checks the label against the schema, then adds it to the end of the file at once. So quitting halfway keeps the labels given so far. A label that fails the schema is not written: `exhibit label` exits 2 and names the problem, and the file keeps its earlier lines.
+- `s` at the first question skips a defect. `q` at any question, or the end of the input, quits. The defect it was on is not written. The next run shows the skipped defects and the defects it did not reach, and no defect that has a line.
+- At the end it says how many defects it labeled and skipped, and how many still have no code. With `--json`, it shows the defects and the questions on stderr, and prints one summary line on stdout: `{ "shown": 3, "labeled": 2, "skipped": 1, "open": 1, "output": ".exhibit/labels.jsonl" }`. `shown` counts the defects it showed, and `open` counts the defects still with no line in the file.
+- It exits 2 with a message that says to run `exhibit history` first when there is no `.exhibit/history.jsonl`, or when the history has no SZZ links. It exits 2 too when a history line fails the history schema, or a labels line is not JSON or fails the labels schema. It then names the line, and writes nothing.
+- A line for a defect that is no longer in the history, for example after a run of `exhibit history` with a smaller `--limit`, stays in the file.
 
 ### 8.5 Report
 
@@ -304,7 +330,7 @@ The cache does not remove old entries. Deleting the folder is always safe: the n
   - `title_after_key:fix` works like `title:fix`, but first skips a ticket key at the start of the title. Many teams start a title with a key, such as "T-170: Fix the crash", so `title:fix` never matches them. A key is letters and digits, a hyphen, and digits, such as `T-170` or `KEY-123`. It may be in square brackets or parentheses, and a colon or a space follows it. So `title_after_key:fix` matches "T-170: Fix the crash", "KEY-123: fix the parser" and "[KEY-123] fix the parser". It does not match "T-170: Add prefix fixer" or "T-170: Improve fixtures", by the same word rule as `title:`. A title with no key matches the same way as with `title:fix`. A number alone, such as "79:", is not a key. This type is not in the defaults: a person adds it to `fix_signals`, for example `[label:bug, title_after_key:fix, branch:fix/]`.
   - `branch:fix/` matches a head branch whose name starts with `fix/`.
   - All matching ignores case.
-- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads only this one setting from the file, and the other settings are not checked until slice S4.
+- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads and checks the whole file (section 8.1), so it refuses an invalid policy even when `fix_signals` is fine.
 - A `fix_signals` that is not a list, is empty, has a signal that does not start with `label:`, `title:`, `title_after_key:` or `branch:`, or has a space before or after the value (such as "label: bug") makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
 - A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
 - A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
