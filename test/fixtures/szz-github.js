@@ -19,7 +19,7 @@ function git(dir, args) {
 function commitPullsReplies({ dir, history, onMain }, repo) {
   const prsOf = new Map();
   const add = (sha, pr) => prsOf.set(sha, [...(prsOf.get(sha) ?? []), pr]);
-  const replies = {};
+  const replies = { [`/repos/${repo}`]: { status: 200, headers: {}, body: { full_name: repo, default_branch: 'main' } } };
   for (const pr of history) {
     const branch = git(dir, ['rev-list', `${pr.base_sha}..refs/pull/${pr.number}/head`]).split('\n');
     for (const sha of branch) add(sha, pr);
@@ -29,7 +29,7 @@ function commitPullsReplies({ dir, history, onMain }, repo) {
     replies[`/repos/${repo}/commits/${sha}/pulls?per_page=100`] = {
       status: 200,
       headers: {},
-      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha }))
+      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha, base: { ref: 'main', sha: pr.base_sha } }))
     };
   }
   return replies;

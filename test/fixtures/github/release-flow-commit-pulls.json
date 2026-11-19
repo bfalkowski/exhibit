@@ -1,0 +1,67 @@
+{
+  "/repos/fixture/release-flow": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "full_name": "fixture/release-flow",
+      "default_branch": "main"
+    }
+  },
+  "/repos/fixture/release-flow/commits/1111111111111111111111111111111111111111/pulls?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "number": 31,
+        "state": "closed",
+        "title": "Merge release into main",
+        "merged_at": "2026-11-17T09:00:00Z",
+        "merge_commit_sha": "3131313131313131313131313131313131313131",
+        "base": { "ref": "main", "sha": "3030303030303030303030303030303030303030" },
+        "head": { "ref": "release", "sha": "2929292929292929292929292929292929292929" }
+      },
+      {
+        "number": 30,
+        "state": "closed",
+        "title": "Fix the cart total",
+        "merged_at": "2026-11-11T13:44:14Z",
+        "merge_commit_sha": "1111111111111111111111111111111111111111",
+        "base": { "ref": "release", "sha": "2828282828282828282828282828282828282828" },
+        "head": { "ref": "fix-cart-total", "sha": "2727272727272727272727272727272727272727" }
+      },
+      {
+        "number": 32,
+        "state": "open",
+        "title": "Draft: next release",
+        "merged_at": null,
+        "merge_commit_sha": null,
+        "base": { "ref": "main", "sha": "3030303030303030303030303030303030303030" },
+        "head": { "ref": "next", "sha": "2626262626262626262626262626262626262626" }
+      }
+    ]
+  },
+  "/repos/fixture/release-flow/commits/2222222222222222222222222222222222222222/pulls?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "number": 41,
+        "state": "closed",
+        "title": "Copy release to release-2",
+        "merged_at": "2026-11-15T09:00:00Z",
+        "merge_commit_sha": "4141414141414141414141414141414141414141",
+        "base": { "ref": "release-2", "sha": "4040404040404040404040404040404040404040" },
+        "head": { "ref": "release", "sha": "3939393939393939393939393939393939393939" }
+      },
+      {
+        "number": 40,
+        "state": "closed",
+        "title": "Fix the tax rounding",
+        "merged_at": "2026-11-12T09:00:00Z",
+        "merge_commit_sha": "2222222222222222222222222222222222222222",
+        "base": { "ref": "release", "sha": "3838383838383838383838383838383838383838" },
+        "head": { "ref": "fix-tax", "sha": "3737373737373737373737373737373737373737" }
+      }
+    ]
+  }
+}

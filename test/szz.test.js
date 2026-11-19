@@ -148,11 +148,11 @@ test('commit-to-PR mapping', async (t) => {
     return { fetch, github: createGitHub({ token: 't', fetch }) };
   };
 
-  await t.test('a merge SHA in the history maps to its PR with no API request', async () => {
+  await t.test('a merge SHA in the history of a PR into the default branch maps to that PR, with no request for its pulls', async () => {
     const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [{ number: 41, merge_sha: 'a'.repeat(40) }], repo, github: gh });
+    const find = createPrFinder({ lines: [{ number: 41, base_ref: 'main', merge_sha: 'a'.repeat(40) }], repo, github: gh });
     assert.equal(await find('a'.repeat(40)), 41);
-    assert.equal(fetch.calls.length, 0);
+    assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58']);
   });
 
   await t.test('any other commit maps through the API to the merged PR that holds it', async () => {
@@ -169,15 +169,56 @@ test('commit-to-PR mapping', async (t) => {
     assert.equal(await find('0000000000000000000000000000000000000001'), null);
   });
 
-  await t.test('only merged PRs count, and the first one merged wins', async () => {
-    const pulls = [
-      { number: 9, merged_at: null },
-      { number: 8, merged_at: '2026-02-01T00:00:00Z' },
-      { number: 7, merged_at: '2026-01-01T00:00:00Z' }
+  await t.test('one merged PR wins with no request for the default branch', async () => {
+    const { fetch, github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    assert.equal(await find('18ce79d6f068f5fc57cf63497ea5f398356eab68'), 82);
+    assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58/commits/18ce79d6f068f5fc57cf63497ea5f398356eab68/pulls?per_page=100']);
+  });
+});
+
+// A commit can sit in merged PRs on different base branches, such as a fix merged into a release
+// branch and then a PR that merges the release branch into main. Only the PR into the default
+// branch brought the commit to main.
+test('commit-to-PR mapping across base branches', async (t) => {
+  const recorded = fileURLToPath(new URL('./fixtures/github/release-flow-commit-pulls.json', import.meta.url));
+  const repo = 'fixture/release-flow';
+  const github = () => {
+    const fetch = replayFetch(recorded);
+    return { fetch, github: createGitHub({ token: 't', fetch }) };
+  };
+
+  await t.test('the merged PR into the default branch wins, even when a PR into another branch merged first', async () => {
+    const { github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    assert.equal(await find('1'.repeat(40)), 31);
+  });
+
+  await t.test('when no merged PR went to the default branch, the first one merged wins', async () => {
+    const { github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    assert.equal(await find('2'.repeat(40)), 40);
+  });
+
+  // The lines a real history run has: PR 30 is in the history too, and 1111111 is its squash
+  // commit on release. The merge SHA must not decide before the base branch is checked.
+  await t.test('a merge SHA of a PR into another branch does not decide: the PR into the default branch wins', async () => {
+    const { github: gh } = github();
+    const lines = [
+      { number: 31, base_ref: 'main', merge_sha: '3'.repeat(40) },
+      { number: 30, base_ref: 'release', merge_sha: '1'.repeat(40) }
     ];
-    const fetch = async () => new Response(JSON.stringify(pulls), { status: 200, headers: { 'content-type': 'application/json' } });
-    const find = createPrFinder({ lines: [], repo, github: createGitHub({ token: 't', fetch }) });
-    assert.equal(await find('b'.repeat(40)), 7);
+    const find = createPrFinder({ lines, repo, github: gh });
+    assert.equal(await find('1'.repeat(40)), 31);
+    assert.equal(await find('3'.repeat(40)), 31);
+  });
+
+  await t.test('the default branch is asked for once', async () => {
+    const { fetch, github: gh } = github();
+    const find = createPrFinder({ lines: [], repo, github: gh });
+    await find('1'.repeat(40));
+    await find('2'.repeat(40));
+    assert.equal(fetch.calls.filter((call) => call.key === '/repos/fixture/release-flow').length, 1);
   });
 });
 

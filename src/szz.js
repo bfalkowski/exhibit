@@ -52,24 +52,36 @@ export async function cloneRoot(dir, repo) {
 // Returns a function that maps a commit SHA to the number of the PR that brought it to the main
 // branch, or null when no merged PR holds it. It looks first at the merge SHAs in `lines` (a
 // squash merge's one commit), then asks GitHub which PRs hold the commit, and keeps each answer.
+// A merge SHA decides only for a PR into the default branch. A PR squash merged into a release
+// branch did not bring its commit to main, so GitHub is asked about that commit.
 export function createPrFinder({ lines, repo, github }) {
-  const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line.number]));
+  const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line]));
   const asked = new Map();
+  let mainBranch = null;
+  // The repo's default branch, asked for once, and only when a merge SHA or two merged PRs need it.
+  const defaultBranch = () => (mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch));
+  const find = async (sha) => {
+    const line = byMergeSha.get(sha);
+    if (line && line.base_ref === (await defaultBranch())) return line.number;
+    return askGitHub(github, repo, sha, defaultBranch);
+  };
   return (sha) => {
-    if (byMergeSha.has(sha)) return Promise.resolve(byMergeSha.get(sha));
-    if (!asked.has(sha)) asked.set(sha, askGitHub(github, repo, sha));
+    if (!asked.has(sha)) asked.set(sha, find(sha));
     return asked.get(sha);
   };
 }
 
-async function askGitHub(github, repo, sha) {
+async function askGitHub(github, repo, sha, defaultBranch) {
   // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
   // means the same here: the repo itself was read a moment before.
   const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], permission: PERMISSIONS.pullRequests });
-  // A commit can sit in more than one PR, such as a release PR that copies main to another
-  // branch. The first PR merged brought it in.
   const merged = pulls.filter((pr) => pr.merged_at).sort((a, b) => a.merged_at.localeCompare(b.merged_at));
-  return merged.length > 0 ? merged[0].number : null;
+  if (merged.length < 2) return merged.length === 1 ? merged[0].number : null;
+  // A commit can sit in more than one merged PR, such as a fix merged into a release branch and
+  // then a PR that merges the release branch into main. Only a PR into the default branch brought
+  // it to main, so the first of those wins. When none went there, the first PR merged wins.
+  const main = await defaultBranch();
+  return (merged.find((pr) => pr.base?.ref === main) ?? merged[0]).number;
 }
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is

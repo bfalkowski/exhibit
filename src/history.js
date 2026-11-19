@@ -76,6 +76,7 @@ function toHistoryLine(pr, files, reviews, comments, ci, fixSignals) {
     author: pr.user?.login ?? null,
     labels,
     merged_at: pr.merged_at,
+    base_ref: pr.base.ref,
     base_sha: pr.base.sha,
     merge_sha: pr.merge_commit_sha,
     files: files.map((file) => ({ path: file.filename, additions: file.additions, deletions: file.deletions })),
