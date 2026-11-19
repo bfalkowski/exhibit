@@ -169,8 +169,8 @@ One merged PR per line, with these fields:
 - `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha`
 - `files`: path, additions and deletions for each file
 - `classification`: the kinds of change under the current policy, and whether the PR is a fix
-- `reviews`: state and author, plus the number of change-request rounds
-- `ci`: name and conclusion for each check
+- `reviews`: `list` holds the `state` and `author` of each review, oldest first. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`.
+- `ci`: the `name` and `conclusion` of each check run on the PR's last head commit
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
 - `szz`: for fix PRs, the introducing PRs, the lines, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
@@ -179,9 +179,11 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 
 What each version fills:
 
-- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. The other fields are absent, and the schema allows them only as null.
-- **S1, second half:** `reviews` and `ci`.
-- **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`.
+- **S1, first half:** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short.
+- **S1, second half (now):** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs has an empty `ci` list. A check run that has not finished has a null `conclusion`. Comments on the PR are not reviews, so they are not in `reviews`.
+- **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null.
+
+When GitHub says to wait (a 429 or 403 reply with a `retry-after` header, or with no requests left until `x-ratelimit-reset`), `exhibit history` waits and asks again, at most three times. If GitHub asks for a wait longer than 15 minutes, it stops and exits 2.
 
 ### 8.4 `.exhibit/labels.jsonl`
 

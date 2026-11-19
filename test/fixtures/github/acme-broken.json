@@ -78,5 +78,31 @@
         "changes": 1
       }
     ]
+  },
+  "/repos/acme/broken/pulls/1/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc1/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 0,
+      "check_runs": []
+    }
+  },
+  "/repos/acme/broken/pulls/2/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc2/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 0,
+      "check_runs": []
+    }
   }
 }
