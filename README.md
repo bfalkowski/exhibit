@@ -33,3 +33,7 @@ Exhibit will be a CLI and a GitHub Action. It needs no server.
 ## How it is built
 
 An office room of Claude Code sessions in [Building58](https://github.com/bfalkowski/Building58) builds Exhibit. Two other rooms use it on their own repos and file issues here. See section 12 of the spec.
+
+## License
+
+MIT. Anyone may use, change and share Exhibit. See [LICENSE](LICENSE).

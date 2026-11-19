@@ -429,7 +429,7 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 ## 16. Open questions
 
 1. The package name. `exhibit` may be taken on npm. A scoped name such as `@bfalkowski/exhibit` is the fallback.
-2. The license.
+2. The license: decided. Exhibit uses the MIT license (the `LICENSE` file), so anyone may use, change and share it.
 3. Where the hidden suite lives, and how CI gets access to it.
 4. How to detect fix PRs in repos that use no labels. Section 17.3 lists one lead: an oracle built from fixes that name the change that added the bug.
 5. Whether to sign `evidence.json`, for example with Sigstore, so a session cannot forge it.
