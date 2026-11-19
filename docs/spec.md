@@ -69,7 +69,7 @@ All commands accept `--json` for machine output and `--repo owner/name`. Each co
 | Command | What it does |
 |---|---|
 | `exhibit init` | Writes a starter `evidence.yml` and example workflow files. |
-| `exhibit history [--since DATE] [--limit N]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. |
+| `exhibit history [--since DATE] [--limit N] [--full]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. When the file is there, it reads only what is new (section 8.3). `--full` reads every PR again. |
 | `exhibit label [--claude]` | Shows each escaped defect that has no code yet. With `--claude`, Claude drafts a code and a category. The person confirms or edits each one. Writes `.exhibit/labels.jsonl`. |
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
@@ -209,6 +209,16 @@ What each version fills:
   Each line in `links` and `unlinked_lines` has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
 
   A history file from before ticket 8 has no `dropped_lines` or `no_link_reason`, so it fails the schema. Run `exhibit history` again: it writes the whole file new.
+- **Incremental runs (ticket 94):** a merged PR almost never changes, so a run that finds `.exhibit/history.jsonl` from an earlier run reads only what is new:
+  - It always reads GitHub's whole list of merged PRs. That costs one request for each 100 PRs, closed ones too. `--since` and `--limit` pick from this list as they do on a first run, so the new file holds the same PRs that a first run with the same options would write. A line for a PR they leave out is dropped.
+  - A PR that has no line in the old file is read in full: its files, reviews, comments and CI results. So a PR merged after the last run gets a new line. So does an older PR that an earlier `--since` or `--limit` left out.
+  - The look-back window is the 7 days before the newest `merged_at` in the old file. A PR merged in that window, at its start time or later, is read again, and its new line replaces the old one. So a late review, a late review comment, or a CI result that finished after the last run shows up. A late review on a PR merged before the window does not show up: run with `--full` for that.
+  - Every other line is kept as it is, and no request asks about its PR.
+  - SZZ runs on a fix PR that was read, unless the old file already had it as a fix with a `szz` that is not null: then it keeps that `szz`, because the PR's code does not change after its merge. A fix whose `szz` was null, because SZZ skipped it, gets SZZ again. The map from a commit to its PR still sees every line in the file, kept lines too.
+  - The file stays in merge order, newest first.
+  - `--full` reads every PR again and writes the whole file new. Run it after you change `fix_signals` in `evidence.yml`, because a kept line keeps its old `classification`.
+  - A run reads every PR again by itself, and prints one note on stderr that says why, when the old file has a line that is not JSON, a line that does not fit the schema (as in a file from an older version of Exhibit), or a line from another repo or forge.
+  - Every run prints how many GitHub requests it made, and how many PRs it read. With `--json`, the summary has `requests`, `read`, and `mode`: `full` for a run that read every PR, or `incremental`. The count holds every request the run sent, a repeat after a rate-limit wait too, and the SZZ requests.
 - **Later slices:** `evidence_section` and `exhibit` are filled by later slices. Until then they are absent, and the schema allows them only as null. The kinds of change come in slice S4. Until then `classification` has no `kinds` field, not even as null: the schema refuses any field in `classification` other than `fix` and `fix_signal`. S4 must add `kinds` to `classification` in the schema and update this section.
 
 When GitHub says to wait, `exhibit history` waits and asks again, at most three times. GitHub says to wait with a 429 or 403 reply in one of three ways:

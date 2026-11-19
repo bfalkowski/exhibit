@@ -173,6 +173,19 @@ test('the walk to a squash fix\'s first commit', async (t) => {
     assert.deepEqual(askedShas(fetch), [parent]);
     assert.equal(line.szz.blamed_commit, parent);
   });
+
+  await t.test('an incremental run passes the whole file as known, so SZZ on PR 9 alone asks GitHub nothing', async (t) => {
+    // The same fix as above, but the commit-to-PR map sees every line, as in an incremental run
+    // where only PR 9 is new. PR 8's merge SHA is then known, so the walk costs no request.
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const fix9 = repo.history.find((pr) => pr.number === 9);
+    const fetch = commitPullsFetch(repo, REPO);
+    const lines = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), known: repo.history });
+    assert.deepEqual(lines.map((line) => line.number), [9]);
+    assert.deepEqual(askedShas(fetch), []);
+    assert.equal(lines[0].szz.blamed_commit, repo.history.find((pr) => pr.number === 8).merge_sha);
+  });
 });
 
 test('SZZ gives szz: null and a warning when the fix merge commit is not in the clone', async (t) => {

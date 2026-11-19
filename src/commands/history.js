@@ -1,9 +1,9 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { readFixSignals } from '../fix-signals.js';
 import { createGitHubForge, isRepoName } from '../github.js';
-import { readHistory } from '../history.js';
+import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { buildReport } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
@@ -13,14 +13,17 @@ const OUTPUT = '.exhibit/history.jsonl';
 const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
-// `exhibit history --repo owner/name [--since DATE] [--limit N] [--json]`
+// `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--json]`
 // Writes one line for each merged PR to .exhibit/history.jsonl, and marks fix PRs by the fix
-// signals in evidence.yml, or the defaults. Every line must pass the schema before the file is
+// signals in evidence.yml, or the defaults. When the file is there from an earlier run, it reads
+// only the PRs the file lacks and the PRs in the look-back window, and keeps the other lines
+// (spec 8.3). --full, or an old file that does not fit the schema, reads every PR again. Every line must pass the schema before the file is
 // written, so a failed run leaves no partial file and keeps an older one.
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
 // Then it writes the report of escaped defects, as report.md and report.html (spec 8.5).
+// Last it prints how many GitHub requests the run made.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
@@ -30,14 +33,19 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const fixSignals = await readFixSignals(cwd);
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   const forge = createGitHubForge({ repo: options.repo, token, fetch });
-  const read = await readHistory({ forge, since: options.since, limit: options.limit, fixSignals, warn });
+  const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
+  const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, warn });
+  const read = keepSzz(updated.lines, previous);
 
   const root = await cloneRoot(cwd, forge);
   let lines;
   if (root) {
-    lines = await addSzz(read, { dir: root, forge, warn });
+    // SZZ runs only on the lines with no szz yet. The commit-to-PR map still sees every line.
+    const done = await addSzz(read.filter((line) => line.szz === undefined), { dir: root, forge, warn, known: read });
+    const byNumber = new Map(done.map((line) => [line.number, line]));
+    lines = read.map((line) => byNumber.get(line.number) ?? line);
   } else {
-    lines = read.map((line) => ({ ...line, szz: null }));
+    lines = read.map((line) => ({ ...line, szz: line.szz ?? null }));
     stderr.write(`exhibit: note: SZZ did not run, because this folder is not a clone of ${options.repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`);
   }
 
@@ -56,13 +64,66 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
   const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
+  const mode = previous.length > 0 ? 'incremental' : 'full';
+  const requests = forge.requestCount();
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, mode, read: updated.read, requests }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
-    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n`);
+    const days = LOOK_BACK_MS / (24 * 60 * 60 * 1000);
+    const readText = mode === 'full'
+      ? `Read all ${updated.read} merged PRs from GitHub.`
+      : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
+    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText} Made ${requests} GitHub requests.\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n`);
   }
+}
+
+// Returns the lines of the old history file, so the run reads only what is new. Returns [] when
+// there is no file, or when the run must read every PR again: when the file is not JSON lines,
+// when a line does not fit the schema, as in a file from an older version of Exhibit, or when the
+// file holds PRs from another repo. `note` gets one line that says why.
+async function readPrevious(cwd, forge, note) {
+  let text;
+  try {
+    text = await readFile(join(cwd, OUTPUT), 'utf8');
+  } catch (error) {
+    // No file yet. ENOTDIR: .exhibit is not a folder, and the write says so later.
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
+    throw new ToolError(`could not read ${OUTPUT}: ${error.message}`);
+  }
+  const again = (why) => {
+    note(`history reads every merged PR again, because ${OUTPUT} ${why}.`);
+    return [];
+  };
+  const lines = [];
+  for (const [index, row] of text.split('\n').entries()) {
+    if (row.trim() === '') continue;
+    try {
+      lines.push(JSON.parse(row));
+    } catch {
+      return again(`has a line that is not JSON (line ${index + 1})`);
+    }
+  }
+  for (const line of lines) {
+    const problems = checkHistoryLine(line);
+    if (problems.length > 0) return again(`does not fit the history schema, as a file from an older version of Exhibit does (PR ${line.number ?? '?'} ${problems[0]})`);
+  }
+  const stranger = lines.find((line) => line.forge !== forge.name || !forge.isPullUrl(line.url));
+  if (stranger) return again(`holds PRs from another repo (PR ${stranger.number} is ${stranger.url}), not ${forge.repo}`);
+  return lines;
+}
+
+// Returns `lines` where a fix PR that was read again keeps its szz from the old file, so SZZ does
+// not run on it again. A PR merged once does not change its code, so its SZZ result stays true.
+// SZZ runs on a fix that the old file had as no fix, or with a null szz, as SZZ skipped it then.
+function keepSzz(lines, previous) {
+  const old = new Map(previous.map((line) => [line.number, line]));
+  return lines.map((line) => {
+    if (line.szz !== undefined) return line;
+    const before = old.get(line.number);
+    return before?.szz && line.classification.fix ? { ...line, szz: before.szz } : line;
+  });
 }
 
 function parseOptions(argv) {
@@ -70,12 +131,12 @@ function parseOptions(argv) {
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { repo: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' }, json: { type: 'boolean' } },
+      options: { repo: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' }, full: { type: 'boolean' }, json: { type: 'boolean' } },
       strict: true,
       allowPositionals: false
     }));
   } catch (error) {
-    throw new ToolError(`${error.message}. Usage: exhibit history --repo owner/name [--since YYYY-MM-DD] [--limit N] [--json]`);
+    throw new ToolError(`${error.message}. Usage: exhibit history --repo owner/name [--since YYYY-MM-DD] [--limit N] [--full] [--json]`);
   }
 
   if (values.repo === undefined) throw new ToolError('history needs --repo owner/name, for example --repo bfalkowski/Building58.');
@@ -93,7 +154,7 @@ function parseOptions(argv) {
     if (!/^\d+$/.test(values.limit) || limit < 1) throw new ToolError(`--limit must be a whole number of 1 or more, not "${values.limit}".`);
   }
 
-  return { repo: values.repo, since, limit, json: values.json === true };
+  return { repo: values.repo, since, limit, full: values.full === true, json: values.json === true };
 }
 
 // Returns the Date for a --since value, or null when it is not a real date. new Date() rolls a

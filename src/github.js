@@ -32,8 +32,11 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // that is not a rate limit then says which permission a fine-grained token may lack.
 // `getOne` returns the object at one path, or null for a status in its `emptyOn`.
 // `sleep`, `now` and `random` are parameters too, so tests can check a rate-limit wait without waiting.
+// `requestCount` says how many requests the client sent so far, each repeat after a wait too.
 export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
+  let requests = 0;
   async function request(url) {
+    requests++;
     try {
       return await fetch(url, {
         headers: {
@@ -97,7 +100,7 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return reply;
   }
 
-  return { getAll, getOne };
+  return { getAll, getOne, requestCount: () => requests };
 }
 
 function notShaped(url, shape) {
@@ -182,6 +185,10 @@ export function createGitHubForge({ repo, ...client }) {
     name: 'github',
     repo,
 
+    // How many requests this forge sent to GitHub so far. Each one counts against the token's
+    // rate limit, so history prints the count (spec 8.3).
+    requestCount: () => github.requestCount(),
+
     // GitHub lists at most this many files for one PR. A shorter list is complete.
     mostFilesListed: 3000,
 
@@ -190,6 +197,11 @@ export function createGitHubForge({ repo, ...client }) {
     isRemote(url) {
       const match = /github\.com[:/]+([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url);
       return match !== null && match[1].toLowerCase() === repo.toLowerCase();
+    },
+
+    // Returns true when `url` is the web page of a PR in this repo, as a history line's url is.
+    isPullUrl(url) {
+      return typeof url === 'string' && url.toLowerCase().startsWith(`https://github.com/${repo}/pull/`.toLowerCase());
     },
 
     // The PRs that were merged, in the order GitHub lists them. GitHub lists merged PRs with the
