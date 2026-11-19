@@ -62,6 +62,28 @@ test('title_after_key: skips only a key of letters, a hyphen and digits', () => 
   }
 });
 
+test('title_after_key: skips a key followed by a dash, a spaced colon or a comma, and more than one key', () => {
+  const signals = ['title_after_key:fix'];
+  const titles = ['T-170 - Fix the crash', '[T-170] - Fix the crash', 'T-170 : Fix the crash', 'T-170, T-171: Fix', 'T-170: [T-171] Fix', '#79: Fix the crash', '[#79] fix the crash'];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), { fix: true, fix_signal: 'title_after_key:fix' }, title);
+  }
+});
+
+test('title_after_key: a bare key still needs a mark or a space after it, and a dash needs a space before it', () => {
+  const signals = ['title_after_key:fix'];
+  for (const title of ['#79Fix the crash', 'T-170-Fix the crash', 'T-170, Add a fix', '#: fix', 'T-170 - Add prefix fixer']) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), notFix, title);
+  }
+});
+
+test('title_after_key: a word shaped like a key is skipped as a key, so "FIX-12: Add a page" is not a fix', () => {
+  for (const title of ['FIX-12: Add a page', 'fix-12: crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_key:fix']), notFix, title);
+    assert.deepEqual(classifyFix(pr({ title }), ['title:fix']), { fix: true, fix_signal: 'title:fix' }, title);
+  }
+});
+
 test('branch: matches a branch that starts with the prefix, in any case', () => {
   const signals = ['branch:fix/'];
   assert.deepEqual(classifyFix(pr({ branch: 'fix/crash' }), signals), { fix: true, fix_signal: 'branch:fix/' });

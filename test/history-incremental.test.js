@@ -285,9 +285,11 @@ test('a changed fix_signals classifies every kept line again, with no extra GitH
     [1, { fix: true, fix_signal: 'pr:1' }]
   ]);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
-  // The same 11 requests as the run with no change: the list, and 5 for each of PRs 3 and 4.
+  // The same cost as the run with no change: no REST request, and the same 3 GraphQL queries,
+  // the list and one query each for PRs 3 and 4.
   const summary = JSON.parse(changed.stdout);
-  assert.equal(summary.github.requests, 11);
+  assert.deepEqual([summary.github.requests, summary.github.graphql], [0, { queries: 3, points: 3 }]);
+  assert.deepEqual(summary.github.graphql, JSON.parse(unchanged.stdout).github.graphql);
   assert.deepEqual([...changed.asked].sort(), [...unchanged.asked].sort());
   assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
   assert.match(changed.stderr, /exhibit: note: the fix signals now classify 3 PRs in \.exhibit\/history\.jsonl another way: PR 4 is now a fix \(pr:4\), PR 2 is now a fix \(branch:topic-2\), PR 1 is now a fix \(pr:1\)\.\n/);
