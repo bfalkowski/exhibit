@@ -138,6 +138,20 @@ test('SZZ on the fixture repo', async (t) => {
     assert.ok(asked.includes(repo.onMain.get(12)[0]));
   });
 
+  await t.test("a PR from a fork: SZZ asks the repo the PR merged into, not the fork", () => {
+    const fix = byNumber.get(14);
+    const [link] = fix.szz.links;
+    assert.equal(link.pr, 13);
+    // The line was written on the fork's branch, so its commit is not a merge SHA, and SZZ must
+    // ask the forge which PR holds it.
+    const forkCommit = git(repo.dir, ['rev-list', '-n', '1', 'refs/pull/13/head']);
+    assert.equal(repo.forks.get(13), 'dee/shop');
+    assert.equal(link.lines[0].blame.commit, forkCommit);
+    assert.ok(fetch.calls.some((call) => call.key === `/repos/${REPO}/commits/${forkCommit}/pulls?per_page=100`));
+    // The fetch throws on any request to a fork. This checks that nothing hid such a throw.
+    assert.deepEqual(fetch.forkCalls, []);
+  });
+
   await t.test('PRs that are not fixes get szz: null', () => {
     for (const line of lines.filter((l) => !l.classification.fix)) assert.equal(line.szz, null, `PR ${line.number}`);
   });
@@ -482,7 +496,7 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
   assert.equal(lines[0].szz, null);
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /^This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong\. Run git fetch --unshallow, then run history again\.$/);
-  assert.match(warnings[1], /^PR 12: SZZ skipped, because git failed: .+/);
+  assert.match(warnings[1], new RegExp(`^PR ${newest.number}: SZZ skipped, because git failed: .+`));
 
   // The fix after the skipped one still gets the same links as in the full clone.
   const [full] = await addSzz([older], { dir: repo.dir, forge });
