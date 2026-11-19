@@ -118,6 +118,20 @@ test('a failed request for the file count gives a warning, not a failed run', (t
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
+test('a rate limit on the request for the file count gives a warning, no wait, and exit 0', (t) => {
+  const big = writeBigFixture({ countReplies: { 9: { status: 403, headers: { 'retry-after': '3600' }, body: { message: 'API rate limit exceeded' } } } });
+  t.after(big.cleanup);
+  const run = exhibit(t, ['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(
+    run.stderr,
+    'exhibit: warning: PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 403 (API rate limit exceeded) for /repos/acme/big/pulls/9. The token may lack access, or the rate limit is used up: check the token, or wait and try again.\n' + notAClone('acme/big')
+  );
+  // 76 requests, as in the run with no rate limit: the count request went once and was not asked again.
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 76), mode: 'full', read: 3 });
+  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+});
+
 test('outside a clone, history writes szz: null on every line and says so in one line', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/widgets']);
   assert.equal(run.status, 0, run.stderr);

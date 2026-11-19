@@ -214,6 +214,44 @@ test('readHistory warns that the count is unknown, and goes on, when the request
   ]);
 });
 
+// The warning when the request for PR 9's count hits a rate limit that history does not wait out.
+const COUNT_LIMITED = (status) =>
+  `PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered ${status} (API rate limit exceeded) for /repos/acme/big/pulls/9. The token may lack access, or the rate limit is used up: check the token, or wait and try again.`;
+const RATE_LIMITED = { message: 'API rate limit exceeded' };
+
+test('readHistory warns that the count is unknown, and does not wait, when GitHub asks for a wait longer than 15 minutes', async (t) => {
+  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
+  const big = writeBigFixture({ countReplies: { 9: { status: 403, headers: { 'retry-after': '3600' }, body: RATE_LIMITED } } });
+  t.after(big.cleanup);
+  const fetch = replayFetch(big.path);
+  const waits = [];
+  const warnings = [];
+  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch, sleep: async (ms) => { waits.push(ms); } });
+  const lines = await readHistory({ forge, warn: (text) => warnings.push(text) });
+
+  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+  assert.deepEqual(warnings, [COUNT_LIMITED(403)]);
+  assert.deepEqual(waits, []);
+  assert.equal(fetch.calls.filter((c) => c.key === '/repos/acme/big/pulls/9').length, 1);
+});
+
+test('readHistory warns that the count is unknown, and goes on, when the count request gets a 429 four times', async (t) => {
+  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
+  // The replay gives the same 429 each time, so the three waits all end in another 429.
+  const big = writeBigFixture({ countReplies: { 9: { status: 429, headers: { 'retry-after': '1' }, body: RATE_LIMITED } } });
+  t.after(big.cleanup);
+  const fetch = replayFetch(big.path);
+  const waits = [];
+  const warnings = [];
+  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch, sleep: async (ms) => { waits.push(ms); } });
+  const lines = await readHistory({ forge, warn: (text) => warnings.push(text) });
+
+  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+  assert.deepEqual(warnings, [COUNT_LIMITED(429)]);
+  assert.deepEqual(waits, [1000, 1000, 1000]);
+  assert.equal(fetch.calls.filter((c) => c.key === '/repos/acme/big/pulls/9').length, 4);
+});
+
 test('getOne turns a reply that is not a JSON object into a tool error', async () => {
   const { createGitHub } = await import('../src/github.js');
   const { ToolError } = await import('../src/tool-error.js');
