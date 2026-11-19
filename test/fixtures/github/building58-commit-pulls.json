@@ -1,0 +1,32 @@
+{
+  "/repos/bfalkowski/Building58/commits/18ce79d6f068f5fc57cf63497ea5f398356eab68/pulls?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "number": 82,
+        "state": "closed",
+        "title": "T-143: Keep seated hands clear while the chair is turned",
+        "merged_at": "2026-11-19T03:16:37Z",
+        "merge_commit_sha": "4a7b4f9a41417ce96c74415b6ca7906c35e10ec6",
+        "base": {
+          "ref": "main",
+          "sha": "d763adc51e7225538db453b4e36baf15dd35b6c2"
+        },
+        "head": {
+          "ref": "task/keep-seated-hands-clear-while-the-chair-d80716",
+          "sha": "18ce79d6f068f5fc57cf63497ea5f398356eab68"
+        }
+      }
+    ]
+  },
+  "/repos/bfalkowski/Building58/commits/0000000000000000000000000000000000000001/pulls?per_page=100": {
+    "status": 422,
+    "headers": {},
+    "body": {
+      "message": "No commit found for SHA: 0000000000000000000000000000000000000001",
+      "documentation_url": "https://docs.github.com/rest/commits/commits#list-pull-requests-associated-with-a-commit",
+      "status": "422"
+    }
+  }
+}
