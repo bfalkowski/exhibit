@@ -387,3 +387,41 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
   assert.ok(full.szz.links.length > 0);
   assert.deepEqual(lines[1].szz, full.szz);
 });
+
+// A repo with one commit, then a fix commit that changes a JSDoc text row whose block opens and
+// closes outside the hunk, turns the tabs of a Python function into spaces, and makes one real
+// change in each file. The JavaScript file has a space in its name.
+function repoWithCommentAndIndentFix() {
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-rules-'));
+  git(dir, ['init', '--quiet', '--initial-branch=main']);
+  const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
+  const write = (files) => {
+    for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), text);
+    git(dir, ['add', '.']);
+  };
+  write({
+    'pad label.js': '/**\n * Pads a label.\n */\nexport const pad = (s) => s.padEnd(4);\n',
+    'total.py': 'def total(xs):\n\tt = 0\n\tfor x in xs:\n\t\tt += x\n\treturn t\n'
+  });
+  commit('Add pad and total');
+  write({
+    'pad label.js': '/**\n * Pads a label on the right.\n */\nexport const pad = (s) => s.padEnd(8);\n',
+    'total.py': 'def total(xs):\n    t = 0\n    for x in xs:\n        t += x * 2\n    return t\n'
+  });
+  commit('Fix pad and total');
+  return dir;
+}
+
+test('SZZ reads the files to drop a JSDoc text row and a Python line that only changed tabs to spaces', async (t) => {
+  const dir = repoWithCommentAndIndentFix();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
+  const [line] = await addSzz([fix], { dir, forge: noPrs() });
+  assert.deepEqual(line.szz.unlinked_lines.map((l) => [l.path, l.line]), [['pad label.js', 4], ['total.py', 4]]);
+  assert.deepEqual(line.szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [
+    ['pad label.js', 2, 'comment'],
+    ['total.py', 2, 'whitespace'],
+    ['total.py', 3, 'whitespace'],
+    ['total.py', 5, 'whitespace']
+  ]);
+});
