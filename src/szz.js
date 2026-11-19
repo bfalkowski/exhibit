@@ -51,15 +51,21 @@ export async function cloneRoot(dir, repo) {
 // Returns a function that maps a commit SHA to the number of the PR that brought it to the main
 // branch, or null when no merged PR holds it. It looks first at the merge SHAs in `lines` (a
 // squash merge's one commit), then asks GitHub which PRs hold the commit, and keeps each answer.
+// A merge SHA decides only for a PR into the default branch. A PR squash merged into a release
+// branch did not bring its commit to main, so GitHub is asked about that commit.
 export function createPrFinder({ lines, repo, github }) {
-  const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line.number]));
+  const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line]));
   const asked = new Map();
   let mainBranch = null;
-  // The repo's default branch, asked for once and only when a commit sits in two merged PRs.
+  // The repo's default branch, asked for once, and only when a merge SHA or two merged PRs need it.
   const defaultBranch = () => (mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch));
+  const find = async (sha) => {
+    const line = byMergeSha.get(sha);
+    if (line && line.base_ref === (await defaultBranch())) return line.number;
+    return askGitHub(github, repo, sha, defaultBranch);
+  };
   return (sha) => {
-    if (byMergeSha.has(sha)) return Promise.resolve(byMergeSha.get(sha));
-    if (!asked.has(sha)) asked.set(sha, askGitHub(github, repo, sha, defaultBranch));
+    if (!asked.has(sha)) asked.set(sha, find(sha));
     return asked.get(sha);
   };
 }

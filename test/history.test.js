@@ -29,6 +29,7 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
     author: 'dev7',
     labels: ['feature', 'cache'],
     merged_at: '2026-03-05T12:00:00Z',
+    base_ref: 'main',
     base_sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7',
     merge_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7',
     files: [

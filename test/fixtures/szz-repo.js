@@ -300,6 +300,7 @@ function build(dir) {
       author: pr.author,
       labels: pr.fix ? ['bug'] : [],
       merged_at: mergedAt,
+      base_ref: 'main',
       base_sha: opened.get(number),
       merge_sha: run(['rev-parse', 'main']),
       files: diffFiles(run(['diff', '--numstat', `${opened.get(number)}...${head}`])),

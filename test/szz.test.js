@@ -148,11 +148,11 @@ test('commit-to-PR mapping', async (t) => {
     return { fetch, github: createGitHub({ token: 't', fetch }) };
   };
 
-  await t.test('a merge SHA in the history maps to its PR with no API request', async () => {
+  await t.test('a merge SHA in the history of a PR into the default branch maps to that PR, with no request for its pulls', async () => {
     const { fetch, github: gh } = github();
-    const find = createPrFinder({ lines: [{ number: 41, merge_sha: 'a'.repeat(40) }], repo, github: gh });
+    const find = createPrFinder({ lines: [{ number: 41, base_ref: 'main', merge_sha: 'a'.repeat(40) }], repo, github: gh });
     assert.equal(await find('a'.repeat(40)), 41);
-    assert.equal(fetch.calls.length, 0);
+    assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58']);
   });
 
   await t.test('any other commit maps through the API to the merged PR that holds it', async () => {
@@ -172,7 +172,7 @@ test('commit-to-PR mapping', async (t) => {
   await t.test('one merged PR wins with no request for the default branch', async () => {
     const { fetch, github: gh } = github();
     const find = createPrFinder({ lines: [], repo, github: gh });
-    await find('18ce79d6f068f5fc57cf63497ea5f398356eab68');
+    assert.equal(await find('18ce79d6f068f5fc57cf63497ea5f398356eab68'), 82);
     assert.deepEqual(fetch.calls.map((call) => call.key), ['/repos/bfalkowski/Building58/commits/18ce79d6f068f5fc57cf63497ea5f398356eab68/pulls?per_page=100']);
   });
 });
@@ -198,6 +198,19 @@ test('commit-to-PR mapping across base branches', async (t) => {
     const { github: gh } = github();
     const find = createPrFinder({ lines: [], repo, github: gh });
     assert.equal(await find('2'.repeat(40)), 40);
+  });
+
+  // The lines a real history run has: PR 30 is in the history too, and 1111111 is its squash
+  // commit on release. The merge SHA must not decide before the base branch is checked.
+  await t.test('a merge SHA of a PR into another branch does not decide: the PR into the default branch wins', async () => {
+    const { github: gh } = github();
+    const lines = [
+      { number: 31, base_ref: 'main', merge_sha: '3'.repeat(40) },
+      { number: 30, base_ref: 'release', merge_sha: '1'.repeat(40) }
+    ];
+    const find = createPrFinder({ lines, repo, github: gh });
+    assert.equal(await find('1'.repeat(40)), 31);
+    assert.equal(await find('3'.repeat(40)), 31);
   });
 
   await t.test('the default branch is asked for once', async () => {

@@ -18,7 +18,7 @@ function git(dir, args) {
 function commitPullsReplies({ dir, history, onMain }, repo) {
   const prsOf = new Map();
   const add = (sha, pr) => prsOf.set(sha, [...(prsOf.get(sha) ?? []), pr]);
-  const replies = {};
+  const replies = { [`/repos/${repo}`]: { status: 200, headers: {}, body: { full_name: repo, default_branch: 'main' } } };
   for (const pr of history) {
     const branch = git(dir, ['rev-list', `${pr.base_sha}..refs/pull/${pr.number}/head`]).split('\n');
     for (const sha of branch) add(sha, pr);
