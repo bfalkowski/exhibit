@@ -9,16 +9,17 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gitEnv } from './git-env.js';
 
 function git(dir, args) {
-  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitEnv(dir) }).trim();
 }
 
 // Maps each "pull requests for a commit" path to its recorded reply.
 function commitPullsReplies({ dir, history, onMain }, repo) {
   const prsOf = new Map();
   const add = (sha, pr) => prsOf.set(sha, [...(prsOf.get(sha) ?? []), pr]);
-  const replies = {};
+  const replies = { [`/repos/${repo}`]: { status: 200, headers: {}, body: { full_name: repo, default_branch: 'main' } } };
   for (const pr of history) {
     const branch = git(dir, ['rev-list', `${pr.base_sha}..refs/pull/${pr.number}/head`]).split('\n');
     for (const sha of branch) add(sha, pr);
@@ -28,7 +29,7 @@ function commitPullsReplies({ dir, history, onMain }, repo) {
     replies[`/repos/${repo}/commits/${sha}/pulls?per_page=100`] = {
       status: 200,
       headers: {},
-      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha }))
+      body: prs.map((pr) => ({ number: pr.number, state: 'closed', merged_at: pr.merged_at, merge_commit_sha: pr.merge_sha, base: { ref: 'main', sha: pr.base_sha } }))
     };
   }
   return replies;

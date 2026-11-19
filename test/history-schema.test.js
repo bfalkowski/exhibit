@@ -12,6 +12,7 @@ const good = () => ({
   author: 'dev7',
   labels: ['feature'],
   merged_at: '2026-03-05T12:00:00Z',
+  base_ref: 'main',
   base_sha: 'b'.repeat(40),
   merge_sha: 'a'.repeat(40),
   files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],

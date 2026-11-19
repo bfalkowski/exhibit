@@ -1,6 +1,6 @@
 import { commentReviews } from './comment-reviews.js';
 import { classifyFix, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
-import { createGitHub } from './github.js';
+import { createGitHub, PERMISSIONS } from './github.js';
 import { ToolError } from './tool-error.js';
 
 // How many PRs ask for their files, reviews, comments, check runs and commit statuses at the same
@@ -14,11 +14,13 @@ const LISTED_FILES_AT_MOST = 3000;
 // merge first. `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
 // Only the kept PRs ask for their files, reviews, comments, check runs and commit statuses.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification`. The lines fill the spec 8.3 fields this version
-// knows: the later fields (evidence_section, szz, exhibit) are left out.
+// knows: the later fields (evidence_section, szz, exhibit) are left out. The schema requires szz,
+// so the history command (src/commands/history.js) adds szz to each line before it checks and
+// writes the lines.
 // `warn` gets one text for each PR whose files list GitHub cut short, in the order of the lines.
 export async function readHistory({ repo, token, fetch, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   const github = createGitHub({ token, fetch });
-  const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`);
+  const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`, { permission: PERMISSIONS.pullRequests });
 
   let merged = pulls.filter((pr) => pr.merged_at !== null);
   if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
@@ -27,15 +29,15 @@ export async function readHistory({ repo, token, fetch, since, limit, fixSignals
 
   const read = await mapInBatches(merged, PRS_AT_ONCE, async (pr) => {
     const [files, reviews, comments, checkRuns, statuses] = await Promise.all([
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`),
-      github.getAll(`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`),
+      github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`, { permission: PERMISSIONS.pullRequests }),
+      github.getAll(`/repos/${repo}/pulls/${pr.number}/reviews?per_page=100`, { permission: PERMISSIONS.pullRequests }),
       // The PR's comments, where some rooms post their reviews (spec 8.3).
-      github.getAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`),
+      github.getAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`, { permission: PERMISSIONS.pullRequests }),
       // The check runs and commit statuses on the PR's last head commit: the CI result the PR was
       // merged with. Some CI services post check runs, and some post the older commit statuses.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`, { listField: 'check_runs' }),
+      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/check-runs?per_page=100`, { listField: 'check_runs', permission: PERMISSIONS.checks }),
       // The combined status: GitHub gives only the newest status for each context.
-      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses' })
+      github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses', permission: PERMISSIONS.commitStatuses })
     ]);
     const ci = [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     return { line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals), warning: await checkFilesComplete(github, repo, pr.number, files.length) };
@@ -52,7 +54,7 @@ async function checkFilesComplete(github, repo, number, listed) {
   if (listed < LISTED_FILES_AT_MOST) return null;
   let changed;
   try {
-    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`));
+    ({ changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`, { permission: PERMISSIONS.pullRequests }));
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     return `PR ${number} has ${listed} files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
@@ -74,6 +76,7 @@ function toHistoryLine(pr, files, reviews, comments, ci, fixSignals) {
     author: pr.user?.login ?? null,
     labels,
     merged_at: pr.merged_at,
+    base_ref: pr.base.ref,
     base_sha: pr.base.sha,
     merge_sha: pr.merge_commit_sha,
     files: files.map((file) => ({ path: file.filename, additions: file.additions, deletions: file.deletions })),

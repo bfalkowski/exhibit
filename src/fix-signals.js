@@ -74,7 +74,9 @@ function checkSignals(signals) {
     const value = signal.slice(type.length + 1);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
     // A space at the start of the value can never match. A space at the end is easy to miss,
-    // and only a title could match it. So refuse both, with a message that shows the fix.
+    // and only a title could match it: GitHub trims the spaces from a label name when it
+    // creates or renames the label, and git refuses a space in a branch name. So refuse
+    // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
   });
 }

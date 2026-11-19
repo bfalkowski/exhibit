@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyFix, DEFAULT_FIX_SIGNALS, readFixSignals } from '../src/fix-signals.js';
@@ -55,8 +55,15 @@ test('a PR with no matching signal is not a fix', () => {
 });
 
 // readFixSignals reads evidence.yml in a folder.
+// Each folder is removed when the test that made it ends.
+const madeFolders = [];
+afterEach(() => {
+  for (const dir of madeFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 function folderWith(evidenceYml) {
   const cwd = mkdtempSync(join(tmpdir(), 'exhibit-signals-'));
+  madeFolders.push(cwd);
   if (evidenceYml !== undefined) writeFileSync(join(cwd, 'evidence.yml'), evidenceYml);
   return cwd;
 }
