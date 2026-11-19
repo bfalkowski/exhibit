@@ -205,10 +205,13 @@ test('a fix PR that SZZ skipped is listed with no link, and counted in the summa
 
 test('the plain text of a defect shows control characters from a PR title as "?"', () => {
   const lines = shopLines().map((line) => (line.number === 12 ? { ...line, title: 'Fix \u001b[31mred\u0007 text' } : line));
-  const fix = escapedDefects(lines)[0];
+  const fix = escapedDefects(lines).find((line) => line.number === 12);
   assert.match(defectText(fix, lines), /^Fix PR 12: Fix \?\[31mred\? text\n/);
 });
 
 test('escapedDefects lists the fix PRs with a link, newest first, as the report does', () => {
-  assert.deepEqual(escapedDefects(shopLines()).map((line) => line.number), [12, 7, 6]);
+  const lines = shopLines();
+  const inReport = [...report(lines).markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1]));
+  assert.deepEqual(escapedDefects(lines).map((line) => line.number), inReport);
+  assert.ok(inReport.length >= 3);
 });

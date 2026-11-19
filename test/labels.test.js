@@ -8,7 +8,9 @@ import { checkLabelLine, defectId, labelDefects } from '../src/labels.js';
 import { SHOP_HISTORY } from './fixtures/report/shop-history.js';
 
 const NOW = new Date('2026-11-19T10:00:00Z');
-const shopText = () => readFileSync(SHOP_HISTORY, 'utf8');
+// The shop fixture's PRs 1 to 12, with its escaped defects D-012, D-007 and D-006. The fixture
+// can gain PRs, so the tests pin this part of it.
+const shopText = () => readFileSync(SHOP_HISTORY, 'utf8').trimEnd().split('\n').filter((line) => JSON.parse(line).number <= 12).map((line) => line + '\n').join('');
 
 // A new folder with .exhibit/history.jsonl holding `text`. It is removed when test t ends.
 function folderWithHistory(t, text = shopText()) {

@@ -14,6 +14,9 @@ import { SHOP_HISTORY } from './fixtures/report/shop-history.js';
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
 const RUN_HISTORY_FIRST = /Run exhibit history first/;
+// The shop fixture's PRs 1 to 12, with its escaped defects D-012, D-007 and D-006. The fixture
+// can gain PRs, so the tests pin this part of it.
+const shopText = () => readFileSync(SHOP_HISTORY, 'utf8').trimEnd().split('\n').filter((line) => JSON.parse(line).number <= 12).map((line) => line + '\n').join('');
 
 function newFolder(t) {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-label-'));
@@ -39,7 +42,7 @@ test('label with no history file exits 2 and says to run exhibit history first',
 });
 
 test('label on a history with no SZZ links exits 2 and says to run exhibit history first', (t) => {
-  const noLinks = readFileSync(SHOP_HISTORY, 'utf8').trimEnd().split('\n').map((line) => JSON.stringify({ ...JSON.parse(line), szz: null }) + '\n').join('');
+  const noLinks = shopText().trimEnd().split('\n').map((line) => JSON.stringify({ ...JSON.parse(line), szz: null }) + '\n').join('');
   const cwd = withHistory(t, noLinks);
   const run = label(cwd);
   assert.equal(run.status, 2);
@@ -49,7 +52,7 @@ test('label on a history with no SZZ links exits 2 and says to run exhibit histo
 });
 
 test('typed answers are written as labels, and --json prints the summary', (t) => {
-  const cwd = withHistory(t, readFileSync(SHOP_HISTORY, 'utf8'));
+  const cwd = withHistory(t, shopText());
   // D-012: an empty answer is asked again. D-007: skipped. D-006: picks category 1 from the list.
   const typed = ['', 'Percent taken as money', 'arithmetic', 'A test with a 10% discount', 's', 'Tax rounded too early', '1', 'A rounding test'].join('\n') + '\n';
   const run = label(cwd, ['--json'], typed);
@@ -68,7 +71,7 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
 });
 
 test('the end of the typed input quits and keeps the labels given so far', (t) => {
-  const cwd = withHistory(t, readFileSync(SHOP_HISTORY, 'utf8'));
+  const cwd = withHistory(t, shopText());
   const run = label(cwd, [], 'Percent taken as money\narithmetic\nA test\nhalf an answer\n');
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Labeled 1 escaped defect\. Skipped 0\. 2 still have no code\. Run exhibit label again to label them\./);
@@ -76,7 +79,7 @@ test('the end of the typed input quits and keeps the labels given so far', (t) =
 });
 
 test('a label that fails the schema exits 2, and the file keeps its earlier lines', (t) => {
-  const cwd = withHistory(t, readFileSync(SHOP_HISTORY, 'utf8'));
+  const cwd = withHistory(t, shopText());
   const run = label(cwd, [], `first\nx\na test\n${'y'.repeat(201)}\nx\na test\n`);
   assert.equal(run.status, 2);
   assert.match(run.stderr, /the label for D-007 does not fit the labels schema, so it was not written/);
@@ -95,20 +98,21 @@ test('running exhibit history twice on the fixture repo gives the same defect id
     assert.equal(run.status, 0, run.stderr);
   };
   // Skips every defect, so it writes nothing, and returns the ids it showed.
-  const shownIds = () => [...label(repo.dir, [], 's\ns\ns\n').stdout.matchAll(/^(D-\d+), /gm)].map((m) => m[1]);
+  const shownIds = () => [...label(repo.dir, [], 's\n'.repeat(20)).stdout.matchAll(/^(D-\d+), /gm)].map((m) => m[1]);
 
   history([]);
   const first = shownIds();
-  assert.deepEqual(first, ['D-012', 'D-007', 'D-006']);
+  assert.ok(first.includes('D-012') && first.includes('D-007') && first.includes('D-006'), first.join(' '));
   history(['--full']);
   assert.deepEqual(shownIds(), first);
 
-  const labeled = label(repo.dir, [], 'Percent taken as money\narithmetic\nA test\nq\n');
+  // Label the first defect shown, then quit.
+  const labeled = label(repo.dir, [], 'A code\na category\nA test\nq\n');
   assert.equal(labeled.status, 0, labeled.stderr);
   history(['--full']);
-  // D-012 keeps its label after the new history, so label shows only the other two.
-  assert.deepEqual(shownIds(), ['D-007', 'D-006']);
-  assert.deepEqual(readLabels(repo.dir).map((l) => l.id), ['D-012']);
+  // The labeled defect keeps its label after the new history, so label shows only the others.
+  assert.deepEqual(shownIds(), first.slice(1));
+  assert.deepEqual(readLabels(repo.dir).map((l) => l.id), [first[0]]);
 });
 
 test('label refuses an unknown option with exit 2', (t) => {
