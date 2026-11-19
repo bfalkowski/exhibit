@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { gitEnv } from './git-env.js';
 
 const START = Date.UTC(2026, 0, 5, 9, 0, 0);
 const STEP = 60 * 60 * 1000;
@@ -233,18 +234,14 @@ function build(dir) {
     return execFileSync('git', args, {
       cwd: dir,
       encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH,
-        HOME: dir,
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_NOSYSTEM: '1',
+      env: gitEnv(dir, {
         GIT_AUTHOR_NAME: author,
         GIT_AUTHOR_EMAIL: `${author}@example.com`,
         GIT_AUTHOR_DATE: date,
         GIT_COMMITTER_NAME: author,
         GIT_COMMITTER_EMAIL: `${author}@example.com`,
         GIT_COMMITTER_DATE: date
-      }
+      })
     }).trim();
   };
   const commit = (message, files, author) => {
