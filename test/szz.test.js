@@ -11,14 +11,19 @@ import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
+import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 import { commitPullsFetch } from './fixtures/github/szz-replies.js';
 
 const REPO = 'fixture/shop';
 // cloneRoot asks only the forge's remote rule, so this forge never fetches.
 const SHOP_FORGE = createGitHubForge({ repo: REPO, token: 't', fetch: async () => { throw new Error('cloneRoot must not fetch'); } });
 
+// src/szz.js runs git in this process with process.env. Drop the env that a git hook sets, so
+// git reads the fixture repo and not the repo that runs the hook.
+dropGitEnv();
+
 function git(dir, args) {
-  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitEnv(dir) }).trim();
 }
 
 // Builds the fixture repo, runs SZZ on its history with a GitHub that answers from the repo's

@@ -4,17 +4,11 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
+import { gitEnv } from './fixtures/git-env.js';
 
-// Give git a clean env, as the builder does. The runner's git config could
-// change what diff and blame print, through settings such as diff.noprefix or
-// blame.ignoreRevsFile. Git sets GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE when
-// it runs a hook, so npm test in a hook would read the wrong repo if they got through.
+// Give git a clean env, as the builder does: see gitEnv.
 function git(dir, args) {
-  return execFileSync('git', args, {
-    cwd: dir,
-    encoding: 'utf8',
-    env: { PATH: process.env.PATH, HOME: dir, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
-  });
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitEnv(dir) });
 }
 
 // The commit and its parents: one parent for a squash commit, two for a merge commit.
