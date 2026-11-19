@@ -112,11 +112,10 @@ async function hasCommit(dir, sha) {
   }
 }
 
-// The fix landed on the main branch as one commit: a merge commit or a squash commit. Its first
-// parent is the main branch just before the fix. SZZ takes the lines the fix deleted or changed
-// on that side, blames them there, and groups them by the PR that last changed each one.
+// SZZ blames the main branch just before the fix, takes the lines the fix deleted or changed
+// there, and groups them by the PR that last changed each one.
 async function szzForFix(dir, fix, findPr) {
-  const blamed = (await git(dir, ['rev-parse', `${fix.merge_sha}^1`])).trim();
+  const blamed = await mainBeforeFix(dir, fix, findPr);
   const removed = parseRemovedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
 
   const blamedLines = [];
@@ -135,6 +134,22 @@ async function szzForFix(dir, fix, findPr) {
     .map(([pr, prLines]) => ({ pr, confidence: prLines.length / blamedLines.length, lines: prLines }))
     .sort((a, b) => b.confidence - a.confidence || a.pr - b.pr);
   return { blamed_commit: blamed, links, unlinked_lines: unlinked };
+}
+
+// Returns the commit on the main branch just before the fix. A merge commit or a squash commit
+// puts the fix on main as one commit, so that is the first parent of merge_sha. "Rebase and
+// merge" copies each of the fix's commits onto main, and merge_sha is only the last copy. So
+// walk back along main while the parent commit belongs to the fix PR too. For a merge commit or
+// a squash commit, the parent is another PR's commit, so the walk stops at once.
+async function mainBeforeFix(dir, fix, findPr) {
+  let first = fix.merge_sha;
+  for (;;) {
+    const parents = (await git(dir, ['rev-list', '--parents', '-n', '1', first])).trim().split(' ').slice(1);
+    if (parents.length !== 1) break;
+    if ((await findPr(parents[0])) !== fix.number) break;
+    first = parents[0];
+  }
+  return (await git(dir, ['rev-parse', `${first}^1`])).trim();
 }
 
 // Reads a `git diff -U0` and returns, for each old file path, the old line numbers the diff
