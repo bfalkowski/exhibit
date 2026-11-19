@@ -182,9 +182,11 @@ test('readHistory matches a branch signal against the PR head branch', async () 
   ]);
 });
 
-test('readHistory warns when a PR changed more files than GitHub listed, and only then asks for the PR', async () => {
+test('readHistory warns when a PR changed more files than GitHub listed, and only then asks for the PR', async (t) => {
   const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
-  const fetch = replayFetch(writeBigFixture());
+  const big = writeBigFixture();
+  t.after(big.cleanup);
+  const fetch = replayFetch(big.path);
   const warnings = [];
   const lines = await readHistory({ repo: 'acme/big', token: 't', fetch, warn: (text) => warnings.push(text) });
 
@@ -192,6 +194,19 @@ test('readHistory warns when a PR changed more files than GitHub listed, and onl
   assert.deepEqual(warnings, ['PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.']);
   const prCalls = fetch.calls.filter((c) => /\/pulls\/\d+$/.test(c.key)).map((c) => c.key);
   assert.deepEqual(prCalls.sort(), ['/repos/acme/big/pulls/8', '/repos/acme/big/pulls/9']);
+});
+
+test('readHistory warns that the count is unknown, and goes on, when the request for one PR fails', async (t) => {
+  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
+  const big = writeBigFixture({ unreadable: [9] });
+  t.after(big.cleanup);
+  const warnings = [];
+  const lines = await readHistory({ repo: 'acme/big', token: 't', fetch: replayFetch(big.path), warn: (text) => warnings.push(text) });
+
+  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+  assert.deepEqual(warnings, [
+    'PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 500 (Server Error) for /repos/acme/big/pulls/9. GitHub had a problem: try again later.'
+  ]);
 });
 
 test('getOne turns a reply that is not a JSON object into a tool error', async () => {

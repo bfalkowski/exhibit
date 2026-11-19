@@ -8,7 +8,7 @@
     "exhibit": "bin/exhibit.js"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "lint": "eslint .",
     "secrets": "node scripts/check-secrets.js --all"
   },
