@@ -47,11 +47,14 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
 
   await writeAtomically(join(cwd, OUTPUT), lines.map((line) => JSON.stringify(line) + '\n').join(''));
 
-  const szz = root ? { fix_prs: lines.filter((line) => line.classification.fix).length, linked: lines.filter((line) => line.szz?.links.length > 0).length } : null;
+  // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
+  const fixes = lines.filter((line) => line.classification.fix);
+  const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
   if (options.json) {
     stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz }) + '\n');
   } else {
-    const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs.` : '';
+    const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
+    const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
     stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n`);
   }
 }

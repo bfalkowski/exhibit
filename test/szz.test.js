@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -304,14 +304,25 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
+  t.after(() => rmSync(shallow, { recursive: true, force: true }));
   git(shallow, ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.']);
   // The newest fix is the clone's one commit, so its parent is missing.
   const newest = repo.history.at(-1);
+  // Fetch an older fix with all of its history. The clone stays shallow at the newest fix.
+  const older = repo.history.find((pr) => pr.number === 9);
+  git(shallow, ['fetch', '--quiet', 'origin', older.merge_sha]);
+  assert.equal(git(shallow, ['rev-parse', '--is-shallow-repository']), 'true');
+
   const warnings = [];
   const github = createGitHub({ token: 't', fetch: commitPullsFetch(repo, REPO) });
-  const [line] = await addSzz([newest], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
-  assert.equal(line.szz, null);
+  const lines = await addSzz([newest, older], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
+  assert.equal(lines[0].szz, null);
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /^This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong\. Run git fetch --unshallow, then run history again\.$/);
   assert.match(warnings[1], /^PR 12: SZZ skipped, because git failed: .+/);
+
+  // The fix after the skipped one still gets the same links as in the full clone.
+  const [full] = await addSzz([older], { dir: repo.dir, repo: REPO, github });
+  assert.ok(full.szz.links.length > 0);
+  assert.deepEqual(lines[1].szz, full.szz);
 });

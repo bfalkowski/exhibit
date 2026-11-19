@@ -251,7 +251,7 @@ One escaped defect per line, with these fields:
 5. Drop introducing commits that are newer than the bug report, when the bug report has a date. *Not built yet: ticket 8.*
 6. Give each link a confidence score: the number of the fix's lines that point to that PR, divided by all of the fix's blamed lines. Unlinked lines count in the total, so the scores add up to 1 only when every line has a PR.
 
-When a fix's `merge_sha` is not in the clone, or a git command fails for that fix, Exhibit writes `szz: null` for that PR, prints a warning that names it and the reason, and goes on with the other PRs. In a shallow clone, such as the default checkout in GitHub Actions, it prints one warning first: blame there can give old lines to the shallow boundary commit, so links can be wrong. A change to a submodule pointer has no lines, so SZZ skips it.
+When a fix's `merge_sha` is not in the clone, or a git command fails for that fix, Exhibit writes `szz: null` for that PR, prints a warning that names it and the reason, and goes on with the other PRs. The summary at the end counts these skipped fix PRs, for example "SZZ found links for 0 of 1 fix PRs (1 skipped)", and `--json` gives the count as `szz.skipped`. In a shallow clone, such as the default checkout in GitHub Actions, it prints one warning first: blame there can give old lines to the shallow boundary commit, so links can be wrong. A change to a submodule pointer has no lines, so SZZ skips it.
 
 Every link is shown with its lines and blame output. In `exhibit label`, the person can reject it.
 

@@ -14,7 +14,9 @@ const LISTED_FILES_AT_MOST = 3000;
 // merge first. `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
 // Only the kept PRs ask for their files, reviews, comments, check runs and commit statuses.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification`. The lines fill the spec 8.3 fields this version
-// knows: the later fields (evidence_section, szz, exhibit) are left out.
+// knows: the later fields (evidence_section, szz, exhibit) are left out. The schema requires szz,
+// so the history command (src/commands/history.js) adds szz to each line before it checks and
+// writes the lines.
 // `warn` gets one text for each PR whose files list GitHub cut short, in the order of the lines.
 export async function readHistory({ repo, token, fetch, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   const github = createGitHub({ token, fetch });
