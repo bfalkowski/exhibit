@@ -143,4 +143,8 @@ test('a lazy line goes on a quote only when the quote ends in a paragraph', () =
   assert.equal(commentVerdict('> [!NOTE]\n> > ```x``` said\n> Verdict: fix'), null);
   assert.equal(commentVerdict('> quoted\n```x``` Verdict: fix'), null);
   assert.equal(commentVerdict('> ```js\n> code\n> ```\nVerdict: fix'), 'fix');
+  // A fence may have more than three backticks.
+  assert.equal(commentVerdict('> ````\n> code\n> ````\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> ````js\n> code\n> ````\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > ````\n> > code\n> > ````\n> Verdict: fix'), 'fix');
 });
