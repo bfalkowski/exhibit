@@ -1,702 +1,706 @@
 {
-  "/repos/acme/widgets/pulls?state=closed&per_page=100": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/pulls?state=closed&per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/pulls?state=closed&per_page=100&page=3>; rel=\"last\""
-    },
-    "body": [
-      {
-        "number": 7,
-        "html_url": "https://github.com/acme/widgets/pull/7",
-        "state": "closed",
-        "title": "Add the widget cache",
-        "body": "Body of #7.",
-        "user": {
-          "login": "dev7",
-          "type": "User"
-        },
-        "labels": [
-          {
-            "id": 70,
-            "name": "feature",
-            "color": "ededed"
-          },
-          {
-            "id": 71,
-            "name": "cache",
-            "color": "ededed"
-          }
-        ],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-03-05T12:00:00Z",
-        "merged_at": "2026-03-05T12:00:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7"
-        },
-        "head": {
-          "ref": "topic-7",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc7"
-        }
-      },
-      {
-        "number": 6,
-        "html_url": "https://github.com/acme/widgets/pull/6",
-        "state": "closed",
-        "title": "Try a bad idea",
-        "body": "Body of #6.",
-        "user": {
-          "login": "dev6",
-          "type": "User"
-        },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-02-01T00:00:00Z",
-        "merged_at": null,
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6"
-        },
-        "head": {
-          "ref": "topic-6",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc6"
-        }
-      },
-      {
-        "number": 5,
-        "html_url": "https://github.com/acme/widgets/pull/5",
-        "state": "closed",
-        "title": "Fix the off-by-one in paging",
-        "body": null,
-        "user": {
-          "login": "dev5",
-          "type": "User"
-        },
-        "labels": [
-          {
-            "id": 50,
-            "name": "bug",
-            "color": "ededed"
-          }
-        ],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-03-01T09:00:00Z",
-        "merged_at": "2026-03-01T09:00:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5"
-        },
-        "head": {
-          "ref": "topic-5",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc5"
-        }
-      }
-    ]
-  },
-  "/repositories/4242/pulls?state=closed&per_page=100&page=2": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/pulls?state=closed&per_page=100&page=3>; rel=\"next\", <https://api.github.com/repositories/4242/pulls?state=closed&per_page=100&page=3>; rel=\"last\""
-    },
-    "body": [
-      {
-        "number": 4,
-        "html_url": "https://github.com/acme/widgets/pull/4",
-        "state": "closed",
-        "title": "Rename the widget table",
-        "body": "Body of #4.",
-        "user": {
-          "login": "dev4",
-          "type": "User"
-        },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-03-03T08:30:00Z",
-        "merged_at": "2026-03-03T08:30:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4"
-        },
-        "head": {
-          "ref": "topic-4",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc4"
-        }
-      },
-      {
-        "number": 3,
-        "html_url": "https://github.com/acme/widgets/pull/3",
-        "state": "closed",
-        "title": "Update the README",
-        "body": "Body of #3.",
-        "user": null,
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-02-10T16:45:00Z",
-        "merged_at": "2026-02-10T16:45:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3"
-        },
-        "head": {
-          "ref": "topic-3",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc3"
-        }
-      },
-      {
-        "number": 2,
-        "html_url": "https://github.com/acme/widgets/pull/2",
-        "state": "closed",
-        "title": "Draft that went nowhere",
-        "body": "Body of #2.",
-        "user": {
-          "login": "dev2",
-          "type": "User"
-        },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-02-01T00:00:00Z",
-        "merged_at": null,
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"
-        },
-        "head": {
-          "ref": "topic-2",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc2"
-        }
-      }
-    ]
-  },
-  "/repositories/4242/pulls?state=closed&per_page=100&page=3": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null}": {
     "status": 200,
     "headers": {},
-    "body": [
-      {
-        "number": 1,
-        "html_url": "https://github.com/acme/widgets/pull/1",
-        "state": "closed",
-        "title": "First commit of widgets",
-        "body": "Body of #1.",
-        "user": {
-          "login": "dev1",
-          "type": "User"
-        },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-01-15T10:00:00Z",
-        "merged_at": "2026-01-15T10:00:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1"
-        },
-        "head": {
-          "ref": "topic-1",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc1"
-        }
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/7/files?per_page=100": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/pulls/7/files?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/pulls/7/files?per_page=100&page=2>; rel=\"last\""
-    },
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "src/cache.js",
-        "status": "modified",
-        "additions": 120,
-        "deletions": 0,
-        "changes": 120
-      },
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "src/widget.js",
-        "status": "modified",
-        "additions": 8,
-        "deletions": 3,
-        "changes": 11
-      }
-    ]
-  },
-  "/repositories/4242/pulls/7/files?per_page=100&page=2": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "test/cache.test.js",
-        "status": "modified",
-        "additions": 64,
-        "deletions": 0,
-        "changes": 64
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/5/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "src/paging.js",
-        "status": "modified",
-        "additions": 1,
-        "deletions": 1,
-        "changes": 2
-      },
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "test/paging.test.js",
-        "status": "modified",
-        "additions": 12,
-        "deletions": 0,
-        "changes": 12
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/4/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "db/schema.sql",
-        "status": "modified",
-        "additions": 2,
-        "deletions": 2,
-        "changes": 4
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/3/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "README.md",
-        "status": "modified",
-        "additions": 5,
-        "deletions": 1,
-        "changes": 6
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/1/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "package.json",
-        "status": "modified",
-        "additions": 20,
-        "deletions": 0,
-        "changes": 20
-      },
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "src/widget.js",
-        "status": "modified",
-        "additions": 40,
-        "deletions": 0,
-        "changes": 40
-      }
-    ]
-  },
-  "/repos/acme/widgets/pulls/7/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "id": 701,
-        "state": "CHANGES_REQUESTED",
-        "user": {
-          "login": "rev1",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
-      },
-      {
-        "id": 702,
-        "state": "COMMENTED",
-        "user": {
-          "login": "dev7",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
-      },
-      {
-        "id": 703,
-        "state": "CHANGES_REQUESTED",
-        "user": {
-          "login": "rev1",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
-      },
-      {
-        "id": 704,
-        "state": "APPROVED",
-        "user": {
-          "login": "rev2",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
-      }
-    ]
-  },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2>; rel=\"last\""
-    },
     "body": {
-      "total_count": 3,
-      "check_runs": [
-        {
-          "id": 71,
-          "name": "lint",
-          "status": "completed",
-          "conclusion": "success",
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
-          }
+      "data": {
+        "rateLimit": {
+          "cost": 1
         },
-        {
-          "id": 72,
-          "name": "test",
-          "status": "completed",
-          "conclusion": "failure",
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
+        "repository": {
+          "pullRequests": {
+            "pageInfo": {
+              "hasNextPage": true,
+              "endCursor": "pulls-1"
+            },
+            "nodes": [
+              {
+                "number": 7,
+                "url": "https://github.com/acme/widgets/pull/7",
+                "title": "Add the widget cache",
+                "body": "Body of #7.",
+                "mergedAt": "2026-03-05T12:00:00Z",
+                "changedFiles": 3,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev7"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7",
+                "headRefName": "topic-7",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc7",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "labels-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "name": "feature"
+                    },
+                    {
+                      "name": "cache"
+                    }
+                  ]
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "files-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "src/cache.js",
+                      "additions": 120,
+                      "deletions": 0
+                    },
+                    {
+                      "path": "src/widget.js",
+                      "additions": 8,
+                      "deletions": 3
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "reviews-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "CHANGES_REQUESTED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev1"
+                      }
+                    },
+                    {
+                      "state": "COMMENTED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev7"
+                      }
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "comments-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "Review of ccccccc. Verdict: fix (one blocking finding).\n\nWhat I ran: npm test. The cache never drops an old widget.",
+                      "createdAt": "2026-02-28T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev3"
+                      }
+                    },
+                    {
+                      "body": "<!-- office:dev -->\nThanks. Verdict fix is right, and the cache now drops old widgets in ddddddd.",
+                      "createdAt": "2026-02-28T11:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev7"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc7",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": true,
+                              "endCursor": "ci-7-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 71,
+                                "name": "Secret scan",
+                                "conclusion": "SUCCESS",
+                                "url": null
+                              },
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 72,
+                                "name": "test",
+                                "conclusion": "FAILURE",
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 5,
+                "url": "https://github.com/acme/widgets/pull/5",
+                "title": "Fix the off-by-one in paging",
+                "body": "",
+                "mergedAt": "2026-03-01T09:00:00Z",
+                "changedFiles": 2,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev5"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5",
+                "headRefName": "topic-5",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc5",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "labels-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "name": "bug"
+                    }
+                  ]
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "src/paging.js",
+                      "additions": 1,
+                      "deletions": 1
+                    },
+                    {
+                      "path": "test/paging.test.js",
+                      "additions": 12,
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "comments-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "> Verdict: fix\n\nFixed in abc1234.",
+                      "createdAt": "2026-02-20T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev5"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc5",
+                        "statusCheckRollup": null
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 4,
+                "url": "https://github.com/acme/widgets/pull/4",
+                "title": "Rename the widget table",
+                "body": "Body of #4.",
+                "mergedAt": "2026-03-03T08:30:00Z",
+                "changedFiles": 1,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev4"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4",
+                "headRefName": "topic-4",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc4",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-4-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "db/schema.sql",
+                      "additions": 2,
+                      "deletions": 2
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "reviews-4-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "DISMISSED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev1"
+                      }
+                    },
+                    {
+                      "state": "APPROVED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev2"
+                      }
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc4",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": true,
+                              "endCursor": "ci-4-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 41,
+                                "name": "test",
+                                "conclusion": "SUCCESS",
+                                "url": "https://github.com/acme/widgets/runs/41"
+                              },
+                              {
+                                "__typename": "StatusContext",
+                                "context": "buildkite/widgets",
+                                "state": "SUCCESS",
+                                "targetUrl": "https://buildkite.com/acme/widgets/builds/401"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
-      ]
+      }
     }
   },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc7/status?per_page=100": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"pulls-1\"}": {
     "status": 200,
     "headers": {},
     "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
-    }
-  },
-  "/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "total_count": 3,
-      "check_runs": [
-        {
-          "id": 73,
-          "name": "Secret scan",
-          "status": "completed",
-          "conclusion": "success",
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequests": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "pulls-2"
+            },
+            "nodes": [
+              {
+                "number": 3,
+                "url": "https://github.com/acme/widgets/pull/3",
+                "title": "Update the README",
+                "body": "Body of #3.",
+                "mergedAt": "2026-02-10T16:45:00Z",
+                "changedFiles": 1,
+                "author": null,
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3",
+                "headRefName": "topic-3",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc3",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-3-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "README.md",
+                      "additions": 5,
+                      "deletions": 1
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "reviews-3-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "APPROVED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": null
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc3",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": false,
+                              "endCursor": "ci-3-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 31,
+                                "name": "test",
+                                "conclusion": "SKIPPED",
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 1,
+                "url": "https://github.com/acme/widgets/pull/1",
+                "title": "First commit of widgets",
+                "body": "Body of #1.",
+                "mergedAt": "2026-01-15T10:00:00Z",
+                "changedFiles": 2,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev1"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1",
+                "headRefName": "topic-1",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc1",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-1-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "package.json",
+                      "additions": 20,
+                      "deletions": 0
+                    },
+                    {
+                      "path": "src/widget.js",
+                      "additions": 40,
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "comments-1-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "## Review of ccccccc: verdict fix\n\nThe test fails on an empty list.",
+                      "createdAt": "2026-02-20T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev3"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc1",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": false,
+                              "endCursor": "ci-1-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 11,
+                                "name": "test",
+                                "conclusion": null,
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
-      ]
-    }
-  },
-  "/repos/acme/widgets/pulls/5/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc5/check-runs?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "total_count": 0,
-      "check_runs": []
-    }
-  },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc5/status?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
-    }
-  },
-  "/repos/acme/widgets/pulls/4/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "id": 401,
-        "state": "DISMISSED",
-        "user": {
-          "login": "rev1",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
-      },
-      {
-        "id": 402,
-        "state": "APPROVED",
-        "user": {
-          "login": "rev2",
-          "type": "User"
-        },
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
       }
-    ]
+    }
   },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc4/check-runs?per_page=100": {
+  "graphql PullFiles {\"owner\":\"acme\",\"name\":\"widgets\",\"number\":7,\"after\":\"files-7-1\"}": {
     "status": 200,
     "headers": {},
     "body": {
-      "total_count": 1,
-      "check_runs": [
-        {
-          "id": 41,
-          "name": "test",
-          "status": "completed",
-          "conclusion": "success",
-          "html_url": "https://github.com/acme/widgets/runs/41",
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequest": {
+            "files": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "files-7-2"
+              },
+              "nodes": [
+                {
+                  "path": "test/cache.test.js",
+                  "additions": 64,
+                  "deletions": 0
+                }
+              ]
+            }
           }
         }
-      ]
-    }
-  },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc4/status?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "state": "failure",
-      "statuses": [
-        {
-          "id": 401,
-          "state": "success",
-          "context": "buildkite/widgets",
-          "description": "Build #401 passed (3 minutes, 2 seconds)",
-          "target_url": "https://buildkite.com/acme/widgets/builds/401",
-          "created_at": "2026-02-20T10:00:00Z",
-          "updated_at": "2026-02-20T10:00:00Z"
-        },
-        {
-          "id": 402,
-          "state": "error",
-          "context": "deploy/preview",
-          "description": "Preview deploy errored",
-          "target_url": "https://buildkite.com/acme/widgets/builds/402",
-          "created_at": "2026-02-20T10:00:00Z",
-          "updated_at": "2026-02-20T10:00:00Z"
-        },
-        {
-          "id": 403,
-          "state": "pending",
-          "context": "ci/legacy",
-          "description": "Build #403 is running",
-          "target_url": "https://buildkite.com/acme/widgets/builds/403",
-          "created_at": "2026-02-20T10:00:00Z",
-          "updated_at": "2026-02-20T10:00:00Z"
-        }
-      ],
-      "total_count": 3
-    }
-  },
-  "/repos/acme/widgets/pulls/3/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "id": 301,
-        "state": "APPROVED",
-        "user": null,
-        "body": "",
-        "submitted_at": "2026-03-01T00:00:00Z",
-        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
       }
-    ]
+    }
   },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc3/check-runs?per_page=100": {
+  "graphql PullReviews {\"owner\":\"acme\",\"name\":\"widgets\",\"number\":7,\"after\":\"reviews-7-1\"}": {
     "status": 200,
     "headers": {},
     "body": {
-      "total_count": 1,
-      "check_runs": [
-        {
-          "id": 31,
-          "name": "test",
-          "status": "completed",
-          "conclusion": "skipped",
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequest": {
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-7-2"
+              },
+              "nodes": [
+                {
+                  "state": "CHANGES_REQUESTED",
+                  "submittedAt": "2026-03-01T00:00:00Z",
+                  "author": {
+                    "__typename": "User",
+                    "login": "rev1"
+                  }
+                },
+                {
+                  "state": "APPROVED",
+                  "submittedAt": "2026-03-01T00:00:00Z",
+                  "author": {
+                    "__typename": "User",
+                    "login": "rev2"
+                  }
+                }
+              ]
+            }
           }
         }
-      ]
+      }
     }
   },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc3/status?per_page=100": {
+  "graphql PullComments {\"owner\":\"acme\",\"name\":\"widgets\",\"number\":7,\"after\":\"comments-7-1\"}": {
     "status": 200,
     "headers": {},
     "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
-    }
-  },
-  "/repos/acme/widgets/pulls/1/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc1/check-runs?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "total_count": 1,
-      "check_runs": [
-        {
-          "id": 11,
-          "name": "test",
-          "status": "in_progress",
-          "conclusion": null,
-          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
-          "app": {
-            "slug": "github-actions"
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequest": {
+            "comments": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "comments-7-2"
+              },
+              "nodes": [
+                {
+                  "body": "## Review of ddddddd\n\nVerdict: merge. Nothing blocks.",
+                  "createdAt": "2026-03-02T09:00:00Z",
+                  "author": {
+                    "__typename": "User",
+                    "login": "rev3"
+                  }
+                },
+                {
+                  "body": "CI note: the first run failed one flaky test, then passed.",
+                  "createdAt": "2026-03-02T10:00:00Z",
+                  "author": null
+                }
+              ]
+            }
           }
         }
-      ]
+      }
     }
   },
-  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc1/status?per_page=100": {
+  "graphql CommitCi {\"owner\":\"acme\",\"name\":\"widgets\",\"oid\":\"ccccccccccccccccccccccccccccccccccccccc7\",\"after\":\"ci-7-1\"}": {
     "status": 200,
     "headers": {},
     "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "object": {
+            "statusCheckRollup": {
+              "contexts": {
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "ci-7-2"
+                },
+                "nodes": [
+                  {
+                    "__typename": "CheckRun",
+                    "databaseId": 73,
+                    "name": "lint",
+                    "conclusion": "SUCCESS",
+                    "url": null
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
-  "/repos/acme/widgets/issues/7/comments?per_page=100": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=2>; rel=\"last\""
-    },
-    "body": [
-      {
-        "id": 7001,
-        "user": {
-          "login": "rev3",
-          "type": "User"
-        },
-        "created_at": "2026-02-28T10:00:00Z",
-        "updated_at": "2026-02-28T10:00:00Z",
-        "author_association": "OWNER",
-        "body": "Review of ccccccc. Verdict: fix (one blocking finding).\n\nWhat I ran: npm test. The cache never drops an old widget."
-      },
-      {
-        "id": 7002,
-        "user": {
-          "login": "dev7",
-          "type": "User"
-        },
-        "created_at": "2026-02-28T11:00:00Z",
-        "updated_at": "2026-02-28T11:00:00Z",
-        "author_association": "OWNER",
-        "body": "<!-- office:dev -->\nThanks. Verdict fix is right, and the cache now drops old widgets in ddddddd."
-      }
-    ]
-  },
-  "/repositories/4242/issues/7/comments?per_page=100&page=2": {
-    "status": 200,
-    "headers": {
-      "link": "<https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=1>; rel=\"prev\", <https://api.github.com/repositories/4242/issues/7/comments?per_page=100&page=1>; rel=\"first\""
-    },
-    "body": [
-      {
-        "id": 7003,
-        "user": {
-          "login": "rev3",
-          "type": "User"
-        },
-        "created_at": "2026-03-02T09:00:00Z",
-        "updated_at": "2026-03-02T09:00:00Z",
-        "author_association": "OWNER",
-        "body": "## Review of ddddddd\n\nVerdict: merge. Nothing blocks."
-      },
-      {
-        "id": 7004,
-        "user": null,
-        "created_at": "2026-03-02T10:00:00Z",
-        "updated_at": "2026-03-02T10:00:00Z",
-        "author_association": "OWNER",
-        "body": "CI note: the first run failed one flaky test, then passed."
-      }
-    ]
-  },
-  "/repos/acme/widgets/issues/1/comments?per_page=100": {
+  "graphql CommitCi {\"owner\":\"acme\",\"name\":\"widgets\",\"oid\":\"ccccccccccccccccccccccccccccccccccccccc4\",\"after\":\"ci-4-1\"}": {
     "status": 200,
     "headers": {},
-    "body": [
-      {
-        "id": 1001,
-        "user": {
-          "login": "rev3",
-          "type": "User"
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1
         },
-        "created_at": "2026-02-20T10:00:00Z",
-        "updated_at": "2026-02-20T10:00:00Z",
-        "author_association": "OWNER",
-        "body": "## Review of ccccccc: verdict fix\n\nThe test fails on an empty list."
+        "repository": {
+          "object": {
+            "statusCheckRollup": {
+              "contexts": {
+                "pageInfo": {
+                  "hasNextPage": false,
+                  "endCursor": "ci-4-2"
+                },
+                "nodes": [
+                  {
+                    "__typename": "StatusContext",
+                    "context": "deploy/preview",
+                    "state": "ERROR",
+                    "targetUrl": "https://buildkite.com/acme/widgets/builds/402"
+                  },
+                  {
+                    "__typename": "StatusContext",
+                    "context": "ci/legacy",
+                    "state": "PENDING",
+                    "targetUrl": "https://buildkite.com/acme/widgets/builds/403"
+                  }
+                ]
+              }
+            }
+          }
+        }
       }
-    ]
-  },
-  "/repos/acme/widgets/issues/3/comments?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/widgets/issues/4/comments?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/widgets/issues/5/comments?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "user": { "login": "dev5" },
-        "created_at": "2026-02-20T10:00:00Z",
-        "body": "> Verdict: fix\n\nFixed in abc1234."
-      }
-    ]
+    }
   }
 }
