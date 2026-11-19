@@ -191,6 +191,8 @@ test('outside a clone, the report says that SZZ did not run', () => {
   for (const text of [markdownText(markdown), htmlText(html)]) {
     assert.ok(text.includes('SZZ did not run, because history ran outside a clone of the repo. So this report cannot show escaped defects. Run exhibit history inside a clone of fixture/shop.'), text);
     assert.ok(text.includes('The history is weak'));
+    // The rule names this case, as spec 8.5 does.
+    assert.ok(text.includes('Exhibit calls the history weak when it has fewer than 10 fix PRs, when SZZ links none of them or did not run, or when fewer than half of the escaped defects have a link with a confidence of 0.5 or more.'), text);
     assert.deepEqual(factsIn(text).defects, []);
   }
 });
