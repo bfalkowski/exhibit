@@ -282,14 +282,19 @@ function noLinkReason(dropped) {
 }
 
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
-// "Fixes #12", "closes: #7" or "Fixes https://github.com/owner/name/issues/12". Only issues in
-// `repo` ("owner/name") count.
+// "Fixes #12", "closes: #7", "Fixes owner/name#12" or "Fixes https://github.com/owner/name/issues/12".
+// Only issues in `repo` ("owner/name") count. Case does not matter in the repo name.
 export function bugReportNumbers(body, repo) {
   const numbers = [];
-  const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
-  for (const [, short, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
-    if (urlRepo !== undefined && urlRepo.toLowerCase() !== repo.toLowerCase()) continue;
-    const number = Number(short ?? urlNumber);
+  const name = '[\\w.-]+\\/[\\w.-]+';
+  const closing = new RegExp(
+    `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+(?:#(\\d+)|(${name})#(\\d+)|https?:\\/\\/github\\.com\\/(${name})\\/issues\\/(\\d+))\\b`,
+    'gi'
+  );
+  for (const [, short, refRepo, refNumber, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
+    const named = refRepo ?? urlRepo;
+    if (named !== undefined && named.toLowerCase() !== repo.toLowerCase()) continue;
+    const number = Number(short ?? refNumber ?? urlNumber);
     if (!numbers.includes(number)) numbers.push(number);
   }
   return numbers;

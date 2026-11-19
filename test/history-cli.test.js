@@ -14,6 +14,7 @@ import { gitEnv } from './fixtures/git-env.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+const fullDisk = fileURLToPath(new URL('../test-support/preload-full-disk.js', import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/github/${name}.json`, import.meta.url));
 
 // Makes a new empty folder. The folder is removed when test t ends.
@@ -26,11 +27,14 @@ function newFolder(t) {
 // Runs `exhibit ...args` for test t in a new empty folder, with a fetch that replays the named fixture.
 // token: null runs it with no GITHUB_TOKEN at all.
 // fixturePath: a fixture file built by a test, in place of a named one.
+// failWrite: a write to a path that holds this text fails, as on a full disk.
 // history runs git inside a clone, so it gets a clean env: see gitEnv.
-function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t) } = {}) {
+function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t), failWrite } = {}) {
   const env = gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: fixturePath });
   if (token !== null) env.GITHUB_TOKEN = token;
-  const run = spawnSync(process.execPath, ['--import', preload, bin, ...args], { cwd, env, encoding: 'utf8' });
+  const preloads = failWrite === undefined ? ['--import', preload] : ['--import', preload, '--import', fullDisk];
+  if (failWrite !== undefined) env.EXHIBIT_TEST_FULL_DISK = failWrite;
+  const run = spawnSync(process.execPath, [...preloads, bin, ...args], { cwd, env, encoding: 'utf8' });
   return { ...run, cwd, historyPath: join(cwd, '.exhibit', 'history.jsonl') };
 }
 
@@ -40,8 +44,11 @@ const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const WROTE_REPORT = 'Wrote the report to .exhibit/report.md and .exhibit/report.html.\n';
 // Each run gets HOME = its own folder, so its reply cache is in that folder, and starts empty.
 const cacheOf = (cwd) => cacheFolder({ env: {}, home: cwd });
-const madeRequests = (cwd, requests, notModified = 0) => `Made ${requests} GitHub requests. ${notModified} got a 304 and came from the cache in ${cacheOf(cwd)}.\n`;
-const githubCounts = (cwd, requests, notModified = 0) => ({ requests, not_modified: notModified, cache: cacheOf(cwd) });
+const restRequests = (n) => `${n} GitHub REST ${n === 1 ? 'request' : 'requests'}`;
+const graphqlQueries = (n) => `Made ${n} GitHub GraphQL ${n === 1 ? 'query' : 'queries'}, which used ${n} ${n === 1 ? 'point' : 'points'} of the GraphQL rate limit.\n`;
+// Every recorded GraphQL reply costs 1 point, so the points equal the queries.
+const madeRequests = (cwd, requests, queries, notModified = 0) => `Made ${restRequests(requests)}. ${notModified} got a 304 and came from the cache in ${cacheOf(cwd)}.\n` + graphqlQueries(queries);
+const githubCounts = (cwd, requests, queries, notModified = 0) => ({ requests, not_modified: notModified, cache: cacheOf(cwd), graphql: { queries, points: queries } });
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', (t) => {
@@ -80,6 +87,26 @@ test('a title_after_key signal is recorded in classification, and the line passe
   assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_key:rename']]);
 });
 
+test('a pr: signal marks the PR with that number as a fix, next to the other signals', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [label:bug, title:fix, branch:fix/, pr:3, pr:5]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  // PR 5 has the label bug, and label:bug comes first in the list.
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[5, 'label:bug'], [3, 'pr:3']]);
+});
+
+test('a pr: signal that is not a PR number gives exit 2 with a message, and writes no file', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, pr:abc]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./);
+  assert.ok(!existsSync(run.historyPath));
+});
+
 test('a title_after_key signal with no value gives exit 2 with a message, and writes no file', (t) => {
   const cwd = newFolder(t);
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, "title_after_key:"]\n');
@@ -105,30 +132,8 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   const run = exhibit(t, ['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 76), mode: 'full', read: 3 });
-  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
-});
-
-test('a failed request for the file count gives a warning, not a failed run', (t) => {
-  const big = writeBigFixture({ unreadable: [9] });
-  t.after(big.cleanup);
-  const run = exhibit(t, ['history', '--repo', 'acme/big'], { fixturePath: big.path });
-  assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stderr, /^exhibit: warning: PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short\. Exhibit could not read how many files it changed: GitHub answered 500/);
-  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
-});
-
-test('a rate limit on the request for the file count gives a warning, no wait, and exit 0', (t) => {
-  const big = writeBigFixture({ countReplies: { 9: { status: 403, headers: { 'retry-after': '3600' }, body: { message: 'API rate limit exceeded' } } } });
-  t.after(big.cleanup);
-  const run = exhibit(t, ['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
-  assert.equal(run.status, 0, run.stderr);
-  assert.equal(
-    run.stderr,
-    'exhibit: warning: PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 403 (API rate limit exceeded) for /repos/acme/big/pulls/9. The token may lack access, or the rate limit is used up: check the token, or wait and try again.\n' + notAClone('acme/big')
-  );
-  // 76 requests, as in the run with no rate limit: the count request went once and was not asked again.
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 76), mode: 'full', read: 3 });
+  // 1 query for the PRs, and 29 more pages of 100 files for each of PRs 9 and 8.
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
@@ -151,7 +156,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   assert.equal(run.stderr, '');
   // The fixture repo holds a history file whose lines are all in the look-back window, so the
   // run reads every PR again, and SZZ runs on the fixes, whose szz is null there.
-  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\nRead 12 of 12 merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the 7 days before its newest PR. Kept the other 0 lines as they were.\n' + WROTE_REPORT + madeRequests(repo.dir, 66));
+  assert.equal(run.stdout, 'Wrote 14 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 4 of 7 fix PRs.\nRead 14 of 14 merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the 7 days before its newest PR. Kept the other 0 lines as they were.\n' + WROTE_REPORT + madeRequests(repo.dir, 6, 1));
 
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
@@ -186,9 +191,9 @@ test('inside a clone, history writes report.md and report.html with the escaped 
   assert.equal(run.status, 0, run.stderr);
   const markdown = readFileSync(join(repo.dir, REPORT.markdown), 'utf8');
   const html = readFileSync(join(repo.dir, REPORT.html), 'utf8');
-  assert.match(markdown, /^# Escaped defects in fixture\/shop\n\nExhibit read 12 merged PRs\. 6 of them are fix PRs\. SZZ linked 3 of them/);
-  assert.deepEqual([...markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1])), [12, 7, 6]);
-  assert.deepEqual([...html.matchAll(/<h3>Fix PR (\d+):/g)].map((m) => Number(m[1])), [12, 7, 6]);
+  assert.match(markdown, /^# Escaped defects in fixture\/shop\n\nExhibit read 14 merged PRs\. 7 of them are fix PRs\. SZZ linked 4 of them/);
+  assert.deepEqual([...markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1])), [14, 12, 7, 6]);
+  assert.deepEqual([...html.matchAll(/<h3>Fix PR (\d+):/g)].map((m) => Number(m[1])), [14, 12, 7, 6]);
 });
 
 test('outside a clone, the report says that SZZ did not run', (t) => {
@@ -214,7 +219,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 66), mode: 'incremental', read: 12 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 6, 1), mode: 'incremental', read: 14 });
 });
 
 test('a second run inside a clone keeps the SZZ result of each fix it reads again, and asks GitHub nothing for SZZ', (t) => {
@@ -229,9 +234,10 @@ test('a second run inside a clone keeps the SZZ result of each fix it reads agai
 
   const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(second.status, 0, second.stderr);
-  // 1 request for the list, and 5 for each of the 12 PRs in the window. The first run made 5
-  // more, for SZZ. Each fix had a szz, so SZZ does not run again.
-  assert.equal(JSON.parse(second.stdout).github.requests, 61);
+  // 1 GraphQL query for the PRs, with all their lists, and no REST request. The first run made
+  // 6 REST requests for SZZ. Each fix had a szz, so SZZ does not run again.
+  assert.deepEqual(JSON.parse(first.stdout).github, githubCounts(repo.dir, 6, 1));
+  assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(repo.dir, 0, 1));
   assert.deepEqual(readLines(second.historyPath), before);
 });
 
@@ -248,12 +254,12 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const text = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\nRead all 12 merged PRs from GitHub.\n' + WROTE_REPORT + madeRequests(shallow, 61));
-  assert.equal(text.stderr.match(/SZZ skipped/g).length, 6);
+  assert.equal(text.stdout, 'Wrote 14 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 7 fix PRs (7 skipped).\nRead all 14 merged PRs from GitHub.\n' + WROTE_REPORT + madeRequests(shallow, 0, 1));
+  assert.equal(text.stderr.match(/SZZ skipped/g).length, 7);
 
   const json = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 }, report: REPORT, github: githubCounts(shallow, 61), mode: 'incremental', read: 12 });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, report: REPORT, github: githubCounts(shallow, 0, 1), mode: 'incremental', read: 14 });
 });
 
 test('--since keeps PRs merged on or after the date', (t) => {
@@ -271,7 +277,8 @@ test('--limit keeps the newest N merged PRs', (t) => {
 test('--json prints a short machine summary', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 31), mode: 'full', read: 5 });
+  // 2 pages of PRs, then the second pages of PR 7's files, reviews, comments and CI results, and of PR 4's CI results.
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 7), mode: 'full', read: 5 });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', (t) => {
@@ -296,8 +303,7 @@ test('a missing GITHUB_TOKEN gives exit 2 and says to set it', (t) => {
 test('an unknown repo gives exit 2 and says to check the name', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/nothing-here'], { fixtureName: 'unknown-repo' });
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /404/);
-  assert.match(run.stderr, /repo name/);
+  assert.match(run.stderr, /^exhibit: GitHub's GraphQL API answered with an error \(Could not resolve to a Repository with the name 'acme\/nothing-here'\.\)\. Check the repo name, and that GITHUB_TOKEN can read that repo\.\n/m);
   assert.ok(!existsSync(run.historyPath));
 });
 
@@ -336,43 +342,62 @@ test('a folder that cannot be written gives exit 2 and a message, not a stack tr
   assert.doesNotMatch(run.stderr, /\n\s+at /);
 });
 
-// Writes a copy of the acme-widgets fixture where every 200 reply has an ETag, in `dir`.
-function widgetsWithETags(dir) {
-  const recorded = JSON.parse(readFileSync(fixture('acme-widgets'), 'utf8'));
+test('when the last write fails, the run keeps all three old files, so they still match', (t) => {
+  const cwd = newFolder(t);
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const names = ['history.jsonl', 'report.md', 'report.html'];
+  const before = names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8'));
+  // The same run with --limit 2 would write new files, but the disk is full when report.html is written.
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets', '--full', '--limit', '2'], { cwd, failWrite: 'report.html' });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /could not write \.exhibit\/report\.html: ENOSPC/);
+  assert.deepEqual(names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8')), before, 'no file changed');
+  assert.deepEqual(readdirSync(join(cwd, '.exhibit')).sort(), [...names].sort(), 'no temporary file is left');
+});
+
+// Builds the shop fixture repo as a clone of fixture/shop, and writes a copy of its replay file
+// where every REST 200 reply has an ETag. GraphQL replies have no ETag: GitHub gives none for a
+// POST. So only SZZ's REST requests can get a 304. Returns the clone's folder and the file.
+function shopWithETags(t) {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const recorded = JSON.parse(readFileSync(replay.path, 'utf8'));
   for (const [key, reply] of Object.entries(recorded)) {
-    if (reply.status === 200) reply.headers = { ...reply.headers, etag: `W/"${key}"` };
+    if (key.startsWith('/') && reply.status === 200) reply.headers = { ...reply.headers, etag: `W/"${key}"` };
   }
-  const path = join(dir, 'acme-widgets-etags.json');
-  writeFileSync(path, JSON.stringify(recorded));
-  return path;
+  const fixturePath = join(newFolder(t), 'shop-etags.json');
+  writeFileSync(fixturePath, JSON.stringify(recorded));
+  return { cwd: repo.dir, fixturePath };
 }
 
-test('a second run gets a 304 for every request, writes the same history, and says so', (t) => {
-  const cwd = newFolder(t);
-  const fixturePath = widgetsWithETags(newFolder(t));
-  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { fixturePath, cwd });
+test('a second run gets a 304 for every REST request, writes the same history, and says so', (t) => {
+  const { cwd, fixturePath } = shopWithETags(t);
+  const first = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd });
   assert.equal(first.status, 0, first.stderr);
-  assert.ok(first.stdout.endsWith(madeRequests(cwd, 31)), first.stdout);
+  assert.ok(first.stdout.endsWith(madeRequests(cwd, 6, 1)), first.stdout);
   const history = readFileSync(first.historyPath, 'utf8');
 
-  // --full, so the second run asks for every reply again, as the first did (spec 8.3).
-  const second = exhibit(t, ['history', '--repo', 'acme/widgets', '--full', '--json'], { fixturePath, cwd });
+  // --full, so the second run reads every PR and runs SZZ again, as the first did (spec 8.3).
+  const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--full', '--json'], { fixturePath, cwd });
   assert.equal(second.status, 0, second.stderr);
-  assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 31, 31));
+  assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 6, 1, 6));
   assert.equal(readFileSync(second.historyPath, 'utf8'), history);
 });
 
 test('--no-cache gets no 304s and writes no cache folder', (t) => {
-  const cwd = newFolder(t);
-  const fixturePath = widgetsWithETags(newFolder(t));
-  // --full, so each run asks for every reply, and only the cache could save a request (spec 8.3).
+  const { cwd, fixturePath } = shopWithETags(t);
+  // --full, so each run reads every PR and runs SZZ, and only the cache could save a request (spec 8.3).
   for (let run = 0; run < 2; run++) {
-    const text = exhibit(t, ['history', '--repo', 'acme/widgets', '--no-cache', '--full'], { fixturePath, cwd });
+    const text = exhibit(t, ['history', '--repo', 'fixture/shop', '--no-cache', '--full'], { fixturePath, cwd });
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /\nMade 31 GitHub requests\. The cache was off\.\n$/);
+    assert.match(text.stdout, /\nMade 6 GitHub REST requests\. The cache was off\.\nMade 1 GitHub GraphQL query, which used 1 point of the GraphQL rate limit\.\n$/);
   }
-  const json = exhibit(t, ['history', '--repo', 'acme/widgets', '--no-cache', '--full', '--json'], { fixturePath, cwd });
-  assert.deepEqual(JSON.parse(json.stdout).github, { requests: 31, not_modified: 0, cache: null });
+  const json = exhibit(t, ['history', '--repo', 'fixture/shop', '--no-cache', '--full', '--json'], { fixturePath, cwd });
+  assert.deepEqual(JSON.parse(json.stdout).github, { requests: 6, not_modified: 0, cache: null, graphql: { queries: 1, points: 1 } });
   assert.equal(existsSync(cacheOf(cwd)), false);
 });
 
@@ -380,5 +405,39 @@ test('a run that fails says how many GitHub requests it made', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken' });
   assert.equal(run.status, 2);
   assert.match(run.stderr, /does not fit the history schema/);
-  assert.match(run.stderr, /exhibit: note: this run made [1-9]\d* GitHub requests, and 0 got a 304\.\n/);
+  assert.match(run.stderr, /exhibit: note: this run made 0 GitHub REST requests, and 0 got a 304\. It made 1 GitHub GraphQL query, which used 1 point\.\n/);
+});
+
+// The history files that the REST version of history wrote from the same fixture repos, before
+// history moved to GraphQL. The GraphQL replies must give the same file, byte for byte.
+// One change: the shop fixture's REST replies gave each empty PR body as "". GitHub's REST API
+// gives null for a PR with no description, and GraphQL gives "", which the forge turns into null.
+// So shop.jsonl has null where the REST run wrote "".
+const restHistory = (name) => readFileSync(fileURLToPath(new URL(`./fixtures/github/rest-history/${name}.jsonl`, import.meta.url)), 'utf8');
+
+test('the history file from GraphQL equals the one from REST, outside a clone', (t) => {
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(readFileSync(run.historyPath, 'utf8'), restHistory('acme-widgets'));
+});
+
+test('the history file from GraphQL equals the one from REST, inside a clone with SZZ', (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const run = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(readFileSync(run.historyPath, 'utf8'), restHistory('shop'));
+});
+
+test('a policy that breaks the schema gives exit 2 with a message that names the field, and writes no file', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nkinds:\n  relay-core:\n    match: ["relay/**"]\n    risk: extreme\n    needs: [tests-before-after]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: evidence\.yml kinds\.relay-core\.risk must be low, medium or high, not "extreme"\.$/m);
+  assert.doesNotMatch(run.stderr, /\n\s+at /);
+  assert.ok(!existsSync(run.historyPath));
 });

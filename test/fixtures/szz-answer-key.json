@@ -42,6 +42,12 @@
         "src/cart.js: return items.length; (added by PR 1, a merge commit; the fix's first commit changes it, and its second commit changes it again)",
         "src/stock.js: return item.qty >= 0; (added by PR 11, a rebase merge, in the first of its two commits)"
       ]
+    },
+    {
+      "fix_pr": 14,
+      "introducing_prs": [13],
+      "case": "a bug from a PR from a fork",
+      "lines": ["src/shipping.js: return total > 50 ? 0 : 5; (added by PR 13, a merge commit of a branch in the fork dee/shop. SZZ must ask fixture/shop, the repo the PR merged into, and not the fork)"]
     }
   ]
 }

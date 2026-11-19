@@ -181,17 +181,84 @@ test('only secondary-limit waits count toward the longer wait', async () => {
   assert.deepEqual(s.waits, [5_000, 60_000]);
 });
 
-test('the GitHub forge gives CI results in one shape: check runs first, then commit statuses, each with a URL', async () => {
+const widgets = async () => {
   const { fileURLToPath } = await import('node:url');
   const { replayFetch } = await import('../test-support/replay-fetch.js');
-  const fetch = replayFetch(fileURLToPath(new URL('./fixtures/github/acme-widgets.json', import.meta.url)));
-  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  return replayFetch(fileURLToPath(new URL('./fixtures/github/acme-widgets.json', import.meta.url)));
+};
+
+test('the GitHub forge gives CI results in one shape: check runs first, then commit statuses, each with a URL', async () => {
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: await widgets() });
+  await forge.mergedPulls();
   assert.deepEqual(await forge.ciResults('c'.repeat(39) + '4'), [
     { name: 'test', conclusion: 'success', url: 'https://github.com/acme/widgets/runs/41' },
     { name: 'buildkite/widgets', conclusion: 'success', url: 'https://buildkite.com/acme/widgets/builds/401' },
     { name: 'deploy/preview', conclusion: 'error', url: 'https://buildkite.com/acme/widgets/builds/402' },
     { name: 'ci/legacy', conclusion: null, url: 'https://buildkite.com/acme/widgets/builds/403' }
   ]);
-  // A check run with no html_url gives a null URL.
+  // A check run with no URL gives a null URL.
   assert.deepEqual((await forge.ciResults('c'.repeat(39) + '1')), [{ name: 'test', conclusion: null, url: null }]);
+});
+
+test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {
+  const fetch = await widgets();
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  await forge.mergedPulls();
+  // The fixture has 2 items on a page. PR 7 has 3 files, 4 reviews, 4 comments and 3 check runs.
+  assert.deepEqual((await forge.pullFiles(7)).map((file) => file.filename), ['src/cache.js', 'src/widget.js', 'test/cache.test.js']);
+  assert.deepEqual((await forge.pullReviews(7)).map((review) => review.state), ['CHANGES_REQUESTED', 'COMMENTED', 'CHANGES_REQUESTED', 'APPROVED']);
+  assert.equal((await forge.pullComments(7)).length, 4);
+  // GraphQL lists check runs oldest first. The REST API lists them newest first, and so does the forge.
+  assert.deepEqual((await forge.ciResults('c'.repeat(39) + '7')).map((result) => result.name), ['lint', 'test', 'Secret scan']);
+  const names = fetch.calls.map((call) => call.key.split(' ')[1]);
+  assert.deepEqual(names, ['MergedPulls', 'MergedPulls', 'PullFiles', 'PullReviews', 'PullComments', 'CommitCi']);
+  // A second call reads the list it kept, with no query.
+  await forge.pullFiles(7);
+  assert.equal(fetch.calls.length, 6);
+  assert.deepEqual(forge.counts(), { requests: 0, not_modified: 0, queries: 6, points: 6 });
+});
+
+// A GraphQL reply that says the rate limit is used up. GitHub sends it with the status 200.
+const graphqlLimited = (reset) => ({
+  status: 200,
+  headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) },
+  body: { errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded for user ID 1.' }] }
+});
+
+test('a GraphQL reply that says the rate limit is used up waits until the reset, then asks again', async () => {
+  const s = scripted([graphqlLimited(1000), { status: 200, body: { data: { rateLimit: { cost: 2 }, viewer: { login: 'me' } } } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => 990_000 });
+  assert.deepEqual(await github.graphql('query Me { rateLimit { cost } viewer { login } }', {}), { rateLimit: { cost: 2 }, viewer: { login: 'me' } });
+  assert.deepEqual(s.waits, [11_000], 'ten seconds to the reset, plus one');
+  assert.deepEqual(github.counts(), { requests: 0, not_modified: 0, queries: 2, points: 2 });
+});
+
+test('a GraphQL rate limit that asks for too long a wait fails with a plain message, and does not wait', async () => {
+  const s = scripted([graphqlLimited(5000)]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => 0 });
+  await assert.rejects(
+    github.graphql('query Me { rateLimit { cost } }', {}, { permission: ['Pull requests: read'] }),
+    (error) => error instanceof ToolError && error.message === "GitHub's GraphQL API answered with an error (API rate limit exceeded for user ID 1.). The token may lack access, or the rate limit is used up: check the token, or wait and try again." && error.stopsRun
+  );
+  assert.deepEqual(s.waits, []);
+});
+
+test('a GraphQL reply with an error fails with its message, and a FORBIDDEN error names the permissions', async () => {
+  const s = scripted([{ status: 200, body: { data: { rateLimit: { cost: 1 }, repository: null }, errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by personal access token' }] } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(
+    github.graphql('query Q { rateLimit { cost } }', {}, { permission: ['Pull requests: read', 'Checks: read', 'Commit statuses: read'] }),
+    (error) => error instanceof ToolError && /Resource not accessible by personal access token/.test(error.message) && /the permissions "Pull requests: read", "Checks: read" and "Commit statuses: read"/.test(error.message)
+  );
+  assert.equal(github.counts().points, 1, 'a reply with errors still counts its points');
+});
+
+test('a GraphQL secondary rate limit waits one minute, then asks again', async () => {
+  const s = scripted([
+    { status: 403, body: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' } },
+    { status: 200, body: { data: { rateLimit: { cost: 1 } } } }
+  ]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
+  assert.deepEqual(await github.graphql('query Q { rateLimit { cost } }', {}), { rateLimit: { cost: 1 } });
+  assert.deepEqual(s.waits, [60_000]);
 });

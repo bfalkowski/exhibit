@@ -1,12 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { classifyFix, DEFAULT_FIX_SIGNALS, readFixSignals } from '../src/fix-signals.js';
-import { ToolError } from '../src/tool-error.js';
+import { classifyFix, DEFAULT_FIX_SIGNALS } from '../src/fix-signals.js';
 
-const pr = (fields) => ({ title: 'Add a page', labels: [], branch: 'topic', ...fields });
+const pr = (fields) => ({ number: 1, title: 'Add a page', labels: [], branch: 'topic', ...fields });
 const notFix = { fix: false, fix_signal: null };
 
 test('the default signals are the ones in the spec', () => {
@@ -66,6 +62,28 @@ test('title_after_key: skips only a key of letters, a hyphen and digits', () => 
   }
 });
 
+test('title_after_key: skips a key followed by a dash, a spaced colon or a comma, and more than one key', () => {
+  const signals = ['title_after_key:fix'];
+  const titles = ['T-170 - Fix the crash', '[T-170] - Fix the crash', 'T-170 : Fix the crash', 'T-170, T-171: Fix', 'T-170: [T-171] Fix', '#79: Fix the crash', '[#79] fix the crash'];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), { fix: true, fix_signal: 'title_after_key:fix' }, title);
+  }
+});
+
+test('title_after_key: a bare key still needs a mark or a space after it, and a dash needs a space before it', () => {
+  const signals = ['title_after_key:fix'];
+  for (const title of ['#79Fix the crash', 'T-170-Fix the crash', 'T-170, Add a fix', '#: fix', 'T-170 - Add prefix fixer']) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), notFix, title);
+  }
+});
+
+test('title_after_key: a word shaped like a key is skipped as a key, so "FIX-12: Add a page" is not a fix', () => {
+  for (const title of ['FIX-12: Add a page', 'fix-12: crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_key:fix']), notFix, title);
+    assert.deepEqual(classifyFix(pr({ title }), ['title:fix']), { fix: true, fix_signal: 'title:fix' }, title);
+  }
+});
+
 test('branch: matches a branch that starts with the prefix, in any case', () => {
   const signals = ['branch:fix/'];
   assert.deepEqual(classifyFix(pr({ branch: 'fix/crash' }), signals), { fix: true, fix_signal: 'branch:fix/' });
@@ -80,59 +98,21 @@ test('when more than one signal matches, the first in the list is recorded', () 
   assert.deepEqual(classifyFix(both, ['branch:fix/', 'title:fix']), { fix: true, fix_signal: 'branch:fix/' });
 });
 
+test('pr: matches the PR with that number, and no other', () => {
+  const signals = ['pr:96', 'pr:99'];
+  assert.deepEqual(classifyFix(pr({ number: 96 }), signals), { fix: true, fix_signal: 'pr:96' });
+  assert.deepEqual(classifyFix(pr({ number: 99 }), signals), { fix: true, fix_signal: 'pr:99' });
+  for (const number of [9, 960, 97, 1]) assert.deepEqual(classifyFix(pr({ number }), signals), notFix, `PR ${number}`);
+});
+
+test('pr: adds to the other signals, and the first match in the list is recorded', () => {
+  const labelled = pr({ number: 96, labels: ['bug'] });
+  assert.deepEqual(classifyFix(labelled, ['label:bug', 'pr:96']), { fix: true, fix_signal: 'label:bug' });
+  assert.deepEqual(classifyFix(labelled, ['pr:96', 'label:bug']), { fix: true, fix_signal: 'pr:96' });
+  // A PR that only the label marks is still a fix when the list also has pr: signals.
+  assert.deepEqual(classifyFix(pr({ number: 5, labels: ['bug'] }), ['pr:96', 'label:bug']), { fix: true, fix_signal: 'label:bug' });
+});
+
 test('a PR with no matching signal is not a fix', () => {
   assert.deepEqual(classifyFix(pr({}), DEFAULT_FIX_SIGNALS), notFix);
-});
-
-// readFixSignals reads evidence.yml in a folder.
-// The folder is removed when test t ends.
-function folderWith(t, evidenceYml) {
-  const cwd = mkdtempSync(join(tmpdir(), 'exhibit-signals-'));
-  t.after(() => rmSync(cwd, { recursive: true, force: true }));
-  if (evidenceYml !== undefined) writeFileSync(join(cwd, 'evidence.yml'), evidenceYml);
-  return cwd;
-}
-
-test('readFixSignals uses the defaults when there is no evidence.yml', async (t) => {
-  assert.deepEqual(await readFixSignals(folderWith(t)), DEFAULT_FIX_SIGNALS);
-});
-
-test('readFixSignals uses the defaults when evidence.yml has no settings.fix_signals', async (t) => {
-  assert.deepEqual(await readFixSignals(folderWith(t, 'version: 3\nsettings:\n  test_command: npm test\n')), DEFAULT_FIX_SIGNALS);
-  assert.deepEqual(await readFixSignals(folderWith(t, 'version: 3\n')), DEFAULT_FIX_SIGNALS);
-  assert.deepEqual(await readFixSignals(folderWith(t, '')), DEFAULT_FIX_SIGNALS);
-});
-
-test('readFixSignals uses a custom list in place of the defaults', async (t) => {
-  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:defect, title:hotfix]\n');
-  assert.deepEqual(await readFixSignals(cwd), ['label:defect', 'title:hotfix']);
-});
-
-test('readFixSignals accepts title_after_key: like the other types', async (t) => {
-  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title_after_key:fix, branch:fix/]\n');
-  assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
-});
-
-test('readFixSignals reads only fix_signals, so the rest of the file is not checked', async (t) => {
-  const cwd = folderWith(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n  mutation_budget_seconds: soon\nkinds: 7\n');
-  assert.deepEqual(await readFixSignals(cwd), ['branch:bugfix/']);
-});
-
-test('readFixSignals refuses a malformed fix_signals with a tool error that says what is wrong', async (t) => {
-  const cases = [
-    ['settings:\n  fix_signals: label:bug\n', /must be a list/],
-    ['settings:\n  fix_signals: []\n', /at least one signal/],
-    ['settings:\n  fix_signals: [label:bug, 7]\n', /fix_signals\[1\].*not 7/],
-    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key: or branch:/],
-    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key: or branch:/],
-    ['settings:\n  fix_signals: ["title_after_key:"]\n', /"title_after_key:".*needs a value/],
-    ['settings:\n  fix_signals: ["title_after_key: fix"]\n', /"title_after_key: fix".*space/],
-    ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],
-    ['settings:\n  fix_signals: ["label: bug"]\n', /"label: bug".*space/],
-    ['settings:\n  fix_signals: ["title:fix "]\n', /"title:fix ".*space/],
-    ['settings:\n  fix_signals: [label:bug\n', /evidence\.yml is not valid YAML/]
-  ];
-  for (const [text, message] of cases) {
-    await assert.rejects(readFixSignals(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
-  }
 });

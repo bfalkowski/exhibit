@@ -48,7 +48,7 @@ test('the second request for a URL sends If-None-Match, gets a 304, and returns 
 
   assert.equal(github.calls[0].headers['if-none-match'], undefined);
   assert.equal(github.calls[1].headers['if-none-match'], 'W/"v1"');
-  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1 });
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 });
 });
 
 test('a list served from the cache still follows the saved Link header to the next page', async () => {
@@ -60,7 +60,7 @@ test('a list served from the cache still follows the saved Link header to the ne
   assert.deepEqual(await client(github.fetch, dir).getAll('/x?page=1'), [1, 2, 3]);
   const second = client(github.fetch, dir);
   assert.deepEqual(await second.getAll('/x?page=1'), [1, 2, 3]);
-  assert.deepEqual(second.counts(), { requests: 2, not_modified: 2 });
+  assert.deepEqual(second.counts(), { requests: 2, not_modified: 2, queries: 0, points: 0 });
 });
 
 test('a 200 with a new ETag replaces the saved entry', async () => {
@@ -75,7 +75,7 @@ test('a 200 with a new ETag replaces the saved entry', async () => {
   assert.deepEqual(await third.getOne('/repos/o/r'), { default_branch: 'trunk' });
 
   assert.deepEqual(github.calls.map((call) => call.headers['if-none-match']), [undefined, '"old"', '"new"']);
-  assert.deepEqual(third.counts(), { requests: 1, not_modified: 1 });
+  assert.deepEqual(third.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 });
 });
 
 test('a broken or partly written entry is ignored: the client asks again with no If-None-Match, and the run succeeds', async () => {
@@ -89,12 +89,12 @@ test('a broken or partly written entry is ignored: the client asks again with no
     const again = client(github.fetch, dir);
     assert.deepEqual(await again.getOne('/repos/o/r'), { default_branch: 'main' }, JSON.stringify(broken));
     assert.equal(github.calls.at(-1).headers['if-none-match'], undefined, JSON.stringify(broken));
-    assert.deepEqual(again.counts(), { requests: 1, not_modified: 0 });
+    assert.deepEqual(again.counts(), { requests: 1, not_modified: 0, queries: 0, points: 0 });
   }
   // The last fetch wrote a whole entry again, so the next request gets a 304.
   const fixed = client(github.fetch, dir);
   await fixed.getOne('/repos/o/r');
-  assert.deepEqual(fixed.counts(), { requests: 1, not_modified: 1 });
+  assert.deepEqual(fixed.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 });
 });
 
 test('with no cache, the client sends no If-None-Match and writes nothing', async () => {
@@ -104,7 +104,7 @@ test('with no cache, the client sends no If-None-Match and writes nothing', asyn
   await noCache.getOne('/repos/o/r');
   await noCache.getOne('/repos/o/r');
   assert.deepEqual(github.calls.map((call) => call.headers['if-none-match']), [undefined, undefined]);
-  assert.deepEqual(noCache.counts(), { requests: 2, not_modified: 0 });
+  assert.deepEqual(noCache.counts(), { requests: 2, not_modified: 0, queries: 0, points: 0 });
   assert.deepEqual(readdirSync(dir), []);
 });
 
@@ -118,7 +118,7 @@ test('two tokens get separate entries, and no file in the cache holds a token', 
   await second.getOne('/repos/o/r');
 
   assert.equal(github.calls[1].headers['if-none-match'], undefined, 'the second token does not get the first token\'s entry');
-  assert.deepEqual(second.counts(), { requests: 1, not_modified: 0 });
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 0, queries: 0, points: 0 });
   const files = readdirSync(dir);
   assert.equal(files.length, 2);
   for (const name of files) {
@@ -154,12 +154,12 @@ test('a full last page served from the cache is asked again with no If-None-Matc
     ['/c?per_page=2', undefined],
     ['/c?per_page=2&page=2', undefined]
   ]);
-  assert.deepEqual(second.counts(), { requests: 3, not_modified: 1 });
+  assert.deepEqual(second.counts(), { requests: 3, not_modified: 1, queries: 0, points: 0 });
 
   // Page 1 now has a saved rel="next", so the next run trusts its 304s.
   const third = client(github.fetch, dir);
   assert.deepEqual(await third.getAll('/c?per_page=2'), [1, 2, 3]);
-  assert.deepEqual(third.counts(), { requests: 2, not_modified: 2 });
+  assert.deepEqual(third.counts(), { requests: 2, not_modified: 2, queries: 0, points: 0 });
 });
 
 test('a last page that is not full is trusted on a 304', async () => {
@@ -168,7 +168,7 @@ test('a last page that is not full is trusted on a 304', async () => {
   await client(github.fetch, dir).getAll('/c?per_page=3');
   const second = client(github.fetch, dir);
   assert.deepEqual(await second.getAll('/c?per_page=3'), [1, 2]);
-  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1 });
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 });
 });
 
 test('the cache narrows a folder that was there before to the user alone, and each file too', { skip: process.platform === 'win32' }, async () => {
@@ -184,5 +184,5 @@ test('the cache narrows a folder that was there before to the user alone, and ea
 test('a request that never reached GitHub is not counted', async () => {
   const github = createGitHub({ token: TOKEN, fetch: async () => { throw new Error('offline'); } });
   await assert.rejects(github.getOne('/repos/o/r'), /could not reach GitHub/);
-  assert.deepEqual(github.counts(), { requests: 0, not_modified: 0 });
+  assert.deepEqual(github.counts(), { requests: 0, not_modified: 0, queries: 0, points: 0 });
 });

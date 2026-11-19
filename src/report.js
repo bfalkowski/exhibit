@@ -2,8 +2,8 @@
 // history lines. Both files come from one list of blocks, so they always hold the same facts.
 
 // The rule for weak history (spec 8.5). The history is weak when it has fewer than `minFixPrs`
-// fix PRs, when SZZ linked none of them, or when fewer than half of the escaped defects have a
-// link with a confidence of `strongConfidence` or more.
+// fix PRs, when SZZ linked none of them or did not run, or when fewer than half of the escaped
+// defects have a link with a confidence of `strongConfidence` or more.
 export const WEAK_HISTORY = { minFixPrs: 10, strongConfidence: 0.5 };
 
 // The most lines the report shows for one link. history.jsonl has them all.
@@ -20,10 +20,22 @@ export function buildReport(lines, { repo, szzRan, fixSignals }) {
   return { markdown: toMarkdown(blocks), html: toHtml(title, blocks) };
 }
 
+// The escaped defects: the fix PRs that SZZ linked to at least one introducing PR, newest fix
+// first. The report lists them, and `exhibit label` labels this same list.
+export function escapedDefects(lines) {
+  return lines.filter((line) => line.classification.fix && line.szz?.links.length > 0).sort(newestFirst);
+}
+
+// One escaped defect as plain text for a terminal, with the same facts as its part of the report.
+// `lines` are all the history lines, for the titles of the introducing PRs.
+export function defectText(fix, lines) {
+  return toText(defectBlocks(fix, new Map(lines.map((line) => [line.number, line]))));
+}
+
 function reportBlocks(lines, { repo, szzRan, fixSignals }) {
   const byNumber = new Map(lines.map((line) => [line.number, line]));
   const fixes = lines.filter((line) => line.classification.fix).sort(newestFirst);
-  const defects = szzRan ? fixes.filter((line) => line.szz?.links.length > 0) : [];
+  const defects = szzRan ? escapedDefects(lines) : [];
   const noLink = szzRan ? fixes.filter((line) => !(line.szz?.links.length > 0)) : [];
   const skipped = szzRan ? fixes.filter((line) => line.szz === null).length : 0;
   const strong = defects.filter((line) => line.szz.links[0].confidence >= WEAK_HISTORY.strongConfidence).length;
@@ -43,7 +55,7 @@ function reportBlocks(lines, { repo, szzRan, fixSignals }) {
     ));
   }
   blocks.push(paragraph(
-    `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them, ` +
+    `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them or did not run, ` +
     `or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
   ));
 
@@ -142,6 +154,15 @@ function toMarkdown(blocks) {
     if (block.type === 'paragraph') return inline(block.parts);
     return listLines(block.items, 0).join('\n');
   }).join('\n\n') + '\n';
+}
+
+function toText(blocks) {
+  // A PR title could hold control characters that a terminal acts on, so they are shown as "?".
+  const control = (code) => (code < 0x20 && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code < 0xa0);
+  const plain = (text) => [...text].map((char) => (control(char.codePointAt(0)) ? '?' : char)).join('');
+  const inline = (parts) => plain(parts.map((part) => (typeof part === 'string' ? part : part.code)).join(''));
+  const listLines = (items, depth) => items.flatMap((entry) => [`${'  '.repeat(depth)}- ${inline(entry.parts)}`, ...listLines(entry.items, depth + 1)]);
+  return blocks.map((block) => (block.type === 'list' ? listLines(block.items, 0).join('\n') : inline(block.parts))).join('\n') + '\n';
 }
 
 // Text from the history, such as a PR title, is plain text, not markdown.

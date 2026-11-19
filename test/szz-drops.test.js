@@ -404,6 +404,15 @@ test('bugReportNumbers reads a full issue URL when it names this repo', () => {
   assert.deepEqual(bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', 'owner/repo'), [4, 5]);
 });
 
+test('bugReportNumbers reads owner/name#12 when it names this repo', () => {
+  const body = 'Fixes Owner/Repo#12\nCloses owner/other#9 and fixes other/repo#8\nresolves: owner/repo#12, closes owner/repo#5.';
+  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12, 5]);
+  // A repo name with dots and dashes, and a mix of all three forms.
+  assert.deepEqual(bugReportNumbers('fixes my-org/my.repo#3, closes #4, fixes https://github.com/my-org/my.repo/issues/6', 'my-org/my.repo'), [3, 4, 6]);
+  // The words must close the issue: a bare mention does not count.
+  assert.deepEqual(bugReportNumbers('See owner/repo#7. Prefixes owner/repo#2', 'owner/repo'), []);
+});
+
 test('newer than the bug report: a line whose commit came after the report is dropped', () => {
   const at = (time, line) => ({ path: 'a.js', line, text: `line ${line}`, blame: { author_time: time } });
   const older = at('2026-01-05T09:00:00Z', 1);

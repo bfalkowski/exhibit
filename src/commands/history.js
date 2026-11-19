@@ -1,11 +1,11 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { readFixSignals } from '../fix-signals.js';
 import { createGitHubForge, isRepoName } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
+import { readPolicy } from '../policy.js';
 import { buildReport } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
@@ -16,7 +16,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 
 // `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--no-cache] [--json]`
 // Writes one line for each merged PR to .exhibit/history.jsonl, and marks fix PRs by the fix
-// signals in evidence.yml, or the defaults. When the file is there from an earlier run, it reads
+// signals in evidence.yml, or the defaults. A bad evidence.yml stops the run before it asks
+// GitHub. When the file is there from an earlier run, it reads
 // only the PRs the file lacks and the PRs in the look-back window, and keeps the other lines
 // (spec 8.3). --full, or an old file that does not fit the schema, reads every PR again.
 // Every line must pass the schema before the file is
@@ -24,17 +25,19 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
-// Then it writes the report of escaped defects, as report.md and report.html (spec 8.5).
-// GitHub replies go through the shared reply cache (spec 8.6), unless --no-cache turns it off. At
-// the end it says how many requests went to GitHub and how many got a 304. A run that fails says
-// it too, on stderr.
+// It also writes the report of escaped defects, as report.md and report.html (spec 8.5). It writes
+// the three files together: when one write fails, none of the three changes.
+// It reads the PRs with GitHub's GraphQL API, and SZZ asks the REST API. REST replies go through
+// the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
+// REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
+// many points they used. A run that fails says it too, on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
   if (!token) throw new ToolError('GITHUB_TOKEN is not set. Set it to a GitHub token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).');
 
-  // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
-  const fixSignals = await readFixSignals(cwd);
+  // Read and check the policy before asking GitHub, so a bad evidence.yml fails fast.
+  const fixSignals = (await readPolicy(cwd)).settings.fix_signals;
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
@@ -42,8 +45,10 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   try {
     await run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr });
   } catch (error) {
-    const { requests, not_modified: notModified } = forge.counts();
-    if (requests > 0) stderr.write(`exhibit: note: this run made ${requests} GitHub requests, and ${notModified} got a 304.\n`);
+    const { requests, not_modified: notModified, queries, points } = forge.counts();
+    if (requests > 0 || queries > 0) {
+      stderr.write(`exhibit: note: this run made ${plural(requests, 'GitHub REST request')}, and ${notModified} got a 304. It made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')}.\n`);
+    }
     throw error;
   }
 }
@@ -52,6 +57,8 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, warn });
   const read = keepSzz(updated.lines, previous);
+  const changes = classificationChanges(read, previous);
+  if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
 
   const root = await cloneRoot(cwd, forge);
   let lines;
@@ -74,16 +81,18 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
     throw new ToolError(`GitHub sent data that does not fit the history schema, so ${OUTPUT} was not written:\n  ${shown}${more}\nReport this as an Exhibit issue, with the PR numbers.`);
   }
 
-  await writeAtomically(cwd, OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join(''));
   const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals });
-  await writeAtomically(cwd, REPORT.markdown, report.markdown);
-  await writeAtomically(cwd, REPORT.html, report.html);
+  await writeTogether(cwd, [
+    [OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join('')],
+    [REPORT.markdown, report.markdown],
+    [REPORT.html, report.html]
+  ]);
 
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
   const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
-  const { requests, not_modified: notModified } = forge.counts();
-  const github = { requests, not_modified: notModified, cache: folder };
+  const { requests, not_modified: notModified, queries, points } = forge.counts();
+  const github = { requests, not_modified: notModified, cache: folder, graphql: { queries, points } };
   const mode = previous.length > 0 ? 'incremental' : 'full';
   if (options.json) {
     stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read }) + '\n');
@@ -96,8 +105,14 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
       ? `Read all ${updated.read} merged PRs from GitHub.`
       : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
     stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n` +
-      `Made ${requests} GitHub requests. ${cached}\n`);
+      `Made ${plural(requests, 'GitHub REST request')}. ${cached}\n` +
+      `Made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')} of the GraphQL rate limit.\n`);
   }
+}
+
+// "1 point", "2 points". `many` is the plural of the last word, when it is not that word with "s".
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : one.replace(/\S+$/, (word) => many ?? `${word}s`)}`;
 }
 
 // Returns the lines of the old history file, so the run reads only what is new. Returns [] when
@@ -138,13 +153,34 @@ async function readPrevious(cwd, forge, note) {
 // Returns `lines` where a fix PR that was read again keeps its szz from the old file, so SZZ does
 // not run on it again. A PR merged once does not change its code, so its SZZ result stays true.
 // SZZ runs on a fix that the old file had as no fix, or with a null szz, as SZZ skipped it then.
+// A kept line that the fix signals no longer mark as a fix gets szz null, as every other PR
+// that is no fix has.
 function keepSzz(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line]));
   return lines.map((line) => {
+    if (!line.classification.fix && line.szz) return { ...line, szz: null };
     if (line.szz !== undefined) return line;
     const before = old.get(line.number);
     return before?.szz && line.classification.fix ? { ...line, szz: before.szz } : line;
   });
+}
+
+// Returns one text that lists the PRs whose classification differs from their line in the old
+// file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so
+// this is how a person sees what a change to the signals did.
+function classificationChanges(lines, previous) {
+  const old = new Map(previous.map((line) => [line.number, line.classification]));
+  const changed = lines.filter((line) => {
+    const before = old.get(line.number);
+    return before && (before.fix !== line.classification.fix || before.fix_signal !== line.classification.fix_signal);
+  });
+  if (changed.length === 0) return '';
+  const said = changed.slice(0, 10).map(({ number, classification: { fix, fix_signal: signal } }) => {
+    if (!fix) return `PR ${number} is no longer a fix`;
+    return old.get(number).fix ? `PR ${number} is a fix by ${signal} now` : `PR ${number} is now a fix (${signal})`;
+  });
+  const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
+  return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
 }
 
 function parseOptions(argv) {
@@ -190,17 +226,35 @@ function parseSince(text) {
   return Number.isNaN(since.getTime()) ? null : since;
 }
 
-// Writes `text` to `name` in `cwd`, so a failed write leaves the older file as it was.
-async function writeAtomically(cwd, name, text) {
-  const path = join(cwd, name);
-  const temporary = `${path}.${process.pid}.tmp`;
+// Writes each [name, text] of `files` in `cwd`, so the files keep the same facts. It writes every
+// file to a temporary file first, and renames them only when all the writes worked. So a failed
+// write, as on a full disk, leaves all the older files as they were, and no temporary file.
+async function writeTogether(cwd, files) {
+  const temporaries = [];
   try {
-    await mkdir(join(path, '..'), { recursive: true });
-    await writeFile(temporary, text);
-    await rename(temporary, path);
+    for (const [name, text] of files) {
+      const path = join(cwd, name);
+      const temporary = `${path}.${process.pid}.tmp`;
+      try {
+        await mkdir(join(path, '..'), { recursive: true });
+        temporaries.push(temporary);
+        await writeFile(temporary, text);
+      } catch (error) {
+        throw new ToolError(`could not write ${name}: ${error.message}`);
+      }
+    }
+    for (const [index, [name]] of files.entries()) {
+      try {
+        await rename(temporaries[index], join(cwd, name));
+      } catch (error) {
+        throw new ToolError(`could not write ${name}: ${error.message}`);
+      }
+    }
   } catch (error) {
-    // Best effort: when the folder itself is the problem, removing the temporary file fails too.
-    await rm(temporary, { force: true }).catch(() => {});
-    throw new ToolError(`could not write ${name}: ${error.message}`);
+    // A rename that fails after an earlier one worked still leaves a mix. A rename needs no free
+    // space, so this is rare. Best effort: when the folder itself is the problem, removing a
+    // temporary file fails too.
+    await Promise.all(temporaries.map((temporary) => rm(temporary, { force: true }).catch(() => {})));
+    throw error;
   }
 }
