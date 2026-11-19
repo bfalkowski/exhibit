@@ -175,6 +175,45 @@ test('the walk to a squash fix\'s first commit', async (t) => {
   });
 });
 
+// After a repo renames its default branch, such as from master to main, the PRs merged before
+// keep base_ref "master". Fix 7 blames a line on PR 2's squash commit. Here PR 2 has base_ref
+// "master", and GitHub lists no PR for its commit.
+test('a merge SHA from before a default branch rename', async (t) => {
+  async function run(t, defaultBranch) {
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const history = repo.history.map((pr) => (pr.number === 2 ? { ...pr, base_ref: 'master' } : pr));
+    const pr2Sha = history.find((pr) => pr.number === 2).merge_sha;
+    const replies = commitPullsFetch(repo, REPO);
+    const calls = [];
+    const fetch = async (url, init) => {
+      const { pathname } = new URL(url);
+      calls.push(pathname);
+      const body = pathname === `/repos/${REPO}` ? { full_name: REPO, default_branch: defaultBranch }
+        : pathname.includes(`/commits/${pr2Sha}/pulls`) ? [] : null;
+      if (body === null) return replies(url, init);
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
+    const asked = calls.some((path) => path.includes(`/commits/${pr2Sha}/pulls`));
+    return { fix7: lines.find((line) => line.number === 7), asked };
+  }
+
+  await t.test('links to its PR with no pulls request, when the commit is on the first-parent line of the default branch in the clone', async (t) => {
+    const { fix7, asked } = await run(t, 'main');
+    assert.deepEqual(fix7.szz.links.map((link) => link.pr), [2, 3]);
+    assert.deepEqual(fix7.szz.unlinked_lines, []);
+    assert.equal(asked, false);
+  });
+
+  await t.test('asks GitHub when the clone has no branch with the default branch name', async (t) => {
+    const { fix7, asked } = await run(t, 'trunk');
+    assert.equal(asked, true);
+    assert.deepEqual(fix7.szz.links.map((link) => link.pr), [3]);
+    assert.equal(fix7.szz.unlinked_lines.length, 1);
+  });
+});
+
 test('SZZ gives szz: null and a warning when the fix merge commit is not in the clone', async (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
