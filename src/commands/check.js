@@ -26,8 +26,9 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // write them, no old file is left to be read as this run's verdict.
 // Any failure that is not a verdict throws. The CLI then prints it and exits 2.
 export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
-  const options = parseOptions(argv);
+  // Remove the old files before anything can fail, a bad argument too.
   await Promise.all(Object.values(OUTPUT).map((file) => rm(join(cwd, file), { force: true })));
+  const options = parseOptions(argv);
 
   const policy = await readPolicy(cwd);
   const policyFile = { path: 'evidence.yml', sha256: await fileHash(join(cwd, 'evidence.yml')) };

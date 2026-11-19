@@ -166,3 +166,14 @@ test('check --pr reads the base, the head, the title and the labels from the for
   assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal, evidence.classification.feature, evidence.classification.signals_from], [true, 'title:fix', true, 'pr']);
   assert.deepEqual(checkExhibit(evidence), []);
 });
+
+test('a bad argument removes the old evidence.json too, so no old verdict is left', (t) => {
+  const fixture = buildRepo(t);
+  mkdirSync(join(fixture.repo, '.exhibit'));
+  writeFileSync(join(fixture.repo, '.exhibit', 'evidence.json'), '{"verdict":"meets_policy"}\n');
+  writeFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'old\n');
+  const run = exhibitCheck(fixture, ['--pr', 'abc']);
+  assert.equal(run.status, 2);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'summary.md')), false);
+});

@@ -159,7 +159,9 @@ export function renderSummary(exhibit) {
   lines.push(`Base ${exhibit.base.slice(0, 7)}, head ${exhibit.head.slice(0, 7)}.${pr}`, '');
 
   lines.push('## The change', '');
-  lines.push(c.kinds.length > 0 ? `- Kinds of change: ${c.kinds.join(', ')}.` : '- No kind of change matched the changed files, so the default rules apply.');
+  if (c.kinds.length > 0) lines.push(`- Kinds of change: ${c.kinds.join(', ')}.`);
+  else if (exhibit.gaps.some((gap) => gap.type === 'no-rule')) lines.push('- No kind of change matched the changed files, and the policy has no default, so no rule covers this change.');
+  else lines.push('- No kind of change matched the changed files, so the default rules apply.');
   lines.push(`- Risk: ${c.risk}.`);
   lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
   if (c.signals_from === 'branch') {

@@ -353,7 +353,7 @@ The cache does not remove old entries. Deleting the folder is always safe: the n
 - A PR counts as a feature when a `feature` label is set. The name must match, and case does not matter. Today the policy has no field that marks source paths, so a later ticket adds the rule "adds files under a source path".
 - `exhibit check --pr N` gets the title, labels and branch from the forge. Without `--pr`, it knows only the local branch name: the `--head` ref when it names a local branch, or the checked-out branch when the head is `HEAD`. A fix or feature that only the title or a label shows is then not seen, and `summary.md` says so.
 - A change matches a kind when any changed path matches any glob in its `match`. In a glob, `*` matches any characters inside one folder name, `**` as a whole folder name matches any number of folders, and `?` matches one character that is not a slash. A glob matches the whole path, from the top of the repo.
-- When no kind matches and the policy has no `default`, the change has risk `high` and no requirements, and the verdict is `needs_person` with a gap of type `no-rule`.
+- When no kind matches and the policy has no `default`, the change has risk `high` and no requirements, and the verdict is `needs_person` with a gap of type `no-rule`. A change with no changed files, such as a base and head that are the same commit, matches no kind either. So the `default` needs apply to it, or, with no `default`, it gets the `no-rule` gap.
 
 ### 9.2 SZZ
 

@@ -108,3 +108,10 @@ test('the summary lists each gap with how to fix it, and says when only the bran
   assert.match(summary, /only the branch name/i);
   assert.match(summary, /--pr/);
 });
+
+test('the summary does not speak of default rules when the policy has none', async () => {
+  const exhibit = await buildExhibit(input({ settings: SETTINGS, kinds: {} }), options(ALL_MET));
+  const summary = renderSummary(exhibit);
+  assert.match(summary, /has no default, so no rule covers this change/);
+  assert.doesNotMatch(summary, /default rules apply/);
+});
