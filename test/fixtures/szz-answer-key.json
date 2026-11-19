@@ -26,7 +26,7 @@
       "fix_pr": 9,
       "introducing_prs": [],
       "case": "moved lines only",
-      "lines": ["src/format.js: the receipt function moves to the top of the file"]
+      "lines": ["src/format.js: the receipt function moves to a new file, src/receipt.js"]
     },
     {
       "fix_pr": 10,

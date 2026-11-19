@@ -145,16 +145,29 @@ function nextLink(header) {
   return match ? match[1] : null;
 }
 
+// A reply from GitHub that is not OK. `status` is its HTTP status, so a caller can tell a problem
+// with one request, such as a 502, from one that stops every request, such as a refused token.
+export class GitHubReplyError extends ToolError {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function apiError(response, url, permission) {
   const detail = await messageOf(response);
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
-  if (response.status === 401) return new ToolError(`${what}. GITHUB_TOKEN was refused: make a new token and set it.`);
-  if (response.status === 403 || response.status === 429) {
+  return new GitHubReplyError(`${what}.${advice(response.status, permission)}`, response.status);
+}
+
+function advice(status, permission) {
+  if (status === 401) return ' GITHUB_TOKEN was refused: make a new token and set it.';
+  if (status === 403 || status === 429) {
     // A 429 is always a rate limit, so only a 403 can mean a missing permission.
-    const needs = permission && response.status === 403 ? ` A fine-grained GITHUB_TOKEN needs the permission "${permission}" for this request.` : '';
-    return new ToolError(`${what}. The token may lack access, or the rate limit is used up: check the token, or wait and try again.${needs}`);
+    const needs = permission && status === 403 ? ` A fine-grained GITHUB_TOKEN needs the permission "${permission}" for this request.` : '';
+    return ` The token may lack access, or the rate limit is used up: check the token, or wait and try again.${needs}`;
   }
-  if (response.status === 404) return new ToolError(`${what}. Check the repo name, and that GITHUB_TOKEN can read that repo.`);
-  if (response.status >= 500) return new ToolError(`${what}. GitHub had a problem: try again later.`);
-  return new ToolError(`${what}.`);
+  if (status === 404) return ' Check the repo name, and that GITHUB_TOKEN can read that repo.';
+  if (status >= 500) return ' GitHub had a problem: try again later.';
+  return '';
 }

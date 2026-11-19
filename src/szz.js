@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { PERMISSIONS } from './github.js';
+import { GitHubReplyError, PERMISSIONS } from './github.js';
 
 const run = promisify(execFile);
 
@@ -59,14 +59,23 @@ export function createPrFinder({ lines, repo, github }) {
   const asked = new Map();
   let mainBranch = null;
   // The repo's default branch, asked for once, and only when a merge SHA or two merged PRs need it.
-  const defaultBranch = () => (mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch));
+  // A failed request is not kept, so the next fix asks again.
+  const defaultBranch = () => {
+    mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch);
+    mainBranch.catch(() => { mainBranch = null; });
+    return mainBranch;
+  };
   const find = async (sha) => {
     const line = byMergeSha.get(sha);
     if (line && line.base_ref === (await defaultBranch())) return line.number;
     return askGitHub(github, repo, sha, defaultBranch);
   };
   return (sha) => {
-    if (!asked.has(sha)) asked.set(sha, find(sha));
+    if (!asked.has(sha)) {
+      const answer = find(sha);
+      answer.catch(() => asked.delete(sha));
+      asked.set(sha, answer);
+    }
     return asked.get(sha);
   };
 }
@@ -85,8 +94,8 @@ async function askGitHub(github, repo, sha, defaultBranch) {
 }
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
-// not a fix gets null. A fix whose merge commit is not in the clone, or where git fails, gets
-// null and a warning. A shallow clone gives one warning first, because blame there can give
+// not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
+// GitHub fails for one of its requests, gets null and a warning. A shallow clone gives one warning first, because blame there can give
 // old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of `repo`, as cloneRoot returns it.
 export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
@@ -109,13 +118,18 @@ export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
       const reportedAt = await bugReportDate(line, { repo, github });
       out.push({ ...line, szz: await szzForFix(dir, line, findPr, reportedAt) });
     } catch (error) {
-      if (!(error instanceof GitError)) throw error;
+      if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
       out.push({ ...line, szz: null });
     }
   }
   return out;
 }
+
+// A GitHub reply that is a problem with one request, such as a 502. A refused token (401), a
+// missing permission (403) or a rate limit (403 or 429) would fail every later request too, so
+// those stop the run.
+const failsOneRequest = (error) => error instanceof GitHubReplyError && ![401, 403, 429].includes(error.status);
 
 async function hasCommit(dir, sha) {
   try {
@@ -146,7 +160,8 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
   for (const line of kept) {
     const pr = await findPr(line.blame.commit);
     if (pr === null) unlinked.push(line);
-    else byPr.set(pr, [...(byPr.get(pr) ?? []), line]);
+    else if (byPr.has(pr)) byPr.get(pr).push(line);
+    else byPr.set(pr, [line]);
   }
   const links = [...byPr]
     .map(([pr, prLines]) => ({ pr, confidence: prLines.length / kept.length, lines: prLines }))
@@ -194,11 +209,14 @@ function noLinkReason(dropped) {
 }
 
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
-// "Fixes #12" or "closes: #7". Only issues in the same repo count.
-export function bugReportNumbers(body) {
+// "Fixes #12", "closes: #7" or "Fixes https://github.com/owner/name/issues/12". Only issues in
+// `repo` ("owner/name") count.
+export function bugReportNumbers(body, repo = '') {
   const numbers = [];
-  for (const match of (body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)\b/gi)) {
-    const number = Number(match[1]);
+  const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
+  for (const [, short, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
+    if (urlRepo !== undefined && urlRepo.toLowerCase() !== repo.toLowerCase()) continue;
+    const number = Number(short ?? urlNumber);
     if (!numbers.includes(number)) numbers.push(number);
   }
   return numbers;
@@ -210,7 +228,7 @@ export function bugReportNumbers(body) {
 // it came before the newest one.
 async function bugReportDate(fix, { repo, github }) {
   let newest = null;
-  for (const number of bugReportNumbers(fix.body)) {
+  for (const number of bugReportNumbers(fix.body, repo)) {
     const issue = await github.getOne(`/repos/${repo}/issues/${number}`, { emptyOn: [404, 410] });
     if (issue === null || issue.pull_request || typeof issue.created_at !== 'string') continue;
     if (newest === null || Date.parse(issue.created_at) > Date.parse(newest)) newest = issue.created_at;
@@ -248,6 +266,8 @@ export function dropNewerLines(blamedLines, reportedAt) {
 //   lines with a letter or a digit. A blank line that no other hunk adds back is "whitespace".
 //   In a Python file the indent at the start of a line is code for both rules.
 // - "comment": it is only a comment, and the fix does not turn it back into code.
+// When no line is left, but some lines with words moved inside their own file, those moved
+// lines count: the fix changed only their place, so their place was the bug.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
 export function countedLines(diff) {
   const hunks = parseHunks(diff);
@@ -257,14 +277,25 @@ export function countedLines(diff) {
   });
   const deleted = hunks.flatMap((hunk, at) => {
     const comments = markComments(hunk.deleted.map((row) => row.text), hunk.oldPath);
-    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null }));
+    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null, movedInFile: false }));
   });
+  const index = indexByKey(added);
+  const sameFile = (deletedAt, addedAt) => hunks[deletedAt].newPath !== null && hunks[deletedAt].newPath === hunks[addedAt].newPath;
 
-  // Finds an added line with the same text, give or take whitespace, in the same hunk or in
-  // another one, and uses it up.
+  // Finds the first unused added line with the same text, give or take whitespace, in the same
+  // hunk or in another one, and uses it up.
   // Returns the matched line, or undefined.
   const pair = (line, sameHunk) => {
-    const match = added.find((row) => !row.used && row.key === line.key && (row.at === line.at) === sameHunk);
+    const byHunk = index.get(line.key);
+    let match;
+    if (byHunk && sameHunk) {
+      match = byHunk.get(line.at)?.firstUnused();
+    } else if (byHunk) {
+      for (const [at, rows] of byHunk) {
+        match = at === line.at ? undefined : rows.firstUnused();
+        if (match) break;
+      }
+    }
     if (match) match.used = true;
     return match;
   };
@@ -272,18 +303,21 @@ export function countedLines(diff) {
   for (const line of deleted) {
     const match = line.key === '' ? undefined : pair(line, true);
     if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
+    if (line.reason === 'moved') line.movedInFile = true;
   }
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
   for (let i = 0; i < deleted.length;) {
-    const block = movedBlock(deleted, added, i);
+    const block = movedBlock(deleted, added, index, i);
     if (block.filter((row) => hasWords(row.text)).length < 2) {
       i++;
       continue;
     }
+    const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
       deleted[i + k].reason = 'moved';
+      deleted[i + k].movedInFile = inFile && deleted[i + k].key !== '';
       row.used = true;
     }
     i += block.length;
@@ -300,35 +334,73 @@ export function countedLines(diff) {
   for (const line of deleted) {
     if (line.reason === null && line.comment && !code.has(uncomment(line.text).replace(/\s+/g, ''))) line.reason = 'comment';
   }
+  // A fix that only moves lines inside a file, such as an export moved above the code that
+  // needs it, would get no link at all. Its moved lines are the change, so they count.
+  if (deleted.every((line) => line.reason !== null)) {
+    for (const line of deleted) if (line.movedInFile) line.reason = null;
+  }
 
   const counted = new Map();
   const dropped = [];
   for (const { path, line, text, reason } of deleted) {
     if (reason !== null) dropped.push({ path, line, text, reason });
-    else counted.set(path, [...(counted.get(path) ?? []), line]);
+    else if (counted.has(path)) counted.get(path).push(line);
+    else counted.set(path, [line]);
   }
   return { counted, dropped };
 }
 
+// Groups the added lines by key, then by hunk, in the order of the diff, so a deleted line looks
+// only at the added lines with its key. A big generated file, such as a lockfile, has thousands
+// of lines, and reading all of them for each deleted line is slow. Each group keeps a cursor
+// past its used lines: a line that is used stays used.
+// Returns Map(key => Map(hunk => { rows, firstUnused() })). Each row gets its place in `added`.
+function indexByKey(added) {
+  const index = new Map();
+  for (const [place, row] of added.entries()) {
+    row.place = place;
+    if (!index.has(row.key)) index.set(row.key, new Map());
+    const byHunk = index.get(row.key);
+    if (!byHunk.has(row.at)) byHunk.set(row.at, hunkRows());
+    byHunk.get(row.at).rows.push(row);
+  }
+  return index;
+}
+
+function hunkRows() {
+  const rows = [];
+  let next = 0;
+  return {
+    rows,
+    firstUnused() {
+      while (next < rows.length && rows[next].used) next++;
+      return rows[next];
+    }
+  };
+}
+
 // Finds the longest run of added lines, in one hunk other than the deleted line's, that matches
 // the deleted lines from `start` on, line by line. Each matched line is unused, and each deleted
-// line in the run is in the same hunk and is not dropped yet.
+// line in the run is in the same hunk and is not dropped yet. Only added lines with the key of
+// the line at `start` can begin a run, so the index gives them.
 // Returns the matched added lines, or [] when no other hunk adds back the line at `start`.
-function movedBlock(deleted, added, start) {
+function movedBlock(deleted, added, index, start) {
   const first = deleted[start];
   let best = [];
   if (first.reason !== null) return best;
-  for (let j = 0; j < added.length; j++) {
-    if (added[j].at === first.at) continue;
-    let size = 0;
-    while (true) {
-      const from = deleted[start + size];
-      const to = added[j + size];
-      if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
-      if (to.at !== added[j].at || to.used || to.key !== from.key) break;
-      size++;
+  for (const [at, { rows }] of index.get(first.key) ?? []) {
+    if (at === first.at) continue;
+    for (const { place: j } of rows) {
+      let size = 0;
+      while (true) {
+        const from = deleted[start + size];
+        const to = added[j + size];
+        if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
+        if (to.at !== added[j].at || to.used || to.key !== from.key) break;
+        size++;
+      }
+      if (size > best.length) best = added.slice(j, j + size);
     }
-    if (size > best.length) best = added.slice(j, j + size);
   }
   return best;
 }
@@ -337,12 +409,42 @@ function movedBlock(deleted, added, start) {
 const hasWords = (text) => /[\p{L}\p{N}]/u.test(text);
 
 // The text with whitespace taken out, so two lines that differ only in whitespace match. In
-// Python the indent says which block a line is in, so it is code and stays.
+// Python the indent says which block a line is in, so it is code and stays. In a JavaScript,
+// TypeScript or Python file, whitespace inside a string stays too: 'Total:' and 'Total: ' print
+// different text.
 const squash = (text, path) => {
-  const words = text.replace(/\s+/g, '');
-  const indent = words !== '' && commentStyle(path) === 'hash' ? /^\s*/.exec(text)[0] : '';
+  const style = commentStyle(path);
+  const words = style === null ? text.replace(/\s+/g, '') : squashCode(text, style);
+  const indent = words !== '' && style === 'hash' ? /^\s*/.exec(text)[0] : '';
   return indent + words;
 };
+
+// Takes the whitespace out of a line of code, except inside a string. A comment after the code
+// ends the string search, so its whitespace goes. Each line is read alone, so the next line of a
+// string that spans lines, such as a template literal, reads as code. A quote mark that opens no
+// string, such as an apostrophe in JSX text, keeps the whitespace after it.
+function squashCode(text, style) {
+  const quotes = style === 'slash' ? ['"', "'", '`'] : ['"', "'"];
+  const comment = style === 'slash' ? '//' : '#';
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote === null && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
+    if (quote === null && /\s/.test(char)) continue;
+    out += char;
+    if (quote === null && quotes.includes(char)) {
+      quote = char;
+    } else if (quote !== null && char === '\\') {
+      // An escaped character, such as \' or \\, does not end the string.
+      i++;
+      out += text[i] ?? '';
+    } else if (char === quote) {
+      quote = null;
+    }
+  }
+  return out;
+}
 
 // The words inside a comment line, without its comment marks.
 const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').replace(/\*+\/$/, '');

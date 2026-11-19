@@ -56,9 +56,10 @@ test('whitespace: each added line pairs with one deleted line only', () => {
 test('moved: a line deleted in one place and added unchanged in another is dropped', () => {
   const result = countedLines(diff({ path: 'f.js', hunks: [
     { at: 3, added: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] },
-    { at: 12, deleted: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] }
+    { at: 12, deleted: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] },
+    { at: 30, deleted: ['  return total;'], added: ['  return total + tax;'] }
   ] }));
-  assert.deepEqual(counted(result), []);
+  assert.deepEqual(counted(result), [['f.js', [30]]]);
   assert.deepEqual(dropped(result), [['f.js', 12, 'moved'], ['f.js', 13, 'moved'], ['f.js', 14, 'moved']]);
 });
 
@@ -116,6 +117,75 @@ test('moved: a line that is added back changed is not moved', () => {
     { at: 9, deleted: ['return total - percent;'] }
   ] }));
   assert.deepEqual(counted(result), [['a.js', [9]]]);
+});
+
+test('moved: a fix that only moves lines inside one file counts the moved lines, because their place was the bug', () => {
+  // The case from the real run: chalk/chalk PR 569 moves five export lines up the file.
+  const exports = ['export const modifierNames = Object.keys(styles.modifier);', 'export const colorNames = [...foregroundColorNames];'];
+  const result = countedLines(diff({ path: 'index.js', hunks: [
+    { at: 68, added: [...exports, ''] },
+    { at: 219, deleted: ['', ...exports] }
+  ] }));
+  assert.deepEqual(counted(result), [['index.js', [220, 221]]]);
+  assert.deepEqual(dropped(result), [['index.js', 219, 'moved']]);
+});
+
+test('moved: a move inside one file is still dropped when the fix changes other lines too', () => {
+  const block = ['const tax = total * rate;', 'return total + tax;'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 2, added: block },
+    { at: 9, deleted: [...block, 'x = 1;'], added: ['x = 2;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [11]]]);
+  assert.deepEqual(dropped(result), [['a.js', 9, 'moved'], ['a.js', 10, 'moved']]);
+});
+
+test('moved: a fix that only moves lines to another file still counts no line', () => {
+  const block = ['const tax = total * rate;', 'return total + tax;'];
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 7, deleted: block }] },
+    { path: 'b.js', hunks: [{ at: 2, added: block }] }
+  ));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 7, 'moved'], ['a.js', 8, 'moved']]);
+});
+
+test('whitespace: a space inside a string is code in JavaScript, TypeScript and Python', () => {
+  for (const [path, before, after] of [
+    ['a.js', "  print('Total:' + n);", "  print('Total: ' + n);"],
+    ['a.ts', '  label = `Total:${n}`;', '  label = `Total: ${n}`;'],
+    ['a.py', '    print("Total:", n)', '    print("Total: ", n)'],
+    ['a.py', "    s = 'it\\'s:'", "    s = 'it\\'s: '"]
+  ]) {
+    const result = countedLines(diff({ path, hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(result), [[path, [3]]], `${path}: ${before}`);
+  }
+});
+
+test('whitespace: a space outside a string, or in a comment after the code, is still whitespace', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{
+    at: 3,
+    deleted: ["  print('Total: '+n); // don't", "  x = 'a';"],
+    added: ["  print( 'Total: ' + n );  //  don't", "  x  =  'a';"]
+  }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace'], ['a.js', 4, 'whitespace']]);
+});
+
+test('whitespace: in a file of another kind, a space inside quotes is whitespace, as before', () => {
+  const result = countedLines(diff({ path: 'a.rb', hunks: [{ at: 3, deleted: ["puts 'Total:'"], added: ["puts 'Total: '"] }] }));
+  assert.deepEqual(dropped(result), [['a.rb', 3, 'whitespace']]);
+});
+
+test('a fix that rewrites a big generated file, such as a lockfile, is fast', () => {
+  const size = 20000;
+  const deleted = Array.from({ length: size }, (_, i) => `    "integrity": "sha512-old${i}",`);
+  const added = Array.from({ length: size }, (_, i) => `    "integrity": "sha512-new${i}",`);
+  const start = Date.now();
+  const result = countedLines(diff({ path: 'package-lock.json', hunks: [{ at: 1, deleted, added }] }));
+  assert.equal(result.counted.get('package-lock.json').length, size);
+  // Before the added lines had an index, this took about 26 seconds.
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
 });
 
 test('comments: JavaScript and TypeScript line and block comments are dropped', () => {
@@ -204,6 +274,12 @@ test('bugReportNumbers reads the GitHub closing words that link an issue in this
   assert.deepEqual(bugReportNumbers(null), []);
 });
 
+test('bugReportNumbers reads a full issue URL when it names this repo', () => {
+  const body = 'Fixes https://github.com/Owner/Repo/issues/12\nCloses https://github.com/owner/other/issues/9\nresolves: https://github.com/owner/repo/issues/12 and fixes https://github.com/owner/repo/pull/3';
+  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12]);
+  assert.deepEqual(bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', 'owner/repo'), [4, 5]);
+});
+
 test('newer than the bug report: a line whose commit came after the report is dropped', () => {
   const at = (time, line) => ({ path: 'a.js', line, text: `line ${line}`, blame: { author_time: time } });
   const older = at('2026-01-05T09:00:00Z', 1);
@@ -224,8 +300,16 @@ test('whitespace: in Python the indent is code, so a fix that only moves a line 
 });
 
 test('whitespace: a line that the same hunk adds back exactly is a moved line, not whitespace', () => {
-  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] }] }));
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] },
+    { at: 9, deleted: ['  return total;'], added: ['  return total + tax;'] }
+  ] }));
   assert.deepEqual(dropped(result), [['a.js', 1, 'moved'], ['a.js', 2, 'moved']]);
+});
+
+test('moved: a fix that only swaps two lines in one hunk counts them, because their order was the bug', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [1, 2]]]);
 });
 
 test('comments: a code line that starts with the * operator counts', () => {
