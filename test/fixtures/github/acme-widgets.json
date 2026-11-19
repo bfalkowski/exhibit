@@ -683,6 +683,12 @@
   "/repos/acme/widgets/issues/5/comments?per_page=100": {
     "status": 200,
     "headers": {},
-    "body": []
+    "body": [
+      {
+        "user": { "login": "dev5" },
+        "created_at": "2026-02-20T10:00:00Z",
+        "body": "> Verdict: fix\n\nFixed in abc1234."
+      }
+    ]
   }
 }

@@ -1,4 +1,4 @@
-import { commentReviews } from './comment-reviews.js';
+import { commentReviews, quotedVerdictWarnings } from './comment-reviews.js';
 import { classifyFix, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
 import { createGitHub, PERMISSIONS } from './github.js';
 import { ToolError } from './tool-error.js';
@@ -17,7 +17,8 @@ const LISTED_FILES_AT_MOST = 3000;
 // knows: the later fields (evidence_section, szz, exhibit) are left out. The schema requires szz,
 // so the history command (src/commands/history.js) adds szz to each line before it checks and
 // writes the lines.
-// `warn` gets one text for each PR whose files list GitHub cut short, in the order of the lines.
+// `warn` gets one text for each PR whose files list GitHub cut short, and one for each comment
+// whose only verdict is in a quoted line, in the order of the lines.
 export async function readHistory({ repo, token, fetch, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   const github = createGitHub({ token, fetch });
   const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`, { permission: PERMISSIONS.pullRequests });
@@ -40,9 +41,13 @@ export async function readHistory({ repo, token, fetch, since, limit, fixSignals
       github.getAll(`/repos/${repo}/commits/${pr.head.sha}/status?per_page=100`, { listField: 'statuses', permission: PERMISSIONS.commitStatuses })
     ]);
     const ci = [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
-    return { line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals), warning: await checkFilesComplete(github, repo, pr.number, files.length) };
+    const filesWarning = await checkFilesComplete(github, repo, pr.number, files.length);
+    return {
+      line: toHistoryLine(pr, files, reviews, comments, ci, fixSignals),
+      warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments)]
+    };
   });
-  for (const { warning } of read) if (warning) warn(warning);
+  for (const { warnings } of read) for (const warning of warnings) warn(warning);
   return read.map(({ line }) => line);
 }
 

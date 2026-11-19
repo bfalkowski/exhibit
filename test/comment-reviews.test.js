@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commentVerdict } from '../src/comment-reviews.js';
+import { commentVerdict, quotedVerdict } from '../src/comment-reviews.js';
 
 // Each text below is the start of a real review or reply on bfalkowski/Building58, cut short.
 
@@ -50,4 +50,38 @@ test('a verdict in a quoted line does not count', () => {
   assert.equal(commentVerdict('> Verdict: fix\n\nFixed in abc1234.'), null);
   assert.equal(commentVerdict('  > ## Review of b8ebe79: fix\n\nFixed in abc1234.'), null);
   assert.equal(commentVerdict('> Verdict: fix\n\nI checked it again. Verdict: merge.'), 'merge');
+});
+
+test('a GitHub alert box is a quote, but it is the comment\'s own text, so its verdict counts', () => {
+  assert.equal(commentVerdict('> [!IMPORTANT]\n> Verdict: fix\n\nThe test fails.'), 'fix');
+  assert.equal(commentVerdict('> [!note]\n> Verdict: merge'), 'merge');
+  // A blank line ends the alert box. The quote after it is a quote of another comment.
+  assert.equal(commentVerdict('> [!NOTE]\n> Thanks.\n\n> Verdict: fix\n\nFixed in abc1234.'), null);
+});
+
+test('quotedVerdict finds a verdict that only a quoted line gives, so the caller can warn', () => {
+  assert.equal(quotedVerdict('> Verdict: fix\n\nFixed in abc1234.'), 'fix');
+  assert.equal(quotedVerdict('> Verdict: fix\n\nI checked it again. Verdict: merge.'), null);
+  assert.equal(quotedVerdict('> [!IMPORTANT]\n> Verdict: fix'), null);
+  assert.equal(quotedVerdict('<!-- office:dev -->\n> Verdict: fix\n\nFixed.'), null);
+  assert.equal(quotedVerdict('No verdict here.'), null);
+  assert.equal(quotedVerdict(null), null);
+});
+
+test('a hyphen counts between the word verdict and the verdict only at the start of a line', () => {
+  assert.equal(commentVerdict('The verdict - merge - waits on CI.'), null);
+  assert.equal(commentVerdict('We wait on the review of b8ebe79 - fix first.'), null);
+  assert.equal(commentVerdict('  **Verdict** - fix\n\nThe test fails.'), 'fix');
+  assert.equal(commentVerdict('Notes first.\n### Verdict - merge'), 'merge');
+});
+
+test('a line right after a quote line, with no blank line between, is still in the quote', () => {
+  assert.equal(commentVerdict('> Thanks for the review.\nVerdict: fix\n\nFixed in abc1234.'), null);
+  // A heading or a code fence ends the quote, so this heading is the comment's own text.
+  assert.equal(commentVerdict('> Thanks for the review.\n## Review of b8ebe79: merge'), 'merge');
+});
+
+test('a line inside a code fence is not a quote, even when it starts with >', () => {
+  assert.equal(commentVerdict('```\n> Verdict: fix\n```'), 'fix');
+  assert.equal(commentVerdict('~~~text\n> Verdict: merge\n~~~\n'), 'merge');
 });
