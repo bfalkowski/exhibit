@@ -179,7 +179,7 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 
 What each version fills:
 
-- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. The other fields are absent, and the schema allows them only as null.
+- **S1, first half (now):** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. When that happens, `exhibit history` prints a warning on stderr that names the PR and both counts, and still exits 0. Only a PR whose list reaches 3,000 files costs one more API request, to read its `changed_files` count. `base_sha` is GitHub's `base.sha`: the tip of the base branch when the PR was last updated. It is not always the merge-base of the PR. The other fields are absent, and the schema allows them only as null.
 - **S1, second half:** `reviews` and `ci`.
 - **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`.
 
@@ -382,3 +382,4 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 5. Whether to sign `evidence.json`, for example with Sigstore, so a session cannot forge it.
 6. Whether to add "cost of the next change" (tokens and review rounds per ticket, by area) as a measure of code quality later.
 7. Whether workflow artifacts are enough for storage, given their retention limit, or whether the data branch is always needed.
+8. Whether SZZ in S2 needs the real merge-base of each PR. `base_sha` is the tip of the base branch, not the merge-base. If S2 needs it, either compute it with `git merge-base` from `base_sha` and the PR's head, or add a `merge_base` field to the history schema.

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
+import { writeBigFixture } from './fixtures/github/acme-big.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
@@ -13,8 +14,9 @@ const fixture = (name) => fileURLToPath(new URL(`./fixtures/github/${name}.json`
 
 // Runs `exhibit ...args` in a new empty folder, with a fetch that replays the named fixture.
 // token: null runs it with no GITHUB_TOKEN at all.
-function exhibit(args, { fixtureName = 'acme-widgets', token = 'test-token', cwd = mkdtempSync(join(tmpdir(), 'exhibit-')) } = {}) {
-  const env = { ...process.env, EXHIBIT_TEST_FIXTURE: fixture(fixtureName) };
+// fixturePath: a fixture file built by a test, in place of a named one.
+function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = mkdtempSync(join(tmpdir(), 'exhibit-')) } = {}) {
+  const env = { ...process.env, EXHIBIT_TEST_FIXTURE: fixturePath };
   delete env.GITHUB_TOKEN;
   if (token !== null) env.GITHUB_TOKEN = token;
   const run = spawnSync(process.execPath, ['--import', preload, bin, ...args], { cwd, env, encoding: 'utf8' });
@@ -30,6 +32,20 @@ test('exhibit history writes one schema-valid line for each merged PR, then exit
   assert.deepEqual(lines.map((l) => l.number), [7, 4, 5, 3, 1]);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   assert.match(run.stdout, /5 merged PRs/);
+});
+
+test('a PR with more files than GitHub lists gives a warning on stderr that names it, and still exits 0', () => {
+  const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: writeBigFixture() });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n');
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl' });
+  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
+});
+
+test('a run with no cut-short PR prints nothing on stderr', () => {
+  const run = exhibit(['history', '--repo', 'acme/widgets']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stderr, '');
 });
 
 test('--since keeps PRs merged on or after the date', () => {

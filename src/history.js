@@ -3,11 +3,15 @@ import { createGitHub } from './github.js';
 // How many PRs ask for their files at the same time.
 const FILE_REQUESTS_AT_ONCE = 8;
 
+// GitHub lists at most this many files for one PR. A shorter list is complete.
+const LISTED_FILES_AT_MOST = 3000;
+
 // Reads the merged PRs of `repo` ("owner/name") and returns one history line for each, newest
 // merge first. `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
 // Only the kept PRs ask for their files. The lines fill the spec 8.3 fields this version knows:
 // the later fields (reviews, ci, classification, evidence_section, szz, exhibit) are left out.
-export async function readHistory({ repo, token, fetch, since, limit }) {
+// `warn` gets one text for each PR whose files list GitHub cut short, in the order of the lines.
+export async function readHistory({ repo, token, fetch, since, limit, warn = () => {} }) {
   const github = createGitHub({ token, fetch });
   const pulls = await github.getAll(`/repos/${repo}/pulls?state=closed&per_page=100`);
 
@@ -16,10 +20,21 @@ export async function readHistory({ repo, token, fetch, since, limit }) {
   merged.sort((a, b) => b.merged_at.localeCompare(a.merged_at) || b.number - a.number);
   if (limit !== undefined) merged = merged.slice(0, limit);
 
-  return mapInBatches(merged, FILE_REQUESTS_AT_ONCE, async (pr) => {
+  const read = await mapInBatches(merged, FILE_REQUESTS_AT_ONCE, async (pr) => {
     const files = await github.getAll(`/repos/${repo}/pulls/${pr.number}/files?per_page=100`);
-    return toHistoryLine(pr, files);
+    return { line: toHistoryLine(pr, files), warning: await checkFilesComplete(github, repo, pr.number, files.length) };
   });
+  for (const { warning } of read) if (warning) warn(warning);
+  return read.map(({ line }) => line);
+}
+
+// Returns a warning when GitHub listed fewer files than the PR changed, or null. The list of PRs
+// has no changed_files count, so only a PR whose list reached GitHub's limit is asked for it.
+async function checkFilesComplete(github, repo, number, listed) {
+  if (listed < LISTED_FILES_AT_MOST) return null;
+  const { changed_files: changed } = await github.getOne(`/repos/${repo}/pulls/${number}`);
+  if (!(changed > listed)) return null;
+  return `PR ${number} changed ${changed} files, but GitHub listed only the first ${listed}, so its files field is cut short.`;
 }
 
 function toHistoryLine(pr, files) {
