@@ -331,8 +331,7 @@ export function dropNewerLines(blamedLines, reportedAt) {
 // (spec 9.2, steps 1 and 2):
 // - `counted`: for each old file path, the old line numbers that SZZ blames.
 // - `dropped`: the lines that carry no bug, each with { path, line, text, reason }.
-// A line is dropped for one of three reasons, checked in this order, except that moved blocks
-// are found first, so a line that the same hunk adds back does not split a block:
+// A line is dropped for one of three reasons, checked in this order:
 // - "whitespace": the same hunk adds it back with only whitespace changed.
 // - "moved": the same hunk adds it back with the very same text, or it is in a moved block. A
 //   moved block is lines next to each other that another hunk, in any file, adds back next to
@@ -392,48 +391,43 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     if (match) match.used = true;
     return match;
   };
+  // A line that the same hunk adds back with the very same text only changed its place.
+  for (const line of deleted) {
+    const match = line.key === '' ? undefined : pair(line, true);
+    if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
+    if (line.reason === 'moved') line.movedInFile = hasWords(line.text);
+  }
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
-  // This rule comes before the same-hunk rule below. Otherwise, when the hunk that deletes a
-  // block also adds back one of its lines, that line is used up and splits the block in two.
-  const second = secondWordLines(deleted);
-  // The runs that the last start line found, moved one line on, so the next start line does
-  // not walk them again. A run of the same short line, such as "],", would cost the cube of
-  // its length. known[j] is the length of the run from added line j, or 0 when it is not known.
-  // Two arrays take turns, so a long diff does not make a new one for each line.
-  let known = new Int32Array(added.length + 1);
-  let next = new Int32Array(added.length + 1);
+  // A block can pass over a line that its own hunk adds back, so that line does not split the
+  // block. That line keeps its reason, and its own hunk keeps the added line it paired with.
+  const secondWordAt = secondWordLines(deleted);
+  const runs = knownRuns(added.length);
   for (let i = 0; i < deleted.length;) {
-    // A block that can not reach two lines with words can not pass, so do not look for one.
-    if (second[i] === -1) {
-      known.fill(0);
+    // A block starts at a line that no rule drops yet. When the block can not reach two lines
+    // with words, it can not pass, so do not look for it.
+    if (deleted[i].reason !== null || secondWordAt[i] === -1) {
+      runs.forget();
       i++;
       continue;
     }
-    next.fill(0);
-    const block = movedBlock(deleted, added, index, i, second[i], known, next);
+    const block = movedBlock(deleted, added, index, i, secondWordAt[i], runs);
     if (block.length === 0) {
-      [known, next] = [next, known];
+      runs.step();
       i++;
       continue;
     }
     const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
-      deleted[i + k].reason = 'moved';
-      deleted[i + k].movedInFile = inFile && hasWords(deleted[i + k].text);
+      const line = deleted[i + k];
       row.used = true;
+      if (line.reason !== null) continue;
+      line.reason = 'moved';
+      line.movedInFile = inFile && hasWords(line.text);
     }
-    known.fill(0);
+    runs.forget();
     i += block.length;
-  }
-  // A line that the same hunk adds back with the very same text only changed its place.
-  for (const line of deleted) {
-    if (line.reason !== null || line.key === '') continue;
-    const match = pair(line, true);
-    if (match === undefined) continue;
-    line.reason = match.text === line.text ? 'moved' : 'whitespace';
-    line.movedInFile = line.reason === 'moved' && hasWords(line.text);
   }
   // A blank line outside a moved block that another hunk adds back moved too. Any other blank
   // line is whitespace.
@@ -513,49 +507,71 @@ function hunkRows() {
 }
 
 // Finds the longest run of added lines, in one hunk other than the deleted line's, that matches
-// the deleted lines from `start` on, line by line, and reaches the deleted line at `second`: the
-// second line with words. Each matched line is unused, and each deleted line in the run is in
-// the same hunk and is not dropped yet. Only added lines with the key of the line at `start` can
-// begin a run, so the index gives them. A run from added line j can reach `second` only when the
-// added line as far from j matches it, so the other runs are not walked.
-// known[j] is the length of the run from the added line at place j, when the call for the line
-// before `start` found it and nothing changed since, or else 0. Known runs are not walked again.
-// The call writes into `next`, which must hold only zeros, the runs for the call at `start + 1`.
+// the deleted lines from `start` on, line by line, and reaches the deleted line at `secondWord`:
+// the second line with words. Only added lines with the key of the line at `start` can begin a
+// run, so the index gives them. A run from added line j can reach `secondWord` only when the
+// added line as far from j fits it, so the search walks no other run. `runs` holds the runs that
+// the line before `start` found, and gets the runs of this call for the line after it.
 // Returns the matched added lines, or [] when no such run exists.
-function movedBlock(deleted, added, index, start, second, known, next) {
+function movedBlock(deleted, added, index, start, secondWord, runs) {
   const first = deleted[start];
-  const far = second - start;
+  const reach = secondWord - start;
   let bestAt = 0;
-  let bestSize = far;
-  if (first.reason !== null) return [];
+  let bestSize = reach;
   for (const [at, { rows }] of index.get(first.key) ?? []) {
     if (at === first.at) continue;
     for (const { place: j } of rows) {
-      const end = added[j + far];
-      if (!known[j] && (end === undefined || end.at !== at || end.used || end.key !== deleted[second].key)) continue;
-      const size = known[j] || walk(deleted, added, start, j);
-      if (size > 1) next[j + 1] = size - 1;
+      let size = runs.get(j);
+      if (size === 0) {
+        if (!fits(deleted, added, start, j, reach)) continue;
+        while (fits(deleted, added, start, j, size)) size++;
+      }
+      runs.keep(j, size);
       if (size > bestSize) {
         bestAt = j;
         bestSize = size;
       }
     }
   }
-  return bestSize > far ? added.slice(bestAt, bestAt + bestSize) : [];
+  return bestSize > reach ? added.slice(bestAt, bestAt + bestSize) : [];
 }
 
-// Counts the lines that match, one by one, from the deleted line at `start` and the added line
-// at `j` on. Each deleted line stays in the hunk of the one at `start` and is not dropped yet.
-// Each added line stays in the hunk of the one at `j` and is unused.
-function walk(deleted, added, start, j) {
-  let size = 0;
-  while (true) {
-    const from = deleted[start + size];
-    const to = added[j + size];
-    if (from === undefined || to === undefined || from.at !== deleted[start].at || from.reason !== null) return size;
-    if (to.at !== added[j].at || to.used || to.key !== from.key) return size;
-    size++;
-  }
+// Says whether the deleted line `k` lines after `start` and the added line `k` lines after `j`
+// can be in one run. Each line stays in the hunk of the first line on its side, the added line
+// is unused, and the two lines have the same key. The deleted line can be one that its own hunk
+// adds back.
+function fits(deleted, added, start, j, k) {
+  const from = deleted[start + k];
+  const to = added[j + k];
+  if (from === undefined || to === undefined) return false;
+  return from.at === deleted[start].at && to.at === added[j].at && !to.used && to.key === from.key;
+}
+
+// Keeps the runs that one start line found, one line shorter, for the next start line, so that
+// line does not walk them again. Without this, a long run of the same short line, such as "],",
+// costs the cube of its length. Two typed arrays take turns, so the search makes no new array
+// for each line. A run is known only while no line changes, so the caller forgets them all when
+// it marks a block, or skips a start line.
+function knownRuns(size) {
+  let now = new Int32Array(size + 1);
+  let next = new Int32Array(size + 1);
+  return {
+    // The length of the run from added line j for this start line, or 0 when it is not known.
+    get: (j) => now[j],
+    // Keeps the run of `length` lines from added line j for the next start line.
+    keep(j, length) {
+      if (length > 1) next[j + 1] = length - 1;
+    },
+    // Moves on to the next start line.
+    step() {
+      [now, next] = [next, now];
+      next.fill(0);
+    },
+    forget() {
+      now.fill(0);
+      next.fill(0);
+    }
+  };
 }
 
 // For each deleted line, the place of the second line with words from it on in its hunk, or -1

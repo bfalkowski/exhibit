@@ -224,7 +224,6 @@ test('moved: a long run of a short line with no words, deleted in one hunk and a
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: run }, { at: 5000, added: run }] }));
   // No block reaches two lines with words, so no line is moved and each "]," is a real change.
   assert.equal(result.counted.get('a.js').length, size);
-  // Before the search stopped early, this took about 15 seconds.
   assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
 });
 
@@ -246,6 +245,41 @@ test('moved: a line that the same hunk adds back does not split a moved block', 
   ] }));
   assert.deepEqual(counted(result), [['a.js', [60]]]);
   assert.deepEqual(dropped(result), [10, 11, 12, 13].map((line) => ['a.js', line, 'moved']));
+});
+
+test('moved: a block passes over a line that its own hunk adds back, and that line keeps its reason', () => {
+  // The hunk adds back "b();" with only whitespace changed. Lines 10 and 12 still count: one line
+  // of words on each side of line 11 is not a block.
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 10, deleted: ['a();', 'b();', 'c();'], added: ['  b();'] },
+    { at: 40, added: ['a();', 'b();', 'c();'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [10, 12]]]);
+  assert.deepEqual(dropped(result), [['a.js', 11, 'whitespace']]);
+});
+
+test('moved: when a fix only moves a block that its own hunk partly adds back, all its lines count', () => {
+  const block = ['a();', 'b();', 'c();', 'd();'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 10, deleted: block, added: ['b();'] }, { at: 40, added: block }] }));
+  assert.deepEqual(counted(result), [['a.js', [10, 11, 12, 13]]]);
+});
+
+test('moved: a re-indent in one hunk stays whitespace when another hunk deletes a copy of the lines', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 10, deleted: ['  load(user);', '  save(user);'], added: ['    load(user);', '    save(user);'] },
+    { at: 40, deleted: ['  load(user);', '  save(user);'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [40, 41]]]);
+  assert.deepEqual(dropped(result), [['a.js', 10, 'whitespace'], ['a.js', 11, 'whitespace']]);
+});
+
+test('moved: lines that their own hunk adds back with new whitespace stay whitespace when another hunk adds them too', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 10, deleted: ['  a();', '  b();'], added: ['a();', 'b();'] },
+    { at: 40, added: ['  a();', '  b();'] }
+  ] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 10, 'whitespace'], ['a.js', 11, 'whitespace']]);
 });
 
 test('comments: JavaScript and TypeScript line and block comments are dropped', () => {
