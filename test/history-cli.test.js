@@ -139,6 +139,10 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  // PR 7 is a squash merge: its head commit is on its branch, and its merge commit is not.
+  const squash7 = lines.find((line) => line.number === 7);
+  assert.deepEqual([squash7.head_sha, squash7.forge, squash7.url], [execFileSync('git', ['rev-parse', 'refs/pull/7/head'], { cwd: repo.dir, env: gitEnv(repo.dir), encoding: 'utf8' }).trim(), 'github', 'https://github.com/fixture/shop/pull/7']);
+  assert.notEqual(squash7.head_sha, squash7.merge_sha);
   const fix7 = lines.find((line) => line.number === 7);
   assert.deepEqual(fix7.szz.links.map((link) => [link.pr, link.confidence]), [[2, 0.5], [3, 0.5]]);
   const [discount] = fix7.szz.links[0].lines;

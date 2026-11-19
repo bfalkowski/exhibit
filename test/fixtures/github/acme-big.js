@@ -19,6 +19,7 @@ function pr(number, changedFiles) {
   const sha = (letter) => letter.repeat(39) + number;
   return {
     number,
+    html_url: `https://github.com/acme/big/pull/${number}`,
     state: 'closed',
     title: `PR ${number}`,
     body: `Body of #${number}.`,
