@@ -154,7 +154,7 @@ test('the walk to a squash fix\'s first commit', async (t) => {
     t.after(() => repo.cleanup());
     const history = repo.history.map((pr) => ({ ...pr, classification: { ...pr.classification, fix: pr.number === 7 || pr.number === 9 } }));
     const fetch = commitPullsFetch(repo, REPO);
-    const lines = await addSzz(history, { dir: repo.dir, repo: REPO, github: createGitHub({ token: 't', fetch }) });
+    const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
     const fix7 = lines.find((line) => line.number === 7);
     const pr3 = fix7.szz.links.find((link) => link.pr === 3);
     assert.deepEqual(askedShas(fetch), [pr3.lines[0].blame.commit]);
@@ -167,7 +167,7 @@ test('the walk to a squash fix\'s first commit', async (t) => {
     t.after(() => repo.cleanup());
     const fix9 = repo.history.find((pr) => pr.number === 9);
     const fetch = commitPullsFetch(repo, REPO);
-    const [line] = await addSzz([fix9], { dir: repo.dir, repo: REPO, github: createGitHub({ token: 't', fetch }) });
+    const [line] = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
     const parent = git(repo.dir, ['rev-parse', `${fix9.merge_sha}^1`]);
     assert.equal(parent, repo.history.find((pr) => pr.number === 8).merge_sha);
     assert.deepEqual(askedShas(fetch), [parent]);
