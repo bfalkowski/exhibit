@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
+import { buildSzzRepo } from './fixtures/szz-repo.js';
+import { writeHistoryReplay } from './fixtures/szz-github.js';
 
 const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
@@ -23,6 +25,7 @@ function exhibit(args, { fixtureName = 'acme-widgets', fixturePath = fixture(fix
   return { ...run, cwd, historyPath: join(cwd, '.exhibit', 'history.jsonl') };
 }
 
+const notAClone = (repo) => `exhibit: note: SZZ did not run, because this folder is not a clone of ${repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`;
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', () => {
@@ -64,15 +67,47 @@ test('a malformed fix_signals gives exit 2 with a message, and writes no file', 
 test('a PR with more files than GitHub lists gives a warning on stderr that names it, and still exits 0', () => {
   const run = exhibit(['history', '--repo', 'acme/big', '--json'], { fixturePath: writeBigFixture() });
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n');
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl' });
+  assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
-test('a run with no cut-short PR prints nothing on stderr', () => {
+test('outside a clone, history writes szz: null on every line and says so in one line', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets']);
   assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stderr, notAClone('acme/widgets'));
+  for (const line of readLines(run.historyPath)) assert.equal(line.szz, null, `PR ${line.number}`);
+});
+
+test('inside a clone of the repo, history links each fix PR to the PRs that added its lines', (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir });
+  const run = exhibit(['history', '--repo', 'fixture/shop'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, '');
+  assert.equal(run.stdout, 'Wrote 10 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 5 of 5 fix PRs.\n');
+
+  // Read the links back from the file history wrote.
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  const fix7 = lines.find((line) => line.number === 7);
+  assert.deepEqual(fix7.szz.links.map((link) => [link.pr, link.confidence]), [[2, 0.5], [3, 0.5]]);
+  const [discount] = fix7.szz.links[0].lines;
+  assert.equal(discount.path, 'src/discount.js');
+  assert.equal(discount.text, '  return total - percent;');
+  assert.equal(discount.blame.commit, lines.find((line) => line.number === 2).merge_sha);
+  assert.equal(discount.blame.summary, 'Add discounts (#2)');
+  assert.equal(lines.find((line) => line.number === 1).szz, null, 'a PR that is not a fix');
+});
+
+test('--json gives the SZZ counts inside a clone', (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: repo.dir });
+  const run = exhibit(['history', '--repo', 'fixture/shop', '--json'], { fixturePath: writeHistoryReplay(repo, 'fixture/shop'), cwd: repo.dir });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 10, output: '.exhibit/history.jsonl', szz: { fix_prs: 5, linked: 5 } });
 });
 
 test('--since keeps PRs merged on or after the date', () => {
@@ -90,7 +125,7 @@ test('--limit keeps the newest N merged PRs', () => {
 test('--json prints a short machine summary', () => {
   const run = exhibit(['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl' });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', () => {

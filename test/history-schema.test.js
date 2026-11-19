@@ -85,3 +85,13 @@ test('the checker refuses a schema keyword it does not know, so no rule is skipp
   const { checkSchema } = await import('../src/json-schema.js');
   assert.throws(() => checkSchema({ type: 'string', maxLength: 3 }, 'abcd'), /maxLength/);
 });
+
+test('szz holds links, each with a confidence from 0 to 1 and lines that carry their blame output', () => {
+  const line = { path: 'src/a.js', line: 3, text: 'x;', blame: { commit: 'c'.repeat(40), original_path: 'src/a.js', original_line: 2, author: 'ana', author_time: '2026-01-05T09:00:00Z', summary: 'Add a' } };
+  const szz = { blamed_commit: 'd'.repeat(40), links: [{ pr: 4, confidence: 1, lines: [line] }], unlinked_lines: [] };
+  assert.deepEqual(checkHistoryLine({ ...good(), szz }), []);
+  assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, links: [{ pr: 4, confidence: 1.5, lines: [line] }] } }), ['/szz/links/0/confidence: must be at most 1']);
+  const noBlame = { ...line };
+  delete noBlame.blame;
+  assert.deepEqual(checkHistoryLine({ ...good(), szz: { ...szz, unlinked_lines: [noBlame] } }), ['/szz/unlinked_lines/0: misses the field blame']);
+});

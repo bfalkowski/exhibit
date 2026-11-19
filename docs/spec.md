@@ -172,7 +172,7 @@ One merged PR per line, with these fields:
 - `reviews`: `list` holds the `state` and `author` of each review, oldest first. `change_request_rounds` is the number of reviews with the state `CHANGES_REQUESTED`.
 - `ci`: the `name` and `conclusion` of each check run on the PR's last head commit
 - `evidence_section`: the evidence the PR body claims, if the repo uses such a section
-- `szz`: for fix PRs, the introducing PRs, the lines, and a confidence score
+- `szz`: for fix PRs, the introducing PRs, the lines, the blame output for each line, and a confidence score
 - `exhibit`: the verdict and the requirements, if an exhibit exists for this PR
 
 The schema for one line is `schema/history-line.schema.json`. `exhibit history` checks every line against it before it writes the file. If a line fails, it writes nothing and exits 2.
@@ -182,7 +182,13 @@ What each version fills:
 - **S1, first half:** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. When that happens, `exhibit history` prints a warning on stderr that names the PR and both counts, and still exits 0. Only a PR whose list reaches 3,000 files costs one more API request, to read its `changed_files` count. `base_sha` is GitHub's `base.sha`: the tip of the base branch when the PR was last updated. It is not always the merge-base of the PR.
 - **S1, second half:** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs has an empty `ci` list. A check run that has not finished has a null `conclusion`. Comments on the PR are not reviews, so they are not in `reviews`.
 - **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`.
-- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null.
+- **S2, SZZ:** every line has `szz` (section 9.2). It is null when the PR is not a fix, or when SZZ did not run. Otherwise it holds three fields:
+  - `blamed_commit`: the commit that `git blame` ran on, the first parent of `merge_sha`.
+  - `links`: one for each introducing PR, highest confidence first. A link has `pr`, `confidence` and `lines`.
+  - `unlinked_lines`: the lines whose commit is in no merged PR, such as a commit pushed straight to the main branch.
+
+  Each line has `path`, `line` (its number in `blamed_commit`), `text`, and `blame`. `blame` holds what `git blame` says about the line: `commit`, `original_path`, `original_line`, `author`, `author_time` (UTC) and `summary` (the first line of the commit message).
+- **Later slices:** the kinds of change in `classification` (S4), `evidence_section` and `exhibit`. Until then they are absent, and the schema allows them only as null.
 
 When GitHub says to wait (a 429 or 403 reply with a `retry-after` header, or with no requests left until `x-ratelimit-reset`), `exhibit history` waits and asks again, at most three times. If GitHub asks for a wait longer than 15 minutes, it stops and exits 2.
 
@@ -223,12 +229,16 @@ One escaped defect per line, with these fields:
 
 ### 9.2 SZZ
 
-1. For each fix PR, take the lines it deleted or changed.
-2. Drop changes that are whitespace only, comments only, or moved lines.
-3. Run `git blame` on the parent of the fix's first commit to find the commit that last changed each line.
-4. Map each commit to its PR, through the merge commit or the GitHub API.
-5. Drop introducing commits that are newer than the bug report, when the bug report has a date.
-6. Give each link a confidence score from the share of the fix's lines that point to the same PR.
+`exhibit history` runs SZZ only when it runs inside a clone of the repo: a git repo with a remote that points at the repo on GitHub, in any URL form. Otherwise it writes `szz: null` on every line and says so in one line on stderr. The run still succeeds.
+
+1. For each fix PR, take the lines it deleted or changed. These are the old lines in `git diff -U0 -M` from the first parent of `merge_sha` to `merge_sha`. A renamed file keeps its old path. A line the fix only added has nothing to blame.
+2. Drop changes that are whitespace only, comments only, or moved lines. *Not built yet: ticket 8.*
+3. Run `git blame` on the parent of the fix's first commit to find the commit that last changed each line. Exhibit blames the first parent of `merge_sha`: the main branch just before the fix. For a squash merge, that is the parent of the fix's one commit. For a merge commit, it is the main branch just before the merge, so the line numbers match the diff in step 1. Git runs with settings that ignore a clone's own diff and blame config, such as `blame.ignoreRevsFile`.
+4. Map each commit to its PR. First, a commit that is the `merge_sha` of a PR in the history belongs to that PR: a squash merge. Then Exhibit asks GitHub for the pull requests that hold the commit, and keeps the merged PR that merged first. It asks once for each commit. A commit that no merged PR holds, or that GitHub does not know, goes to `unlinked_lines`.
+5. Drop introducing commits that are newer than the bug report, when the bug report has a date. *Not built yet: ticket 8.*
+6. Give each link a confidence score: the number of the fix's lines that point to that PR, divided by all of the fix's blamed lines. Unlinked lines count in the total, so the scores add up to 1 only when every line has a PR.
+
+When a fix's `merge_sha` is not in the clone, Exhibit writes `szz: null` for that PR and prints a warning that names it. A PR merged with "rebase and merge" is not handled yet, because its `merge_sha` is its last commit only (ticket 27).
 
 Every link is shown with its lines and blame output. In `exhibit label`, the person can reject it.
 
