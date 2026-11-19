@@ -21,12 +21,15 @@ const VERDICT = new RegExp(
 // right after a quote line in the quote (a "lazy" line). Only plain text goes on a quote this
 // way: a blank line, a heading, a code fence, a list item or a thematic break ("---") ends it.
 const QUOTE = /^\s*>/;
-const ENDS_QUOTE = /^ {0,3}(?:#{1,6}(?:\s|$)|```|~~~|[-+*][ \t]|\d+[.)][ \t]|(?:[-*_][ \t]*){3,}$)/;
+const ENDS_QUOTE = /^ {0,3}(?:#{1,6}(?:\s|$)|```|~~~|[-+*][ \t]|\d+[.)][ \t]|(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$)/;
 
 // A GitHub alert box, such as "> [!IMPORTANT]", is a quote in markdown, but it holds the
 // comment's own text. So the lines of an alert box are not quoted lines. A quote nested in an
-// alert box, as in "> > Verdict: fix", still quotes another comment.
+// alert box, as in "> > Verdict: fix", still quotes another comment. A line right after it, with
+// or without one ">", is in the nested quote too (a lazy line), until a blank line, a heading, a
+// code fence, a list item or a thematic break in the alert box ends it.
 const NESTED_QUOTE = /^\s*>\s*>/;
+const ALERT_LINE = /^\s*> ?/;
 const ALERT = /^\s*>\s*\[!(?:note|tip|important|warning|caution)\]\s*$/i;
 
 // A line in a code fence is code, not a quote, even when it starts with ">".
@@ -51,10 +54,12 @@ function splitQuotes(body) {
     }
     if (QUOTE.test(line)) {
       quote ??= ALERT.test(line) ? 'alert' : 'quote';
-    } else if (quote && (line.trim() === '' || ENDS_QUOTE.test(line))) {
+      if (quote === 'alert' && NESTED_QUOTE.test(line)) quote = 'nested';
+      else if (quote === 'nested' && endsQuote(line.replace(ALERT_LINE, ''))) quote = 'alert';
+    } else if (quote && endsQuote(line)) {
       quote = null;
     }
-    if (quote === 'quote' || (quote === 'alert' && NESTED_QUOTE.test(line))) {
+    if (quote === 'quote' || quote === 'nested') {
       quoted.push(line);
       continue;
     }
@@ -62,6 +67,10 @@ function splitQuotes(body) {
     own.push(line);
   }
   return { own: own.join('\n'), quoted: quoted.join('\n') };
+}
+
+function endsQuote(line) {
+  return line.trim() === '' || ENDS_QUOTE.test(line);
 }
 
 // A fence closes on a line of the same mark, at least as long, and nothing after it.
