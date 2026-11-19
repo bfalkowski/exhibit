@@ -65,7 +65,7 @@
     },
     "classification": {
       "type": "object",
-      "description": "Whether the PR is a fix, by the fix signals (spec 9.1). Slice S4 adds the kinds of change.",
+      "description": "Whether the PR is a fix, by the fix signals (spec 9.1). No other field is allowed, so slice S4 must add the kinds of change here and update spec 8.3.",
       "required": ["fix", "fix_signal"],
       "additionalProperties": false,
       "properties": {
