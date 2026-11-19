@@ -2,8 +2,13 @@
 // as a review when it gives a verdict, merge or fix (spec 8.3). Two forms give one:
 //   - the word "verdict", then merge or fix: "Verdict: fix", "**Verdict:** merge", "verdict merge"
 //   - a review heading with the verdict after the commit: "## Review of b8ebe79: merge"
-// The first verdict in the comment counts.
-const VERDICT = /\bverdict\b[\s:*_]*(merge|fix)\b|\breview of [0-9a-f]{7,40}\b[\s:*_]*(merge|fix)\b/i;
+// Spaces, colons, *, _, backticks, hyphens and equals signs may come before the verdict, as in
+// "Verdict: `merge`", "Verdict - fix" or "Verdict = fix". The first verdict in the comment counts.
+const VERDICT = /\bverdict\b[\s:*_`=-]*(merge|fix)\b|\breview of [0-9a-f]{7,40}\b[\s:*_`=-]*(merge|fix)\b/i;
+
+// A line that starts with ">" quotes another comment, such as the review a reply answers. Its
+// verdict is not this comment's verdict.
+const QUOTE = /^\s*>/;
 
 // The room marks its own notes, and the Dev's replies to a review, with an HTML comment such as
 // <!-- office:dev --> at the start. A Dev's reply often repeats the verdict ("Verdict merge, so I
@@ -13,7 +18,8 @@ const ROOM_NOTE = /^\s*<!-- office:/;
 // Returns 'merge' or 'fix' when the comment body is a review with that verdict, or null.
 export function commentVerdict(body) {
   if (typeof body !== 'string' || ROOM_NOTE.test(body)) return null;
-  const match = body.match(VERDICT);
+  const ownLines = body.split('\n').filter((line) => !QUOTE.test(line));
+  const match = ownLines.join('\n').match(VERDICT);
   if (!match) return null;
   return (match[1] ?? match[2]).toLowerCase();
 }
