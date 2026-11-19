@@ -111,7 +111,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
   await t.test('history.jsonl holds one record per line, in merge order', () => {
     const rows = readFileSync(repo.historyPath, 'utf8').trim().split('\n').map((r) => JSON.parse(r));
     assert.deepEqual(rows, history);
-    assert.deepEqual(history.map((pr) => pr.number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    assert.deepEqual(history.map((pr) => pr.number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     for (const pr of history) {
       for (const field of ['number', 'title', 'body', 'author', 'labels', 'merged_at', 'base_sha', 'merge_sha', 'files', 'classification']) {
         assert.ok(field in pr, `PR ${pr.number} has ${field}`);

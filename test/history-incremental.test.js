@@ -288,5 +288,5 @@ test('a fix line kept with szz null gets SZZ once a later run is inside a clone'
   assert.equal(second.status, 0, second.stderr);
   const out = JSON.parse(second.stdout);
   assert.equal(out.read, 0);
-  assert.deepEqual(out.szz, { fix_prs: 6, linked: 3, skipped: 0 });
+  assert.deepEqual(out.szz, { fix_prs: 7, linked: 4, skipped: 0 });
 });

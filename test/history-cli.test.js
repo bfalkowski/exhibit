@@ -151,7 +151,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   assert.equal(run.stderr, '');
   // The fixture repo holds a history file whose lines are all in the look-back window, so the
   // run reads every PR again, and SZZ runs on the fixes, whose szz is null there.
-  assert.equal(run.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 3 of 6 fix PRs.\nRead 12 of 12 merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the 7 days before its newest PR. Kept the other 0 lines as they were.\n' + WROTE_REPORT + madeRequests(repo.dir, 66));
+  assert.equal(run.stdout, 'Wrote 14 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 4 of 7 fix PRs.\nRead 14 of 14 merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the 7 days before its newest PR. Kept the other 0 lines as they were.\n' + WROTE_REPORT + madeRequests(repo.dir, 77));
 
   // Read the links back from the file history wrote.
   const lines = readLines(run.historyPath);
@@ -186,9 +186,9 @@ test('inside a clone, history writes report.md and report.html with the escaped 
   assert.equal(run.status, 0, run.stderr);
   const markdown = readFileSync(join(repo.dir, REPORT.markdown), 'utf8');
   const html = readFileSync(join(repo.dir, REPORT.html), 'utf8');
-  assert.match(markdown, /^# Escaped defects in fixture\/shop\n\nExhibit read 12 merged PRs\. 6 of them are fix PRs\. SZZ linked 3 of them/);
-  assert.deepEqual([...markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1])), [12, 7, 6]);
-  assert.deepEqual([...html.matchAll(/<h3>Fix PR (\d+):/g)].map((m) => Number(m[1])), [12, 7, 6]);
+  assert.match(markdown, /^# Escaped defects in fixture\/shop\n\nExhibit read 14 merged PRs\. 7 of them are fix PRs\. SZZ linked 4 of them/);
+  assert.deepEqual([...markdown.matchAll(/^### Fix PR (\d+):/gm)].map((m) => Number(m[1])), [14, 12, 7, 6]);
+  assert.deepEqual([...html.matchAll(/<h3>Fix PR (\d+):/g)].map((m) => Number(m[1])), [14, 12, 7, 6]);
 });
 
 test('outside a clone, the report says that SZZ did not run', (t) => {
@@ -214,7 +214,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 3, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 66), mode: 'incremental', read: 12 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 77), mode: 'incremental', read: 14 });
 });
 
 test('a second run inside a clone keeps the SZZ result of each fix it reads again, and asks GitHub nothing for SZZ', (t) => {
@@ -229,9 +229,9 @@ test('a second run inside a clone keeps the SZZ result of each fix it reads agai
 
   const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(second.status, 0, second.stderr);
-  // 1 request for the list, and 5 for each of the 12 PRs in the window. The first run made 5
+  // 1 request for the list, and 5 for each of the 14 PRs in the window. The first run made 6
   // more, for SZZ. Each fix had a szz, so SZZ does not run again.
-  assert.equal(JSON.parse(second.stdout).github.requests, 61);
+  assert.equal(JSON.parse(second.stdout).github.requests, 71);
   assert.deepEqual(readLines(second.historyPath), before);
 });
 
@@ -248,12 +248,12 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const text = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd: shallow });
   assert.equal(text.status, 0, text.stderr);
-  assert.equal(text.stdout, 'Wrote 12 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 6 fix PRs (6 skipped).\nRead all 12 merged PRs from GitHub.\n' + WROTE_REPORT + madeRequests(shallow, 61));
-  assert.equal(text.stderr.match(/SZZ skipped/g).length, 6);
+  assert.equal(text.stdout, 'Wrote 14 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 0 of 7 fix PRs (7 skipped).\nRead all 14 merged PRs from GitHub.\n' + WROTE_REPORT + madeRequests(shallow, 71));
+  assert.equal(text.stderr.match(/SZZ skipped/g).length, 7);
 
   const json = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 12, output: '.exhibit/history.jsonl', szz: { fix_prs: 6, linked: 0, skipped: 6 }, report: REPORT, github: githubCounts(shallow, 61), mode: 'incremental', read: 12 });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, report: REPORT, github: githubCounts(shallow, 71), mode: 'incremental', read: 14 });
 });
 
 test('--since keeps PRs merged on or after the date', (t) => {
