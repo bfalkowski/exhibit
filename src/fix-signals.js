@@ -7,8 +7,13 @@ import { ToolError } from './tool-error.js';
 export const DEFAULT_FIX_SIGNALS = Object.freeze(['label:bug', 'title:fix', 'branch:fix/']);
 
 const POLICY = 'evidence.yml';
-const TYPES = ['label', 'title', 'branch'];
+const TYPES = ['label', 'title', 'title_after_key', 'branch'];
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
+// A ticket key at the start of a title, such as "T-170: ", "KEY-123 ", "[KEY-123] " or "(KEY-123): ".
+// A bare key needs a colon or a space after it, so "T-170Fix" keeps its key. Titles are
+// lowercase by the time they get here.
+const KEY = '[a-z][a-z0-9_]*-\\d+';
+const LEADING_KEY = new RegExp(`^(?:\\[${KEY}\\]:?\\s*|\\(${KEY}\\):?\\s*|${KEY}(?::\\s*|\\s+))`);
 
 // Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's title, its label
 // names and its branch name. The first signal in the list that matches is recorded, so a person
@@ -24,6 +29,7 @@ function matches(pr, signal) {
   const value = signal.slice(colon + 1).toLowerCase();
   if (type === 'label') return pr.labels.some((label) => label.toLowerCase() === value);
   if (type === 'title') return startsWithWord(pr.title.trim().toLowerCase(), value);
+  if (type === 'title_after_key') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value);
   if (type === 'branch') return pr.branch.toLowerCase().startsWith(value);
   return false;
 }
@@ -70,7 +76,7 @@ function checkSignals(signals) {
     const at = `${where}[${i}]`;
     if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.`);
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title: or branch:.`);
+    if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key: or branch:.`);
     const value = signal.slice(type.length + 1);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
     // A space at the start of the value can never match. A space at the end is easy to miss,
