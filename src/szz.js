@@ -16,12 +16,16 @@ const PLAIN = [
 // A git command that failed. SZZ catches it for one fix PR, warns, and goes on with the others.
 class GitError extends Error {}
 
-async function git(dir, args) {
+// Runs git and returns what it printed, as text. With `input`, git reads it on stdin, and the
+// output comes back as a Buffer, because some commands give sizes in bytes.
+async function git(dir, args, input) {
   try {
-    const { stdout } = await run('git', [...PLAIN, ...args], { cwd: dir, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+    const running = run('git', [...PLAIN, ...args], { cwd: dir, encoding: input === undefined ? 'utf8' : 'buffer', maxBuffer: 512 * 1024 * 1024 });
+    if (input !== undefined) running.child.stdin.end(input);
+    const { stdout } = await running;
     return stdout;
   } catch (error) {
-    const reason = (error.stderr ?? '').trim().split('\n')[0] || error.message;
+    const reason = String(error.stderr ?? '').trim().split('\n')[0] || error.message;
     throw new GitError(`git failed: git ${args[0]}: ${reason}`);
   }
 }
@@ -127,7 +131,8 @@ async function hasCommit(dir, sha) {
 // each line.
 async function szzForFix(dir, fix, findPr, reportedAt) {
   const blamed = await mainBeforeFix(dir, fix, findPr);
-  const { counted, dropped } = countedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
+  const diff = await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]);
+  const { counted, dropped } = countedLines(diff, await readFiles(dir, diff, blamed, fix.merge_sha));
 
   const blamedLines = [];
   for (const [path, numbers] of counted) {
@@ -153,6 +158,38 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
     dropped_lines: droppedLines,
     no_link_reason: kept.length === 0 ? noLinkReason(droppedLines) : null
   };
+}
+
+// Reads the whole text of each JavaScript, TypeScript and Python file that the diff changes, at
+// the commit before the fix and at the fix, in one git call. A hunk shows only the changed
+// lines, and the file says whether a line is inside a block comment, or which Python block it
+// is in. Returns { before, after }: each maps a path to its text. A path that git cannot read
+// is left out, and the rules then guess from the hunk alone.
+async function readFiles(dir, diff, before, after) {
+  const wanted = new Map();
+  for (const hunk of parseHunks(diff)) {
+    for (const [side, path, commit] of [['before', hunk.oldPath, before], ['after', hunk.newPath, after]]) {
+      // A path with a newline cannot go on one row of git's input.
+      if (commentStyle(path) !== null && !path.includes('\n')) wanted.set(`${side}\n${path}`, { side, path, spec: `${commit}:${path}` });
+    }
+  }
+  const files = { before: new Map(), after: new Map() };
+  if (wanted.size === 0) return files;
+  const list = [...wanted.values()];
+  // For each object, `git cat-file --batch` prints "<sha> <type> <size>", a newline, the bytes
+  // and a newline, or "<spec> missing" and a newline.
+  const out = await git(dir, ['cat-file', '--batch'], list.map((file) => `${file.spec}\n`).join(''));
+  let at = 0;
+  for (const { side, path } of list) {
+    const end = out.indexOf(10, at);
+    const header = out.subarray(at, end).toString('utf8').split(' ');
+    at = end + 1;
+    if (header.length !== 3 || !/^\d+$/.test(header[2])) continue;
+    const size = Number(header[2]);
+    if (header[1] === 'blob') files[side].set(path, out.subarray(at, at + size).toString('utf8'));
+    at += size + 1;
+  }
+  return files;
 }
 
 // Returns the commit on the main branch just before the fix. A merge commit or a squash commit
@@ -245,15 +282,32 @@ export function dropNewerLines(blamedLines, reportedAt) {
 // - "comment": it is only a comment, and the fix does not turn it back into code. Or only the
 //   comment at its end changed: the same hunk adds a line with the same code.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
-export function countedLines(diff) {
+// `files` holds the whole files before and after the fix, as readFiles returns them. With a
+// file, the rules know whether a row is inside a block comment, and which block a Python line
+// is in. Without it, they guess from the hunk alone.
+export function countedLines(diff, { before = new Map(), after = new Map() } = {}) {
   const hunks = parseHunks(diff);
+  const facts = new Map();
+  // What the whole file says about each of its lines, or undefined when the file is not known.
+  const factsOf = (side, files, path) => {
+    const id = `${side}\n${path}`;
+    if (!facts.has(id)) facts.set(id, files.has(path) ? lineFacts(files.get(path), path) : []);
+    return facts.get(id);
+  };
+  const side = (rows, path, lineFact) => {
+    const comments = markComments(rows.map((row) => row.text), path, rows.map((row) => lineFact[row.line]?.inBlock));
+    return rows.map((row, i) => {
+      const level = lineFact[row.line]?.level;
+      return { ...row, level, key: squash(row.text, path, level), comment: comments[i] };
+    });
+  };
   const added = hunks.flatMap((hunk, at) => {
-    const comments = markComments(hunk.added, hunk.newPath);
-    return hunk.added.map((text, i) => ({ at, text, key: squash(text, hunk.newPath), comment: comments[i], used: false }));
+    const rows = hunk.added.map((text, i) => ({ at, line: hunk.newStart + i, text, used: false }));
+    return side(rows, hunk.newPath, factsOf('after', after, hunk.newPath));
   });
   const deleted = hunks.flatMap((hunk, at) => {
-    const comments = markComments(hunk.deleted.map((row) => row.text), hunk.oldPath);
-    return hunk.deleted.map((row, i) => ({ at, path: hunk.oldPath, ...row, key: squash(row.text, hunk.oldPath), comment: comments[i], reason: null }));
+    const rows = hunk.deleted.map((row) => ({ at, path: hunk.oldPath, ...row, reason: null }));
+    return side(rows, hunk.oldPath, factsOf('before', before, hunk.oldPath));
   });
 
   // Finds an added line with the same text, give or take whitespace, in the same hunk or in
@@ -299,12 +353,12 @@ export function countedLines(diff) {
   // A code line where only the comment at its end changed, such as "x = 1; // old note" to
   // "x = 1;": the same hunk adds a code line with the same code once the comments come off both
   // lines, give or take whitespace.
-  const codeOf = (text, path) => squash(stripComments(text, path), path);
+  const codeOf = (row, path) => squash(stripComments(row.text, path), path, row.level);
   for (const line of deleted) {
     if (line.reason !== null || line.comment) continue;
-    const key = codeOf(line.text, line.path);
+    const key = codeOf(line, line.path);
     if (key === '') continue;
-    const match = added.find((row) => !row.used && !row.comment && row.at === line.at && codeOf(row.text, line.path) === key);
+    const match = added.find((row) => !row.used && !row.comment && row.at === line.at && codeOf(row, line.path) === key);
     if (match) {
       match.used = true;
       line.reason = 'comment';
@@ -347,12 +401,113 @@ function movedBlock(deleted, added, start) {
 const hasWords = (text) => /[\p{L}\p{N}]/u.test(text);
 
 // The text with whitespace taken out, so two lines that differ only in whitespace match. In
-// Python the indent says which block a line is in, so it is code and stays.
-const squash = (text, path) => {
+// Python the indent says which block a line is in, so it is code. With the file, `level` says
+// how deep that block is, so a tab and four spaces at the same depth match, and a line inside
+// brackets (level null) has no indent that counts. Without the file (level undefined), the
+// indent stays as it is.
+const squash = (text, path, level) => {
   const words = text.replace(/\s+/g, '');
-  const indent = words !== '' && commentStyle(path) === 'hash' ? /^\s*/.exec(text)[0] : '';
-  return indent + words;
+  if (words === '' || commentStyle(path) !== 'hash' || level === null) return words;
+  return (level === undefined ? /^\s*/.exec(text)[0] : '\t'.repeat(level + 1)) + words;
 };
+
+// For each line of a whole file, by line number, what the hunk alone cannot show:
+// - In JavaScript, `inBlock`: the line starts inside a block comment.
+// - In Python, `level`: how deep the line's block is, 0 at the top. It is null for a line with
+//   no indent that counts: a blank line, a comment line, or a line inside brackets, a
+//   triple-quoted string or after a backslash at the end of the line before.
+// Text in quotes is skipped, so a "/*" in a string such as 'src/**/*.js' opens nothing. A
+// regex literal is read as code, so a "/*" in one, such as /[/*]/, is a rare wrong guess.
+function lineFacts(text, path) {
+  const rows = text.split('\n');
+  return [undefined, ...(commentStyle(path) === 'hash' ? pythonLevels(rows) : blockStarts(rows))];
+}
+
+function blockStarts(rows) {
+  const facts = [];
+  let state = null;
+  for (const row of rows) {
+    facts.push({ inBlock: state === 'block' });
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (state === 'block') {
+        if (row.startsWith('*/', i)) {
+          state = null;
+          i++;
+        }
+      } else if (state !== null) {
+        if (ch === '\\') i++;
+        else if (ch === state) state = null;
+      } else if (row.startsWith('//', i)) {
+        break;
+      } else if (row.startsWith('/*', i)) {
+        state = 'block';
+        i++;
+      } else if ('\'"`'.includes(ch)) {
+        state = ch;
+      }
+    }
+    // Only a template string goes on to the next line.
+    if (state === '\'' || state === '"') state = null;
+  }
+  return facts;
+}
+
+function pythonLevels(rows) {
+  const facts = [];
+  const indents = [0];
+  let depth = 0;
+  let triple = null;
+  let joined = false;
+  for (const row of rows) {
+    const words = row.trim();
+    if (depth > 0 || triple !== null || joined || words === '' || words.startsWith('#')) {
+      facts.push({ level: null });
+    } else {
+      const column = indentColumn(row);
+      while (column < indents.at(-1)) indents.pop();
+      if (column > indents.at(-1)) indents.push(column);
+      facts.push({ level: indents.length - 1 });
+    }
+    let quote = null;
+    let comment = false;
+    for (let i = 0; i < row.length; i++) {
+      const ch = row[i];
+      if (triple !== null) {
+        if (ch === '\\') i++;
+        else if (row.startsWith(triple, i)) {
+          triple = null;
+          i += 2;
+        }
+      } else if (quote !== null) {
+        if (ch === '\\') i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === '#') {
+        comment = true;
+        break;
+      } else if (row.startsWith("'''", i) || row.startsWith('"""', i)) {
+        triple = row.slice(i, i + 3);
+        i += 2;
+      } else if (ch === '\'' || ch === '"') {
+        quote = ch;
+      } else if ('([{'.includes(ch)) {
+        depth++;
+      } else if (')]}'.includes(ch)) {
+        depth = Math.max(0, depth - 1);
+      }
+    }
+    joined = !comment && triple === null && row.trimEnd().endsWith('\\');
+  }
+  return facts;
+}
+
+// The column where a Python line's code starts. As in Python, a tab moves to the next multiple
+// of eight.
+function indentColumn(row) {
+  let column = 0;
+  for (const ch of /^[ \t]*/.exec(row)[0]) column = ch === '\t' ? column + 8 - (column % 8) : column + 1;
+  return column;
+}
 
 // The words inside a comment line, without its comment marks.
 const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').replace(/\*+\/$/, '');
@@ -407,20 +562,22 @@ const closesBlock = (text) => {
 };
 
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
-// changed rows, so a block comment can open before the hunk. A row that starts with "*" counts
-// as a row of such a block only when the row or a later row of the hunk closes the block, or
-// when the row is a JSDoc tag such as "* @param". Code can start with "*" too, such as "* qty;"
-// after a line that ends in "price".
-function markComments(texts, path) {
+// changed rows, so a block comment can open before the hunk. `starts` says for each row whether
+// it starts inside a block comment, when the whole file is known. Without the file, a row that
+// starts with "*" counts as a row of such a block only when the row or a later row of the hunk
+// closes the block, or when the row is a JSDoc tag such as "* @param". Code can start with "*"
+// too, such as "* qty;" after a line that ends in "price".
+function markComments(texts, path, starts = []) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
   if (style !== 'slash') return texts.map(() => false);
   let inBlock = false;
   return texts.map((text, i) => {
     let rest = text.trim();
+    if (starts[i] !== undefined) inBlock = starts[i];
     if (!inBlock) {
       if (rest.startsWith('//')) return true;
-      if (/^\*(\s|\/|$)/.test(rest)) {
+      if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
         const end = rest.indexOf('*/');
         if (end !== -1) return rest.slice(end + 2).trim() === '';
         return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some(closesBlock);
@@ -436,9 +593,9 @@ function markComments(texts, path) {
   });
 }
 
-// Reads a `git diff -U0` into hunks: { oldPath, newPath, deleted, added }. `deleted` holds
-// { line, text } with the old line numbers, and `added` holds the added texts. A hunk header
-// "@@ -12,3 +12,1 @@" means old lines 12 to 14. A new file has a null oldPath, and a deleted
+// Reads a `git diff -U0` into hunks: { oldPath, newPath, newStart, deleted, added }. `deleted`
+// holds { line, text } with the old line numbers, and `added` holds the added texts, the first
+// at new line `newStart`. A hunk header "@@ -12,3 +12,1 @@" means old lines 12 to 14. A new file has a null oldPath, and a deleted
 // file a null newPath.
 // A "--- " row is a file header only before the file's first hunk. Inside a hunk it is a deleted
 // line that starts with "-- ", such as a SQL comment.
@@ -463,9 +620,9 @@ function parseHunks(diff) {
       newPath = headerPath(row, 'b/');
       continue;
     }
-    const header = /^@@ -(\d+)(?:,\d+)? /.exec(row);
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(row);
     if (header) {
-      hunk = { oldPath, newPath, deleted: [], added: [] };
+      hunk = { oldPath, newPath, newStart: Number(header[2]), deleted: [], added: [] };
       hunks.push(hunk);
       next = Number(header[1]);
       continue;

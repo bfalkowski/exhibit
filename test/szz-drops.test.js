@@ -300,3 +300,62 @@ test('comments: a trailing comment pairs only with a line in the same hunk', () 
   ] }));
   assert.deepEqual(counted(result), [['a.js', [1]]]);
 });
+
+// The whole files before and after the fix, as SZZ reads them at blamed_commit and merge_sha.
+const files = (before, after) => ({ before: new Map(Object.entries(before)), after: new Map(Object.entries(after)) });
+
+test('comments: with the file, a JSDoc text row whose block opens and closes outside the hunk is a comment', () => {
+  const before = '/**\n * Pads a label.\n */\nexport const pad = (s) => s;\n';
+  const after = '/**\n * Pads a label on the right.\n */\nexport const pad = (s) => s;\n';
+  const hunks = [{ at: 2, deleted: [' * Pads a label.'], added: [' * Pads a label on the right.'] }];
+  // Without the file, the row looks like code that starts with the * operator.
+  assert.deepEqual(counted(countedLines(diff({ path: 'a.js', hunks }))), [['a.js', [2]]]);
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'comment']]);
+});
+
+test('comments: with the file, a row that starts with the * operator outside a block counts', () => {
+  const before = 'const total = price\n  * qty;\n';
+  const after = 'const total = price\n  * qty * rate;\n';
+  const hunks = [{ at: 2, deleted: ['  * qty;'], added: ['  * qty * rate;'] }];
+  // A "*/" later in the hunk does not make it a comment when the file shows no open block.
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), [['a.js', [2]]]);
+});
+
+test('comments: with the file, a block row with no * and a "/*" inside a string are read right', () => {
+  const before = "const glob = 'src/**/*.js';\n/*\n  Old words.\n*/\nlet n = 1;\n";
+  const after = "const glob = 'src/**/*.js';\n/*\n  New words.\n*/\nlet n = 1;\n";
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  Old words.'], added: ['  New words.'] }] }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(dropped(result), [['a.js', 3, 'comment']]);
+});
+
+test('whitespace: with the file, a Python line that keeps its block level is whitespace, tabs or spaces', () => {
+  const before = 'def total(xs):\n\tt = 0\n\treturn t\n';
+  const after = 'def total(xs):\n    t = 0\n    return t\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['\tt = 0', '\treturn t'], added: ['    t = 0', '    return t'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.py', 2, 'whitespace'], ['a.py', 3, 'whitespace']]);
+});
+
+test('whitespace: with the file, a Python line that changes its block level counts', () => {
+  const before = 'def f(xs):\n    for x in xs:\n        go(x)\n        done()\n';
+  const after = 'def f(xs):\n    for x in xs:\n        go(x)\n    done()\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 4, deleted: ['        done()'], added: ['    done()'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), [['a.py', [4]]]);
+});
+
+test('whitespace: with the file, the indent of a Python line inside brackets is not code', () => {
+  const before = 'x = call(a,\n         b)\n';
+  const after = 'x = call(a,\n    b)\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['         b)'], added: ['    b)'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(dropped(result), [['a.py', 2, 'whitespace']]);
+});
+
+test('comments: with the file, an indented Python comment that the fix turns back into code counts', () => {
+  const before = 'def f():\n    # return total\n';
+  const after = 'def f():\n    return total\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['    # return total'], added: ['    return total'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), [['a.py', [2]]]);
+});
