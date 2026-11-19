@@ -5,24 +5,28 @@
 // Spaces, colons, *, _, backticks and equals signs may come before the verdict, as in
 // "Verdict: `merge`" or "Verdict = fix". A hyphen may come there too, as in "Verdict - fix", but
 // only when the phrase starts the line. In prose a hyphen is often a dash, and "The verdict -
-// merge - waits on CI." is not a verdict. The first verdict in the comment counts.
+// merge - waits on CI." is not a verdict. The line may start with a list marker, as in
+// "- Verdict - fix" or "1. Verdict - merge". The first verdict in the comment counts.
 const PHRASE = String.raw`(?:verdict|review of [0-9a-f]{7,40})\b`;
 const SEPARATOR = '[\\s:*_`=]*';
 const SEPARATOR_WITH_HYPHEN = '[\\s:*_`=-]*';
+const LINE_START = String.raw`^[ \t>]*(?:(?:[-+*]|\d+[.)])[ \t]+)?[ \t>#*_]*`;
 const VERDICT = new RegExp(
-  String.raw`^[ \t>#*_]*${PHRASE}${SEPARATOR_WITH_HYPHEN}(merge|fix)\b|\b${PHRASE}${SEPARATOR}(merge|fix)\b`,
+  String.raw`${LINE_START}${PHRASE}${SEPARATOR_WITH_HYPHEN}(merge|fix)\b|\b${PHRASE}${SEPARATOR}(merge|fix)\b`,
   'im'
 );
 
 // A line that starts with ">", after any spaces, quotes another comment, such as the review a
 // reply answers. Its verdict is not this comment's verdict. Markdown keeps a line that comes
-// right after a quote line in the quote (a "lazy" line), until a blank line, a heading or a code
-// fence ends it.
+// right after a quote line in the quote (a "lazy" line). Only plain text goes on a quote this
+// way: a blank line, a heading, a code fence, a list item or a thematic break ("---") ends it.
 const QUOTE = /^\s*>/;
-const ENDS_QUOTE = /^\s*(?:#|```|~~~)/;
+const ENDS_QUOTE = /^ {0,3}(?:#{1,6}(?:\s|$)|```|~~~|[-+*][ \t]|\d+[.)][ \t]|(?:[-*_][ \t]*){3,}$)/;
 
 // A GitHub alert box, such as "> [!IMPORTANT]", is a quote in markdown, but it holds the
-// comment's own text. So the lines of an alert box are not quoted lines.
+// comment's own text. So the lines of an alert box are not quoted lines. A quote nested in an
+// alert box, as in "> > Verdict: fix", still quotes another comment.
+const NESTED_QUOTE = /^\s*>\s*>/;
 const ALERT = /^\s*>\s*\[!(?:note|tip|important|warning|caution)\]\s*$/i;
 
 // A line in a code fence is code, not a quote, even when it starts with ">".
@@ -50,7 +54,7 @@ function splitQuotes(body) {
     } else if (quote && (line.trim() === '' || ENDS_QUOTE.test(line))) {
       quote = null;
     }
-    if (quote === 'quote') {
+    if (quote === 'quote' || (quote === 'alert' && NESTED_QUOTE.test(line))) {
       quoted.push(line);
       continue;
     }

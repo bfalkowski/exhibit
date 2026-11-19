@@ -85,3 +85,26 @@ test('a line inside a code fence is not a quote, even when it starts with >', ()
   assert.equal(commentVerdict('```\n> Verdict: fix\n```'), 'fix');
   assert.equal(commentVerdict('~~~text\n> Verdict: merge\n~~~\n'), 'merge');
 });
+
+test('a list item or a thematic break right after a quote line ends the quote', () => {
+  assert.equal(commentVerdict('> nit: foo\n- Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quote\n* list\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quote\n1. Verdict: merge'), 'merge');
+  assert.equal(commentVerdict('> quote\n---\nVerdict: fix'), 'fix');
+  // A line that starts with # but is not a heading stays in the quote, as markdown shows it.
+  assert.equal(commentVerdict('> Thanks.\n#123 is related. Verdict: fix'), null);
+});
+
+test('a hyphen verdict in a list item counts', () => {
+  assert.equal(commentVerdict('- Verdict - fix'), 'fix');
+  assert.equal(commentVerdict('1. Verdict - merge'), 'merge');
+  assert.equal(commentVerdict('- **Verdict** - fix'), 'fix');
+  assert.equal(commentVerdict('2) Verdict - fix'), 'fix');
+  // A hyphen counts only when the phrase starts the line, so a heading with more words before it is not a verdict.
+  assert.equal(commentVerdict('## Code review of b8ebe79 - merge'), null);
+});
+
+test('a nested quote inside an alert box is still a quote', () => {
+  assert.equal(commentVerdict('> [!NOTE]\n> ok\n> > Verdict: fix'), null);
+  assert.equal(quotedVerdict('> [!NOTE]\n> ok\n> > Verdict: fix'), 'fix');
+});

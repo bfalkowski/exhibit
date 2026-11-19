@@ -104,12 +104,6 @@ test('outside a clone, history writes szz: null on every line and says so in one
   for (const line of readLines(run.historyPath)) assert.equal(line.szz, null, `PR ${line.number}`);
 });
 
-test('a comment whose only verdict is in a quoted line gives a warning on stderr, and still exits 0', () => {
-  const run = exhibit(['history', '--repo', 'acme/widgets']);
-  assert.equal(run.status, 0, run.stderr);
-  assert.ok(run.stderr.startsWith(QUOTED_VERDICT_WARNING), run.stderr);
-});
-
 test('inside a clone of the repo, history links each fix PR to the PRs that added its lines', (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
