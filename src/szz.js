@@ -104,8 +104,10 @@ async function askForge(forge, sha, defaultBranch) {
 // the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
 // warning first, because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
-export async function addSzz(lines, { dir, forge, warn = () => {} }) {
-  const findPr = createPrFinder({ lines, forge, onMainLine: mainLineCheck(dir, forge) });
+// `known` holds every history line that maps a commit to its PR, `lines` when left out. An
+// incremental run passes the whole file there, and only the lines SZZ must run on as `lines`.
+export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines }) {
+  const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
