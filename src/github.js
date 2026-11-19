@@ -12,6 +12,7 @@ const LONGEST_WAIT_MS = 15 * 60 * 1000;
 // GitHub gives it, until there is no next page, and returns the items of every page in order.
 // Most lists come as a JSON list. A few, such as check runs, come as an object that holds the
 // list in one field: pass that field's name as `listField`.
+// `getOne` returns the object at one path.
 // `sleep` and `now` are parameters too, so tests can check a rate-limit wait without waiting.
 export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now }) {
   async function request(url) {
@@ -29,7 +30,9 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     }
   }
 
-  async function get(url, listField) {
+  // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
+  // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
+  async function getJson(url) {
     let response = await request(url);
     for (let waits = 0; !response.ok && waits < MAX_WAITS; waits++) {
       const ms = rateLimitWait(response, now());
@@ -38,16 +41,17 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
       response = await request(url);
     }
     if (!response.ok) throw await apiError(response, url);
-    let reply;
     try {
-      reply = await response.json();
+      return { reply: await response.json(), response };
     } catch {
-      reply = undefined;
+      return { reply: undefined, response };
     }
+  }
+
+  async function get(url, listField) {
+    const { reply, response } = await getJson(url);
     const items = listField === undefined ? reply : reply?.[listField];
-    if (!Array.isArray(items)) {
-      throw new ToolError(`GitHub sent a reply that is not a JSON list for ${new URL(url).pathname}. Try again later, and report it as an Exhibit issue if it keeps happening.`);
-    }
+    if (!Array.isArray(items)) throw notShaped(url, 'a JSON list');
     return { items, next: nextLink(response.headers.get('link')) };
   }
 
@@ -61,7 +65,19 @@ export function createGitHub({ token, fetch, sleep = (ms) => new Promise((done) 
     return items;
   }
 
-  return { getAll };
+  // Returns the one JSON object at `path`, such as a single PR.
+  async function getOne(path) {
+    const url = API + path;
+    const { reply } = await getJson(url);
+    if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) throw notShaped(url, 'a JSON object');
+    return reply;
+  }
+
+  return { getAll, getOne };
+}
+
+function notShaped(url, shape) {
+  return new ToolError(`GitHub sent a reply that is not ${shape} for ${new URL(url).pathname}. Try again later, and report it as an Exhibit issue if it keeps happening.`);
 }
 
 // Returns how many milliseconds GitHub asks us to wait before we ask again, or null when the
