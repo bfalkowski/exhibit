@@ -76,8 +76,8 @@
         "fix": { "type": "boolean" },
         "fix_signal": {
           "type": ["string", "null"],
-          "pattern": "^(label|title|title_after_key|branch):.+$",
-          "description": "The first fix signal that matched, such as label:bug. null when the PR is not a fix."
+          "pattern": "^(label|title|title_after_key|branch|pr):.+$",
+          "description": "The first fix signal that matched, such as label:bug or pr:96. null when the PR is not a fix."
         }
       }
     },

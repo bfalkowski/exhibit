@@ -53,6 +53,8 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, warn });
   const read = keepSzz(updated.lines, previous);
+  const changes = classificationChanges(read, previous);
+  if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
 
   const root = await cloneRoot(cwd, forge);
   let lines;
@@ -141,13 +143,34 @@ async function readPrevious(cwd, forge, note) {
 // Returns `lines` where a fix PR that was read again keeps its szz from the old file, so SZZ does
 // not run on it again. A PR merged once does not change its code, so its SZZ result stays true.
 // SZZ runs on a fix that the old file had as no fix, or with a null szz, as SZZ skipped it then.
+// A kept line that the fix signals no longer mark as a fix gets szz null, as every other PR
+// that is no fix has.
 function keepSzz(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line]));
   return lines.map((line) => {
+    if (!line.classification.fix && line.szz) return { ...line, szz: null };
     if (line.szz !== undefined) return line;
     const before = old.get(line.number);
     return before?.szz && line.classification.fix ? { ...line, szz: before.szz } : line;
   });
+}
+
+// Returns one text that lists the PRs whose classification differs from their line in the old
+// file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so
+// this is how a person sees what a change to the signals did.
+function classificationChanges(lines, previous) {
+  const old = new Map(previous.map((line) => [line.number, line.classification]));
+  const changed = lines.filter((line) => {
+    const before = old.get(line.number);
+    return before && (before.fix !== line.classification.fix || before.fix_signal !== line.classification.fix_signal);
+  });
+  if (changed.length === 0) return '';
+  const said = changed.slice(0, 10).map(({ number, classification: { fix, fix_signal: signal } }) => {
+    if (!fix) return `PR ${number} is no longer a fix`;
+    return old.get(number).fix ? `PR ${number} is a fix by ${signal} now` : `PR ${number} is now a fix (${signal})`;
+  });
+  const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
+  return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
 }
 
 function parseOptions(argv) {

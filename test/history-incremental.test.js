@@ -260,6 +260,82 @@ test('the window is seven days before the newest merge in the file', async () =>
   assert.deepEqual(prsAsked(second.asked), [3, 4]);
 });
 
+test('a changed fix_signals classifies every kept line again, with no extra GitHub request', async () => {
+  const cwd = newFolder();
+  const gh = repo();
+  await run(cwd, gh);
+  const unchanged = await run(cwd, gh, ['--json']);
+  assert.ok(readLines(cwd).every((line) => !line.classification.fix));
+
+  // PRs 1 and 2 are before the look-back window, so their lines are kept. PR 4 is in it, so it
+  // is read again. pr:1 marks a kept line, and branch:topic-2 needs the branch name, which the
+  // line does not hold: the run takes it from the list of merged PRs, which it reads anyway.
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, pr:1, branch:topic-2, pr:4]\n');
+  const changed = await run(cwd, gh, ['--json']);
+  const lines = readLines(cwd);
+  assert.deepEqual(lines.map((line) => [line.number, line.classification]), [
+    [4, { fix: true, fix_signal: 'pr:4' }],
+    [3, { fix: false, fix_signal: null }],
+    [2, { fix: true, fix_signal: 'branch:topic-2' }],
+    [1, { fix: true, fix_signal: 'pr:1' }]
+  ]);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  // The same 11 requests as the run with no change: the list, and 5 for each of PRs 3 and 4.
+  const summary = JSON.parse(changed.stdout);
+  assert.equal(summary.github.requests, 11);
+  assert.deepEqual([...changed.asked].sort(), [...unchanged.asked].sort());
+  assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
+  assert.match(changed.stderr, /exhibit: note: the fix signals now classify 3 PRs in \.exhibit\/history\.jsonl another way: PR 4 is now a fix \(pr:4\), PR 2 is now a fix \(branch:topic-2\), PR 1 is now a fix \(pr:1\)\.\n/);
+
+  // Taking pr:1 out of the list makes PR 1 no fix again, with no szz.
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, branch:topic-2, pr:4]\n');
+  const third = await run(cwd, gh);
+  const pr1 = readLines(cwd).find((line) => line.number === 1);
+  assert.deepEqual([pr1.classification, pr1.szz], [{ fix: false, fix_signal: null }, null]);
+  assert.match(third.stderr, /another way: PR 1 is no longer a fix\.\n/);
+
+  // With the same signals again, nothing changes, so there is no note.
+  const fourth = await run(cwd, gh);
+  assert.doesNotMatch(fourth.stderr, /another way/);
+});
+
+test('inside a clone, a kept line that becomes a fix gets SZZ, and one that stops being a fix loses it', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  const replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(replay.cleanup);
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = () => spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd: shop.dir, env: gitEnv(shop.dir, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+  const historyPath = join(shop.dir, '.exhibit/history.jsonl');
+  const linesOf = () => readFileSync(historyPath, 'utf8').trim().split('\n').map((row) => JSON.parse(row));
+
+  // The first run uses the default signals: the 7 PRs whose title starts with Fix are fixes.
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  const before = new Map(linesOf().map((line) => [line.number, line]));
+  assert.equal(before.get(11).classification.fix, false);
+  assert.equal(before.get(12).classification.fix, true);
+
+  // A year ahead, every line is before the look-back window, so every line is kept.
+  writeFileSync(historyPath, linesOf().map((line) => JSON.stringify({ ...line, merged_at: line.merged_at.replace(/^2026/, '2027') })).join('\n') + '\n');
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [pr:12, pr:11]\n');
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).read, 0);
+  const after = new Map(linesOf().map((line) => [line.number, line]));
+  for (const line of after.values()) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  // PR 12 stays a fix and keeps its szz. PR 11 became a fix, so SZZ ran on it.
+  assert.deepEqual(after.get(12).classification, { fix: true, fix_signal: 'pr:12' });
+  assert.deepEqual(after.get(12).szz, before.get(12).szz);
+  assert.deepEqual(after.get(11).classification, { fix: true, fix_signal: 'pr:11' });
+  assert.notEqual(after.get(11).szz, null);
+  // PR 6 is no longer a fix, so its szz is null.
+  assert.deepEqual([after.get(6).classification, after.get(6).szz], [{ fix: false, fix_signal: null }, null]);
+  assert.deepEqual(JSON.parse(second.stdout).szz.fix_prs, 2);
+});
+
 test('a fix line kept with szz null gets SZZ once a later run is inside a clone', (t) => {
   const shop = buildSzzRepo();
   t.after(() => shop.cleanup());

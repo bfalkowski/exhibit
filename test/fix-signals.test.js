@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { classifyFix, DEFAULT_FIX_SIGNALS, readFixSignals } from '../src/fix-signals.js';
 import { ToolError } from '../src/tool-error.js';
 
-const pr = (fields) => ({ title: 'Add a page', labels: [], branch: 'topic', ...fields });
+const pr = (fields) => ({ number: 1, title: 'Add a page', labels: [], branch: 'topic', ...fields });
 const notFix = { fix: false, fix_signal: null };
 
 test('the default signals are the ones in the spec', () => {
@@ -80,6 +80,21 @@ test('when more than one signal matches, the first in the list is recorded', () 
   assert.deepEqual(classifyFix(both, ['branch:fix/', 'title:fix']), { fix: true, fix_signal: 'branch:fix/' });
 });
 
+test('pr: matches the PR with that number, and no other', () => {
+  const signals = ['pr:96', 'pr:99'];
+  assert.deepEqual(classifyFix(pr({ number: 96 }), signals), { fix: true, fix_signal: 'pr:96' });
+  assert.deepEqual(classifyFix(pr({ number: 99 }), signals), { fix: true, fix_signal: 'pr:99' });
+  for (const number of [9, 960, 97, 1]) assert.deepEqual(classifyFix(pr({ number }), signals), notFix, `PR ${number}`);
+});
+
+test('pr: adds to the other signals, and the first match in the list is recorded', () => {
+  const labelled = pr({ number: 96, labels: ['bug'] });
+  assert.deepEqual(classifyFix(labelled, ['label:bug', 'pr:96']), { fix: true, fix_signal: 'label:bug' });
+  assert.deepEqual(classifyFix(labelled, ['pr:96', 'label:bug']), { fix: true, fix_signal: 'pr:96' });
+  // A PR that only the label marks is still a fix when the list also has pr: signals.
+  assert.deepEqual(classifyFix(pr({ number: 5, labels: ['bug'] }), ['pr:96', 'label:bug']), { fix: true, fix_signal: 'label:bug' });
+});
+
 test('a PR with no matching signal is not a fix', () => {
   assert.deepEqual(classifyFix(pr({}), DEFAULT_FIX_SIGNALS), notFix);
 });
@@ -113,6 +128,29 @@ test('readFixSignals accepts title_after_key: like the other types', async (t) =
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
 });
 
+test('readFixSignals accepts pr: with a PR number, like the other types', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title:fix, branch:fix/, pr:96, pr:99, pr:1]\n');
+  assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title:fix', 'branch:fix/', 'pr:96', 'pr:99', 'pr:1']);
+});
+
+test('readFixSignals refuses a pr: value that is not a PR number, with a message for each', async (t) => {
+  const cases = [
+    ['settings:\n  fix_signals: ["pr:"]\n', /fix_signals\[0\] is "pr:", which needs a value after the colon\./],
+    ['settings:\n  fix_signals: [label:bug, pr:abc]\n', /fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:-3"]\n', /"pr:-3"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:0"]\n', /"pr:0"\. A pr: signal needs a PR number of 1 or more/],
+    ['settings:\n  fix_signals: ["pr:9.5"]\n', /"pr:9\.5"\. A pr: signal needs a PR number/],
+    ['settings:\n  fix_signals: ["pr:#96"]\n', /"pr:#96"\. A pr: signal needs a PR number/],
+    ['settings:\n  fix_signals: ["pr:096"]\n', /"pr:096"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr: 96"]\n', /"pr: 96"\. Remove the space before or after the value, as in pr:96\./],
+    // Without quotes, YAML reads "pr: 96" in a list as a mapping, not as text.
+    ['settings:\n  fix_signals: [pr: 96]\n', /fix_signals\[0\] must be text like label:bug, not \{"pr":96\}\. Write it with no space after the colon, as in pr:96\./]
+  ];
+  for (const [text, message] of cases) {
+    await assert.rejects(readFixSignals(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
+  }
+});
+
 test('readFixSignals reads only fix_signals, so the rest of the file is not checked', async (t) => {
   const cwd = folderWith(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n  mutation_budget_seconds: soon\nkinds: 7\n');
   assert.deepEqual(await readFixSignals(cwd), ['branch:bugfix/']);
@@ -123,8 +161,8 @@ test('readFixSignals refuses a malformed fix_signals with a tool error that says
     ['settings:\n  fix_signals: label:bug\n', /must be a list/],
     ['settings:\n  fix_signals: []\n', /at least one signal/],
     ['settings:\n  fix_signals: [label:bug, 7]\n', /fix_signals\[1\].*not 7/],
-    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key: or branch:/],
-    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key: or branch:/],
+    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, branch: or pr:/],
+    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, branch: or pr:/],
     ['settings:\n  fix_signals: ["title_after_key:"]\n', /"title_after_key:".*needs a value/],
     ['settings:\n  fix_signals: ["title_after_key: fix"]\n', /"title_after_key: fix".*space/],
     ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],

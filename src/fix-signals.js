@@ -7,7 +7,9 @@ import { ToolError } from './tool-error.js';
 export const DEFAULT_FIX_SIGNALS = Object.freeze(['label:bug', 'title:fix', 'branch:fix/']);
 
 const POLICY = 'evidence.yml';
-const TYPES = ['label', 'title', 'title_after_key', 'branch'];
+const TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr'];
+// A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
+const PR_NUMBER = /^[1-9]\d*$/;
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 // A ticket key at the start of a title, such as "T-170: ", "KEY-123 ", "[KEY-123] " or "(KEY-123): ".
 // A bare key needs a colon or a space after it, so "T-170Fix" keeps its key. Titles are
@@ -15,8 +17,8 @@ const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 const KEY = '[a-z][a-z0-9_]*-\\d+';
 const LEADING_KEY = new RegExp(`^(?:\\[${KEY}\\]:?\\s*|\\(${KEY}\\):?\\s*|${KEY}(?::\\s*|\\s+))`);
 
-// Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's title, its label
-// names and its branch name. The first signal in the list that matches is recorded, so a person
+// Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's number, its title,
+// its label names and its branch name. The first signal in the list that matches is recorded, so a person
 // can see why the PR counts as a fix. Matching ignores case.
 export function classifyFix(pr, signals) {
   const fixSignal = signals.find((signal) => matches(pr, signal)) ?? null;
@@ -31,6 +33,7 @@ function matches(pr, signal) {
   if (type === 'title') return startsWithWord(pr.title.trim().toLowerCase(), value);
   if (type === 'title_after_key') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value);
   if (type === 'branch') return pr.branch.toLowerCase().startsWith(value);
+  if (type === 'pr') return String(pr.number) === value;
   return false;
 }
 
@@ -74,9 +77,9 @@ function checkSignals(signals) {
   if (signals.length === 0) throw new ToolError(`${where} needs at least one signal. Leave it out to use the defaults [${DEFAULT_FIX_SIGNALS.join(', ')}].`);
   signals.forEach((signal, i) => {
     const at = `${where}[${i}]`;
-    if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.`);
+    if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.${spaceHint(signal)}`);
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key: or branch:.`);
+    if (!signal.includes(':') || !TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch: or pr:.`);
     const value = signal.slice(type.length + 1);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
     // A space at the start of the value can never match. A space at the end is easy to miss,
@@ -84,7 +87,18 @@ function checkSignals(signals) {
     // creates or renames the label, and git refuses a space in a branch name. So refuse
     // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
+    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
   });
+}
+
+// In a YAML list, "pr: 96" with a space after the colon is a mapping, not text. Returns a hint
+// that shows the signal with no space, or '' for any other value.
+function spaceHint(value) {
+  if (!isMapping(value)) return '';
+  const entries = Object.entries(value);
+  if (entries.length !== 1) return '';
+  const [type, rest] = entries[0];
+  return TYPES.includes(type) ? ` Write it with no space after the colon, as in ${type}:${rest}.` : '';
 }
 
 function isMapping(value) {
