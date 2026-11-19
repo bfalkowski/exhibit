@@ -1,0 +1,11 @@
+{
+  "/repos/acme/nothing-here/pulls?state=closed&per_page=100": {
+    "status": 404,
+    "headers": {},
+    "body": {
+      "message": "Not Found",
+      "documentation_url": "https://docs.github.com/rest/pulls/pulls#list-pull-requests",
+      "status": "404"
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "/repos/acme/broken/pulls?state=closed&per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "number": 2,
+        "state": "closed",
+        "title": "Good one",
+        "body": "Body of #2.",
+        "user": {
+          "login": "dev2",
+          "type": "User"
+        },
+        "labels": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "closed_at": "2026-03-02T00:00:00Z",
+        "merged_at": "2026-03-02T00:00:00Z",
+        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+        "base": {
+          "ref": "main",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"
+        },
+        "head": {
+          "ref": "topic-2",
+          "sha": "ccccccccccccccccccccccccccccccccccccccc2"
+        }
+      },
+      {
+        "number": 1,
+        "state": "closed",
+        "title": "Bad one",
+        "body": "Body of #1.",
+        "user": {
+          "login": "dev1",
+          "type": "User"
+        },
+        "labels": [],
+        "created_at": "2026-01-01T00:00:00Z",
+        "closed_at": "2026-03-01T00:00:00Z",
+        "merged_at": "2026-03-01T00:00:00Z",
+        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "base": {
+          "ref": "main",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1"
+        },
+        "head": {
+          "ref": "topic-1",
+          "sha": "ccccccccccccccccccccccccccccccccccccccc1"
+        }
+      }
+    ]
+  },
+  "/repos/acme/broken/pulls/2/files?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "sha": "ffffffffffffffffffffffffffffffffffffffff",
+        "filename": "a.js",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 0,
+        "changes": 1
+      }
+    ]
+  },
+  "/repos/acme/broken/pulls/1/files?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "sha": "ffffffffffffffffffffffffffffffffffffffff",
+        "filename": "b.js",
+        "status": "modified",
+        "additions": "lots",
+        "deletions": 0,
+        "changes": 1
+      }
+    ]
+  }
+}
