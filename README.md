@@ -2,7 +2,7 @@
 
 Every pull request brings its own evidence. Exhibit decides what evidence a PR needs, checks that the evidence is strong, and learns from each bug that gets through.
 
-**Status:** design stage. The spec is written. The project setup exists: `npm ci`, then `npm test` and `npm run lint`. CI runs both, and a secret scan, on every pull request. `exhibit history --repo owner/name` exports the merged PRs, with their files, reviews and CI results, to `.exhibit/history.jsonl`. It needs `GITHUB_TOKEN`: docs/spec.md section 8.3 lists the permissions the token needs. It has no SZZ yet.
+**Status:** design stage. The spec is written. The project setup exists: `npm ci`, then `npm test` and `npm run lint`. CI runs both, and a secret scan, on every pull request and on every push to `main`. A red run on `main` means two merges clashed: each passed on its own, but not together. The fix is a PR that makes `main` green again. `exhibit history --repo owner/name` exports the merged PRs, with their files, reviews and CI results, to `.exhibit/history.jsonl`. It needs `GITHUB_TOKEN`: docs/spec.md section 8.3 lists the permissions the token needs. It has no SZZ yet.
 
 - [Explainer with diagrams](docs/index.html): start here.
 - [Spec](docs/spec.md): commands, file formats, how each part works, and the build order.

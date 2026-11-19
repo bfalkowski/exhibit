@@ -1,17 +1,22 @@
 name: CI
 
-# Pull requests only. Never pull_request_target: that runs with the base repo's secrets on code
-# from the pull request.
+# Pull requests, and every push to main. Two PRs can each pass against an old main and still clash
+# once both merge. The push run on main shows that within minutes. Never pull_request_target: that
+# runs with the base repo's secrets on code from the pull request.
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 # A new push to a pull request cancels its run that is still going, which tested an old commit.
+# A push to main has no pull request number, so each push run gets its own group, keyed by its run
+# id. Nothing cancels it, and it never waits behind another run, so every merge gets a result.
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-push-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Every line of every tracked file, not just what the pull request adds, so a secret already on
