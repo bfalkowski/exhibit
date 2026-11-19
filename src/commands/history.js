@@ -27,9 +27,10 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // clone, every szz is null, and it says so in one line on stderr.
 // It also writes the report of escaped defects, as report.md and report.html (spec 8.5). It writes
 // the three files together: when one write fails, none of the three changes.
-// GitHub replies go through the shared reply cache (spec 8.6), unless --no-cache turns it off. At
-// the end it says how many requests went to GitHub and how many got a 304. A run that fails says
-// it too, on stderr.
+// It reads the PRs with GitHub's GraphQL API, and SZZ asks the REST API. REST replies go through
+// the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
+// REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
+// many points they used. A run that fails says it too, on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
@@ -44,8 +45,10 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   try {
     await run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr });
   } catch (error) {
-    const { requests, not_modified: notModified } = forge.counts();
-    if (requests > 0) stderr.write(`exhibit: note: this run made ${requests} GitHub requests, and ${notModified} got a 304.\n`);
+    const { requests, not_modified: notModified, queries, points } = forge.counts();
+    if (requests > 0 || queries > 0) {
+      stderr.write(`exhibit: note: this run made ${plural(requests, 'GitHub REST request')}, and ${notModified} got a 304. It made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')}.\n`);
+    }
     throw error;
   }
 }
@@ -88,8 +91,8 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
   const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
-  const { requests, not_modified: notModified } = forge.counts();
-  const github = { requests, not_modified: notModified, cache: folder };
+  const { requests, not_modified: notModified, queries, points } = forge.counts();
+  const github = { requests, not_modified: notModified, cache: folder, graphql: { queries, points } };
   const mode = previous.length > 0 ? 'incremental' : 'full';
   if (options.json) {
     stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read }) + '\n');
@@ -102,8 +105,14 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
       ? `Read all ${updated.read} merged PRs from GitHub.`
       : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
     stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n` +
-      `Made ${requests} GitHub requests. ${cached}\n`);
+      `Made ${plural(requests, 'GitHub REST request')}. ${cached}\n` +
+      `Made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')} of the GraphQL rate limit.\n`);
   }
+}
+
+// "1 point", "2 points". `many` is the plural of the last word, when it is not that word with "s".
+function plural(count, one, many) {
+  return `${count} ${count === 1 ? one : one.replace(/\S+$/, (word) => many ?? `${word}s`)}`;
 }
 
 // Returns the lines of the old history file, so the run reads only what is new. Returns [] when
