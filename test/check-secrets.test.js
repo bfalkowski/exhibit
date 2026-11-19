@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkLine } from '../scripts/check-secrets.js';
+import { gitEnv } from './fixtures/git-env.js';
 
 const script = fileURLToPath(new URL('../scripts/check-secrets.js', import.meta.url));
 // Built at run time, so this file holds no string the scan would find.
@@ -26,16 +27,19 @@ test('checkLine passes code, placeholders and allowed lines', () => {
 
 function repoWith(files) {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-secrets-'));
-  execFileSync('git', ['init', '-q', dir]);
+  execFileSync('git', ['init', '-q', dir], { env: gitEnv(dir) });
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
-  execFileSync('git', ['-C', dir, 'add', '.']);
+  execFileSync('git', ['-C', dir, 'add', '.'], { env: gitEnv(dir) });
   return dir;
 }
+
+// The scan runs git too. In a test it must read the test's repo, not the one a hook names.
+const scan = (dir) => spawnSync(process.execPath, [script, '--all'], { cwd: dir, env: gitEnv(dir), encoding: 'utf8' });
 
 test('--all exits 1 and names the file and line, without printing the secret', (t) => {
   const dir = repoWith({ 'a.js': 'ok\nconst t = "' + githubToken + '";\n' });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const run = spawnSync(process.execPath, [script, '--all'], { cwd: dir, encoding: 'utf8' });
+  const run = scan(dir);
   assert.equal(run.status, 1);
   assert.match(run.stderr, /a\.js:2: a GitHub token/);
   assert.ok(!run.stderr.includes(githubToken));
@@ -44,7 +48,7 @@ test('--all exits 1 and names the file and line, without printing the secret', (
 test('--all exits 1 for a tracked .env file', (t) => {
   const dir = repoWith({ '.env': 'X=1\n' });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const run = spawnSync(process.execPath, [script, '--all'], { cwd: dir, encoding: 'utf8' });
+  const run = scan(dir);
   assert.equal(run.status, 1);
   assert.match(run.stderr, /\.env: a file that holds secrets/);
 });
@@ -52,6 +56,6 @@ test('--all exits 1 for a tracked .env file', (t) => {
 test('--all exits 0 on a clean repo', (t) => {
   const dir = repoWith({ 'a.js': 'export const x = 1;\n' });
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const run = spawnSync(process.execPath, [script, '--all'], { cwd: dir, encoding: 'utf8' });
+  const run = scan(dir);
   assert.equal(run.status, 0, run.stderr);
 });
