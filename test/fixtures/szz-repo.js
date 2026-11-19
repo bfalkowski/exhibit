@@ -257,6 +257,8 @@ function build(dir) {
       base_sha: opened.get(number),
       merge_sha: run(['rev-parse', 'main']),
       files: diffFiles(run(['diff', '--numstat', `${opened.get(number)}...${head}`])),
+      reviews: { change_request_rounds: 0, list: [] },
+      ci: [],
       classification: { fix: pr.fix === true, fix_signal: pr.fix ? 'label:bug' : null }
     });
   }
