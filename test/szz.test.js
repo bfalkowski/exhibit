@@ -112,6 +112,25 @@ test('SZZ on the fixture repo', async (t) => {
     assert.equal(out.slice(0, 40), line.blame.commit);
   });
 
+  await t.test('a rebase-merged fix is blamed at the parent of its first commit on main', () => {
+    const fix = byNumber.get(12);
+    const [first] = repo.onMain.get(12);
+    assert.equal(repo.onMain.get(12).length, 2);
+    assert.equal(fix.szz.blamed_commit, git(repo.dir, ['rev-parse', `${first}^1`]));
+    assert.deepEqual(fix.szz.links.map((link) => [link.pr, link.confidence]), [[1, 0.5], [11, 0.5]]);
+    // PR 11 was rebase-merged too: its line is blamed on its copy on main, not its branch.
+    assert.equal(fix.szz.links[1].lines[0].blame.commit, repo.onMain.get(11)[0]);
+    assert.deepEqual(fix.szz.unlinked_lines, []);
+  });
+
+  await t.test("to find a fix's first commit, asks GitHub only about commits that are not merge SHAs", () => {
+    // PR 12's walk asks about its first copy on main. The next parent is PR 11's merge_sha, so
+    // the walk stops there with no request. A squash fix's parent is a merge SHA too.
+    const asked = fetch.calls.map((call) => call.key.split('/')[5]);
+    assert.ok(asked.includes(repo.onMain.get(12)[0]));
+    for (const n of [7, 9]) assert.ok(!asked.includes(byNumber.get(n).merge_sha), `PR ${n}`);
+  });
+
   await t.test('PRs that are not fixes get szz: null', () => {
     for (const line of lines.filter((l) => !l.classification.fix)) assert.equal(line.szz, null, `PR ${line.number}`);
   });
@@ -270,12 +289,13 @@ test('in a shallow clone, a fix whose parent is missing gets szz: null and a war
   t.after(() => repo.cleanup());
   const shallow = mkdtempSync(join(tmpdir(), 'exhibit-shallow-'));
   git(shallow, ['clone', '--quiet', '--depth', '1', `file://${repo.dir}`, '.']);
-  const fix10 = repo.history.find((pr) => pr.number === 10);
+  // The newest fix is the clone's one commit, so its parent is missing.
+  const newest = repo.history.at(-1);
   const warnings = [];
   const github = createGitHub({ token: 't', fetch: commitPullsFetch(repo, REPO) });
-  const [line] = await addSzz([fix10], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
+  const [line] = await addSzz([newest], { dir: shallow, repo: REPO, github, warn: (text) => warnings.push(text) });
   assert.equal(line.szz, null);
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /^This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong\. Run git fetch --unshallow, then run history again\.$/);
-  assert.match(warnings[1], /^PR 10: SZZ skipped, because git failed: .+/);
+  assert.match(warnings[1], /^PR 12: SZZ skipped, because git failed: .+/);
 });

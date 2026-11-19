@@ -1,8 +1,9 @@
 // GitHub API replies for the fixture repo that szz-repo.js builds. Its SHAs are known only after
 // the build, so the replies are made from the built repo and not recorded in a file.
 //
-// "Pull requests for a commit" lists the PR whose branch holds the commit, and the PR whose
-// squash commit it is, as GitHub does. A commit GitHub does not know gets a 422.
+// "Pull requests for a commit" lists the PR whose branch holds the commit, and the PR that put the
+// commit on main (a squash commit or a rebased copy), as GitHub does. A commit GitHub does not
+// know gets a 422.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -14,15 +15,15 @@ function git(dir, args) {
 }
 
 // Maps each "pull requests for a commit" path to its recorded reply.
-function commitPullsReplies({ dir, history }, repo) {
+function commitPullsReplies({ dir, history, onMain }, repo) {
   const prsOf = new Map();
   const add = (sha, pr) => prsOf.set(sha, [...(prsOf.get(sha) ?? []), pr]);
+  const replies = {};
   for (const pr of history) {
     const branch = git(dir, ['rev-list', `${pr.base_sha}..refs/pull/${pr.number}/head`]).split('\n');
     for (const sha of branch) add(sha, pr);
-    if (!branch.includes(pr.merge_sha)) add(pr.merge_sha, pr);
+    for (const sha of onMain.get(pr.number)) if (!branch.includes(sha)) add(sha, pr);
   }
-  const replies = {};
   for (const [sha, prs] of prsOf) {
     replies[`/repos/${repo}/commits/${sha}/pulls?per_page=100`] = {
       status: 200,

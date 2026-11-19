@@ -113,12 +113,12 @@ async function hasCommit(dir, sha) {
   }
 }
 
-// The fix landed on the main branch as one commit: a merge commit or a squash commit. Its first
-// parent is the main branch just before the fix. SZZ takes the lines the fix deleted or changed
-// on that side, drops the ones that carry no bug, blames the rest there, drops the lines whose
-// commit came after the bug report, and groups what is left by the PR that last changed each line.
+// SZZ blames the main branch just before the fix (mainBeforeFix), takes the lines the fix
+// deleted or changed there, drops the ones that carry no bug, blames the rest, drops the lines
+// whose commit came after the bug report, and groups what is left by the PR that last changed
+// each line.
 async function szzForFix(dir, fix, findPr, reportedAt) {
-  const blamed = (await git(dir, ['rev-parse', `${fix.merge_sha}^1`])).trim();
+  const blamed = await mainBeforeFix(dir, fix, findPr);
   const { counted, dropped } = countedLines(await git(dir, ['diff', '-U0', '-M', '--no-color', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all', '--src-prefix=a/', '--dst-prefix=b/', blamed, fix.merge_sha]));
 
   const blamedLines = [];
@@ -145,6 +145,22 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
     dropped_lines: droppedLines,
     no_link_reason: kept.length === 0 ? noLinkReason(droppedLines) : null
   };
+}
+
+// Returns the commit on the main branch just before the fix. A merge commit or a squash commit
+// puts the fix on main as one commit, so that is the first parent of merge_sha. "Rebase and
+// merge" copies each of the fix's commits onto main, and merge_sha is only the last copy. So
+// walk back along main while the parent commit belongs to the fix PR too. For a merge commit or
+// a squash commit, the parent is another PR's commit, so the walk stops at once.
+async function mainBeforeFix(dir, fix, findPr) {
+  let first = fix.merge_sha;
+  for (;;) {
+    const parents = (await git(dir, ['rev-list', '--parents', '-n', '1', first])).trim().split(' ').slice(1);
+    if (parents.length !== 1) break;
+    if ((await findPr(parents[0])) !== fix.number) break;
+    first = parents[0];
+  }
+  return (await git(dir, ['rev-parse', `${first}^1`])).trim();
 }
 
 // The reasons a line is dropped, in the order no_link_reason names them, with the words for each.

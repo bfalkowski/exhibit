@@ -4,9 +4,11 @@
 // Dates, names and git settings are fixed, so every build gives the same commit SHAs.
 // The answer key in szz-answer-key.json says which introducing PRs SZZ must find for each fix.
 //
-// Each PR is kept at refs/pull/N/head, as on GitHub. PRs are merged in one of two ways:
+// Each PR is kept at refs/pull/N/head, as on GitHub. PRs are merged in one of three ways:
 // - 'merge': a merge commit on main, with the PR branch as its second parent.
 // - 'squash': one new commit on main with all of the PR's changes.
+// - 'rebase': each of the PR's commits is copied onto main, as GitHub's "rebase and merge" does.
+//   merge_sha is the last copy.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -96,6 +98,24 @@ const FORMAT_PR10 = lines(
   ...PAD('  ', '// Pads a label on the right to a fixed width.')
 );
 
+const STOCK_V1 = lines(
+  'export function inStock(item) {',
+  '  return item.qty >= 0;',
+  '}'
+);
+
+const STOCK_V2 = lines(
+  ...STOCK_V1.trimEnd().split('\n'),
+  '',
+  'export function restock(item, count) {',
+  '  return { ...item, qty: item.qty + count };',
+  '}'
+);
+
+const CART_V2 = CART_V1.replace('sum += item.price;', 'sum += item.price * item.qty;');
+const CART_V3 = CART_V2.replace('return items.length;', 'return items.reduce((n, item) => n + item.qty, 0);');
+const CART_V4 = CART_V3.replace('n + item.qty, 0', 'n + (item.qty ?? 1), 0');
+
 const SHOP = lines(
   "export { subtotal, itemCount } from './cart.js';",
   "export { applyDiscount } from './discount.js';",
@@ -124,7 +144,7 @@ const PRS = {
     commits: [{ message: 'Add src/shop.js', files: { 'src/shop.js': SHOP } }] },
   6: { title: 'Fix subtotal to count quantity', author: 'cy', way: 'merge', fix: true,
     commits: [{ message: 'Multiply price by quantity',
-      files: { 'src/cart.js': CART_V1.replace('sum += item.price;', 'sum += item.price * item.qty;') } }] },
+      files: { 'src/cart.js': CART_V2 } }] },
   7: { title: 'Fix discount and tax math', author: 'ana', way: 'squash', fix: true,
     commits: [
       { message: 'Take the discount as a percent',
@@ -137,7 +157,20 @@ const PRS = {
   9: { title: 'Fix the order of receipt helpers', author: 'cy', way: 'squash', fix: true,
     commits: [{ message: 'Move receipt to the top', files: { 'src/format.js': FORMAT_PR9 } }] },
   10: { title: 'Fix comments in format.js', author: 'ana', way: 'merge', fix: true,
-    commits: [{ message: 'Say more in the comments', files: { 'src/format.js': FORMAT_PR10 } }] }
+    commits: [{ message: 'Say more in the comments', files: { 'src/format.js': FORMAT_PR10 } }] },
+  11: { title: 'Add stock checks', author: 'ben', way: 'rebase', fix: false,
+    commits: [
+      { message: 'Add inStock', files: { 'src/stock.js': STOCK_V1 } },
+      { message: 'Add restock', files: { 'src/stock.js': STOCK_V2 } }
+    ] },
+  // The second commit changes a line that the first commit wrote. Blaming merge_sha^1 would
+  // blame that line on PR 12 itself, and would miss the lines of PR 1 and PR 11.
+  12: { title: 'Fix item count and the stock check', author: 'cy', way: 'rebase', fix: true,
+    commits: [
+      { message: 'Count quantity and treat zero as out of stock',
+        files: { 'src/cart.js': CART_V3, 'src/stock.js': STOCK_V2.replace('item.qty >= 0', 'item.qty > 0') } },
+      { message: 'Count an item with no qty as one', files: { 'src/cart.js': CART_V4 } }
+    ] }
 };
 
 // The order of events. PR 3 opens before PR 2 merges, so its merge joins two lines of work.
@@ -150,7 +183,9 @@ const SCRIPT = [
   ['open', 7], ['merge', 7],
   ['open', 8], ['merge', 8],
   ['open', 9], ['merge', 9],
-  ['open', 10], ['merge', 10]
+  ['open', 10], ['merge', 10],
+  ['open', 11], ['merge', 11],
+  ['open', 12], ['merge', 12]
 ];
 
 const BASE_FILES = {
@@ -160,19 +195,21 @@ const BASE_FILES = {
 
 /**
  * Builds the fixture repo in a new temp directory.
- * @returns {{ dir: string, historyPath: string, history: object[], cleanup: () => void }}
+ * @returns {{ dir: string, historyPath: string, history: object[], onMain: Map<number, string[]>, cleanup: () => void }}
  *   `history` holds the records also written to `<dir>/.exhibit/history.jsonl`.
+ *   `onMain` maps each PR number to the commits it put on main, oldest first: one for a merge
+ *   commit or a squash merge, one per PR commit for a rebase merge.
  *   Call `cleanup` to remove the directory.
  */
 export function buildSzzRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-szz-'));
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
   try {
-    const history = build(dir);
+    const { history, onMain } = build(dir);
     const historyPath = join(dir, '.exhibit', 'history.jsonl');
     mkdirSync(dirname(historyPath), { recursive: true });
     writeFileSync(historyPath, history.map((pr) => JSON.stringify(pr) + '\n').join(''));
-    return { dir, historyPath, history, cleanup };
+    return { dir, historyPath, history, onMain, cleanup };
   } catch (err) {
     cleanup();
     throw err;
@@ -222,6 +259,7 @@ function build(dir) {
 
   const opened = new Map();
   const history = [];
+  const onMain = new Map();
   for (const [event, number] of SCRIPT) {
     const pr = PRS[number];
     const branch = `pr-${number}`;
@@ -236,17 +274,24 @@ function build(dir) {
     }
 
     const head = run(['rev-parse', branch]);
+    const before = run(['rev-parse', 'main']);
     if (pr.way === 'merge') {
       run(['merge', '--quiet', '--no-ff', '-m', `Merge pull request #${number} from fixture/${branch}`, branch], 'maintainer');
-    } else {
+    } else if (pr.way === 'squash') {
       run(['merge', '--quiet', '--squash', branch]);
       // A squash merge leaves a draft message file. Drop it, so the commit uses only -m.
       unlinkSync(join(dir, '.git', 'SQUASH_MSG'));
       run(['commit', '--quiet', '-m', `${pr.title} (#${number})`], 'maintainer');
+    } else {
+      // Copy each commit, oldest first. Each copy is a new commit with the PR author's name.
+      for (const sha of run(['rev-list', '--reverse', `${opened.get(number)}..${head}`]).split('\n')) {
+        run(['cherry-pick', sha], pr.author);
+      }
     }
     const mergedAt = new Date(START + tick * STEP).toISOString().replace('.000Z', 'Z');
     tick++;
     run(['branch', '--quiet', '-D', branch]);
+    onMain.set(number, run(['rev-list', '--reverse', '--first-parent', `${before}..main`]).split('\n'));
 
     history.push({
       number,
@@ -265,7 +310,7 @@ function build(dir) {
       szz: null
     });
   }
-  return history;
+  return { history, onMain };
 }
 
 function diffFiles(numstat) {
