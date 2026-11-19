@@ -401,7 +401,8 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
   // A block can pass over a line that its own hunk adds back, so that line does not split the
-  // block. That line keeps its reason, and its own hunk keeps the added line it paired with.
+  // block. That line keeps its reason, and its own hunk keeps the added line it paired with. The
+  // block leaves that line's match in the other hunk unused, so another block can still take it.
   const secondWordAt = secondWordLines(deleted);
   const runs = knownRuns(added.length);
   for (let i = 0; i < deleted.length;) {
@@ -421,8 +422,8 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
       const line = deleted[i + k];
-      row.used = true;
       if (line.reason !== null) continue;
+      row.used = true;
       line.reason = 'moved';
       line.movedInFile = inFile && hasWords(line.text);
     }

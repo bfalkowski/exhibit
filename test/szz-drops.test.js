@@ -264,6 +264,22 @@ test('moved: when a fix only moves a block that its own hunk partly adds back, a
   assert.deepEqual(counted(result), [['a.js', [10, 11, 12, 13]]]);
 });
 
+test('moved: a line that a block passes over leaves the added line of the other hunk to another block', () => {
+  // Hunk 20 adds "b();" once. Line 11 already pairs with the "b();" that its own hunk adds back,
+  // so the block from line 30 gets the one in hunk 20.
+  const hunks = [
+    { at: 10, deleted: ['a();', 'b();'], added: ['b();'] },
+    { at: 20, added: ['a();', 'b();', 'c();'] },
+    { at: 30, deleted: ['b();', 'c();'] }
+  ];
+  const withChange = countedLines(diff({ path: 'a.js', hunks: [...hunks, { at: 40, deleted: ['x = 1;'], added: ['x = 2;'] }] }));
+  assert.deepEqual(counted(withChange), [['a.js', [40]]]);
+  assert.deepEqual(dropped(withChange), [10, 11, 30, 31].map((line) => ['a.js', line, 'moved']));
+  // With nothing else, the fix only moves lines inside its file, so all four lines count.
+  const alone = countedLines(diff({ path: 'a.js', hunks }));
+  assert.deepEqual(counted(alone), [['a.js', [10, 11, 30, 31]]]);
+});
+
 test('moved: a re-indent in one hunk stays whitespace when another hunk deletes a copy of the lines', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [
     { at: 10, deleted: ['  load(user);', '  save(user);'], added: ['    load(user);', '    save(user);'] },
