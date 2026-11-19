@@ -53,10 +53,11 @@ function deletedLines(dir, from, to) {
   return lines;
 }
 
-// Which PR made a commit: the squash commit itself, or a commit on the branch of a merge commit.
-function prOfCommit(dir, history, sha) {
+// Which PR made a commit: a commit the PR put on main (a squash commit or a rebased copy), or a
+// commit on the branch of a merge commit.
+function prOfCommit(dir, { history, onMain }, sha) {
   for (const pr of history) {
-    if (pr.merge_sha === sha) return pr.number;
+    if (onMain.get(pr.number).includes(sha)) return pr.number;
     const parents = parentsOf(dir, pr.merge_sha);
     if (parents.length === 3) {
       const branch = git(dir, ['rev-list', `${parents[1]}..${parents[2]}`]).trim().split('\n');
@@ -67,10 +68,9 @@ function prOfCommit(dir, history, sha) {
 }
 
 // The commit that last touched each line a fix deleted, as { path, line, sha }.
-// It blames merge_sha^1. Spec 9.2 blames the parent of the fix's first commit;
-// a subtest checks that the two are the same commit.
-function blamedCommits(dir, fix) {
-  const parent = `${fix.merge_sha}^1`;
+// It blames the parent of the fix's first commit on main, as spec 9.2 says.
+// `parent` can be another commit, to show what a wrong choice would blame.
+function blamedCommits(dir, { onMain }, fix, parent = `${onMain.get(fix.number)[0]}^1`) {
   return deletedLines(dir, parent, fix.merge_sha).map(({ path, line }) => {
     const out = git(dir, ['blame', '--porcelain', '-L', `${line},${line}`, parent, '--', path]);
     return { path, line, sha: out.slice(0, 40) };
@@ -79,8 +79,8 @@ function blamedCommits(dir, fix) {
 
 // The PRs that last touched the lines a fix deleted. This is a bare blame with no filters,
 // so it links the whitespace, move and comment cases too. SZZ must filter those out.
-function blamedPrs(dir, history, fix) {
-  const prs = new Set(blamedCommits(dir, fix).map(({ sha }) => prOfCommit(dir, history, sha)));
+function blamedPrs(dir, built, fix, parent) {
+  const prs = new Set(blamedCommits(dir, built, fix, parent).map(({ sha }) => prOfCommit(dir, built, sha)));
   return [...prs].sort((a, b) => a - b);
 }
 
@@ -117,7 +117,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
   await t.test('history.jsonl holds one record per line, in merge order', () => {
     const rows = readFileSync(repo.historyPath, 'utf8').trim().split('\n').map((r) => JSON.parse(r));
     assert.deepEqual(rows, history);
-    assert.deepEqual(history.map((pr) => pr.number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert.deepEqual(history.map((pr) => pr.number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (const pr of history) {
       for (const field of ['number', 'title', 'body', 'author', 'labels', 'merged_at', 'base_sha', 'merge_sha', 'files', 'classification']) {
         assert.ok(field in pr, `PR ${pr.number} has ${field}`);
@@ -129,22 +129,32 @@ test('the fixture repo and its records match the answer key', async (t) => {
     }
   });
 
-  await t.test('main is a chain of merge commits and squash commits, one per PR', () => {
+  await t.test('main is a chain of the commits each PR put there, and merge_sha is the last of them', () => {
     const firstParents = git(dir, ['rev-list', '--first-parent', '--reverse', 'main']).trim().split('\n');
-    assert.deepEqual(firstParents.slice(1), history.map((pr) => pr.merge_sha));
+    assert.deepEqual(firstParents.slice(1), history.flatMap((pr) => repo.onMain.get(pr.number)));
+    for (const pr of history) assert.equal(repo.onMain.get(pr.number).at(-1), pr.merge_sha, `PR ${pr.number}`);
   });
 
-  await t.test('PRs are merged both ways, and refs/pull/N/head keeps each branch', () => {
+  await t.test('PRs are merged all three ways, and refs/pull/N/head keeps each branch', () => {
     const ways = new Set();
     for (const pr of history) {
       const parents = parentsOf(dir, pr.merge_sha);
-      const way = parents.length === 3 ? 'merge' : 'squash';
+      const copies = repo.onMain.get(pr.number);
+      const branch = git(dir, ['rev-list', '--reverse', `${pr.base_sha}..refs/pull/${pr.number}/head`]).trim().split('\n');
+      const way = parents.length === 3 ? 'merge' : copies.length > 1 ? 'rebase' : 'squash';
       ways.add(way);
       const head = git(dir, ['rev-parse', `refs/pull/${pr.number}/head`]).trim();
       if (way === 'merge') assert.equal(parents[2], head);
       else assert.equal(git(dir, ['rev-parse', `${pr.merge_sha}^{tree}`]), git(dir, ['rev-parse', `${head}^{tree}`]));
+      if (way === 'rebase') {
+        // One new copy on main for each commit of the PR, with the same author and message.
+        assert.equal(copies.length, branch.length);
+        const show = (sha) => git(dir, ['log', '-1', '--format=%an %s', sha]);
+        assert.deepEqual(copies.map(show), branch.map(show));
+        for (const sha of copies) assert.ok(!branch.includes(sha), `PR ${pr.number}: ${sha} is a copy`);
+      }
     }
-    assert.deepEqual([...ways].sort(), ['merge', 'squash']);
+    assert.deepEqual([...ways].sort(), ['merge', 'rebase', 'squash']);
   });
 
   await t.test('a merge-commit PR had a stale base, so its merge joins two lines of work', () => {
@@ -170,15 +180,22 @@ test('the fixture repo and its records match the answer key', async (t) => {
     assert.deepEqual(key.fixes.map((f) => f.fix_pr).sort((a, b) => a - b), fixes);
   });
 
-  await t.test('for each fix, merge_sha^1 is the parent of its first commit, where spec 9.2 blames', () => {
+  await t.test("for each fix, the parent of its first commit on main is the main branch just before the fix, where spec 9.2 blames", () => {
     for (const fix of history.filter((pr) => pr.classification.fix)) {
-      const [, parent] = parentsOf(dir, firstCommit(dir, fix));
-      assert.equal(parent, git(dir, ['rev-parse', `${fix.merge_sha}^1`]).trim(), `PR ${fix.number}`);
+      const before = history[history.indexOf(fix) - 1].merge_sha;
+      const [, parent] = parentsOf(dir, repo.onMain.get(fix.number)[0]);
+      assert.equal(parent, before, `PR ${fix.number}`);
     }
   });
 
+  await t.test('the rebase-merged fix is a trap: blaming merge_sha^1 links the fix to itself', () => {
+    const fix = key.fixes.find((f) => f.case === 'a fix merged with rebase and merge');
+    const pr = byNumber.get(fix.fix_pr);
+    assert.deepEqual(blamedPrs(dir, repo, pr, `${pr.merge_sha}^1`), [fix.fix_pr]);
+  });
+
   await t.test("PR 7's tax.js line comes from the first of PR 3's two commits", () => {
-    const tax = blamedCommits(dir, byNumber.get(7)).filter(({ path }) => path === 'src/tax.js');
+    const tax = blamedCommits(dir, repo, byNumber.get(7)).filter(({ path }) => path === 'src/tax.js');
     assert.equal(tax.length, 1);
     const pr3 = byNumber.get(3);
     const commits = git(dir, ['rev-list', `${pr3.base_sha}..refs/pull/3/head`]).trim().split('\n');
@@ -188,7 +205,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
 
   await t.test('each fix changes lines that blame points to the expected PRs', () => {
     for (const fix of key.fixes.filter((f) => f.introducing_prs.length > 0)) {
-      assert.deepEqual(blamedPrs(dir, history, byNumber.get(fix.fix_pr)), fix.introducing_prs, fix.case);
+      assert.deepEqual(blamedPrs(dir, repo, byNumber.get(fix.fix_pr)), fix.introducing_prs, fix.case);
     }
     const cases = key.fixes.map((f) => f.introducing_prs.length);
     assert.ok(cases.includes(1) && cases.includes(2), 'a one-link case and a two-link case');
@@ -196,7 +213,7 @@ test('the fixture repo and its records match the answer key', async (t) => {
 
   await t.test('each no-link case is a trap: a bare blame would still link a PR', () => {
     for (const fix of key.fixes.filter((f) => f.introducing_prs.length === 0)) {
-      const linked = blamedPrs(dir, history, byNumber.get(fix.fix_pr));
+      const linked = blamedPrs(dir, repo, byNumber.get(fix.fix_pr));
       assert.ok(linked.length > 0 && !linked.includes(null), fix.case);
     }
   });

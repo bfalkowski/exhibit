@@ -94,7 +94,7 @@
         "blamed_commit": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$",
-          "description": "The commit that git blame ran on: the first parent of merge_sha, the main branch just before the fix."
+          "description": "The commit that git blame ran on: the parent of the fix's first commit on the main branch, the main branch just before the fix. For a merge commit or a squash merge, that is the first parent of merge_sha."
         },
         "links": {
           "type": "array",
