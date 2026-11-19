@@ -11,7 +11,9 @@ const good = () => ({
   merged_at: '2026-03-05T12:00:00Z',
   base_sha: 'b'.repeat(40),
   merge_sha: 'a'.repeat(40),
-  files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }]
+  files: [{ path: 'src/cache.js', additions: 120, deletions: 0 }],
+  reviews: { change_request_rounds: 1, list: [{ state: 'CHANGES_REQUESTED', author: 'rev1' }, { state: 'APPROVED', author: null }] },
+  ci: [{ name: 'test', conclusion: 'success' }, { name: 'lint', conclusion: null }]
 });
 
 test('a line with the fields this version fills passes', () => {
@@ -19,8 +21,28 @@ test('a line with the fields this version fills passes', () => {
 });
 
 test('the fields later tickets fill may be absent or null', () => {
-  const line = { ...good(), reviews: null, ci: null, classification: null, evidence_section: null, szz: null, exhibit: null };
+  const line = { ...good(), classification: null, evidence_section: null, szz: null, exhibit: null };
   assert.deepEqual(checkHistoryLine(line), []);
+});
+
+test('a line missing reviews or ci fails', () => {
+  for (const field of ['reviews', 'ci']) {
+    const line = good();
+    delete line[field];
+    assert.deepEqual(checkHistoryLine(line), [`/: misses the field ${field}`]);
+  }
+});
+
+test('reviews and ci may not be null', () => {
+  const line = { ...good(), reviews: null, ci: null };
+  assert.deepEqual(checkHistoryLine(line).sort(), ['/ci: must be array, not null', '/reviews: must be object, not null']);
+});
+
+test('a review state must be one GitHub uses, and the rounds a count', () => {
+  const line = good();
+  line.reviews.list[0].state = 'LGTM';
+  line.reviews.change_request_rounds = -1;
+  assert.equal(checkHistoryLine(line).length, 2);
 });
 
 test('each problem names where it is', () => {

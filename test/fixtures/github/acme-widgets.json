@@ -305,5 +305,222 @@
         "changes": 40
       }
     ]
+  },
+  "/repos/acme/widgets/pulls/7/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "id": 701,
+        "state": "CHANGES_REQUESTED",
+        "user": {
+          "login": "rev1",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "id": 702,
+        "state": "COMMENTED",
+        "user": {
+          "login": "dev7",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "id": 703,
+        "state": "CHANGES_REQUESTED",
+        "user": {
+          "login": "rev1",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "id": 704,
+        "state": "APPROVED",
+        "user": {
+          "login": "rev2",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      }
+    ]
+  },
+  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {
+      "link": "<https://api.github.com/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2>; rel=\"last\""
+    },
+    "body": {
+      "total_count": 3,
+      "check_runs": [
+        {
+          "id": 71,
+          "name": "lint",
+          "status": "completed",
+          "conclusion": "success",
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        },
+        {
+          "id": 72,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        }
+      ]
+    }
+  },
+  "/repositories/4242/commits/ccccccccccccccccccccccccccccccccccccccc7/check-runs?per_page=100&page=2": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 3,
+      "check_runs": [
+        {
+          "id": 73,
+          "name": "Secret scan",
+          "status": "completed",
+          "conclusion": "success",
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        }
+      ]
+    }
+  },
+  "/repos/acme/widgets/pulls/5/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc5/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 0,
+      "check_runs": []
+    }
+  },
+  "/repos/acme/widgets/pulls/4/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "id": 401,
+        "state": "DISMISSED",
+        "user": {
+          "login": "rev1",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "id": 402,
+        "state": "APPROVED",
+        "user": {
+          "login": "rev2",
+          "type": "User"
+        },
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      }
+    ]
+  },
+  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc4/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 1,
+      "check_runs": [
+        {
+          "id": 41,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "success",
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        }
+      ]
+    }
+  },
+  "/repos/acme/widgets/pulls/3/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": [
+      {
+        "id": 301,
+        "state": "APPROVED",
+        "user": null,
+        "body": "",
+        "submitted_at": "2026-03-01T00:00:00Z",
+        "commit_id": "cccccccccccccccccccccccccccccccccccccccc"
+      }
+    ]
+  },
+  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc3/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 1,
+      "check_runs": [
+        {
+          "id": 31,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "skipped",
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        }
+      ]
+    }
+  },
+  "/repos/acme/widgets/pulls/1/reviews?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": []
+  },
+  "/repos/acme/widgets/commits/ccccccccccccccccccccccccccccccccccccccc1/check-runs?per_page=100": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "total_count": 1,
+      "check_runs": [
+        {
+          "id": 11,
+          "name": "test",
+          "status": "in_progress",
+          "conclusion": null,
+          "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "app": {
+            "slug": "github-actions"
+          }
+        }
+      ]
+    }
   }
 }
