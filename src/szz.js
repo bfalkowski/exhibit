@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { GitHubReplyError } from './github.js';
 
 const run = promisify(execFile);
 
@@ -59,14 +60,23 @@ export function createPrFinder({ lines, forge }) {
   const asked = new Map();
   let mainBranch = null;
   // The repo's default branch, asked for once, and only when a merge SHA or two merged PRs need it.
-  const defaultBranch = () => (mainBranch ??= forge.defaultBranch());
+  // A failed request is not kept, so the next fix asks again.
+  const defaultBranch = () => {
+    mainBranch ??= forge.defaultBranch();
+    mainBranch.catch(() => { mainBranch = null; });
+    return mainBranch;
+  };
   const find = async (sha) => {
     const line = byMergeSha.get(sha);
     if (line && line.base_ref === (await defaultBranch())) return line.number;
     return askForge(forge, sha, defaultBranch);
   };
   return (sha) => {
-    if (!asked.has(sha)) asked.set(sha, find(sha));
+    if (!asked.has(sha)) {
+      const answer = find(sha);
+      answer.catch(() => asked.delete(sha));
+      asked.set(sha, answer);
+    }
     return asked.get(sha);
   };
 }
@@ -84,9 +94,9 @@ async function askForge(forge, sha, defaultBranch) {
 }
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
-// not a fix gets null. A fix whose merge commit is not in the clone, or where git fails, gets
-// null and a warning. A shallow clone gives one warning first, because blame there can give
-// old lines to the shallow boundary commit.
+// not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
+// the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
+// warning first, because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
 export async function addSzz(lines, { dir, forge, warn = () => {} }) {
   const findPr = createPrFinder({ lines, forge });
@@ -108,13 +118,17 @@ export async function addSzz(lines, { dir, forge, warn = () => {} }) {
       const reportedAt = await bugReportDate(line, forge);
       out.push({ ...line, szz: await szzForFix(dir, line, findPr, reportedAt) });
     } catch (error) {
-      if (!(error instanceof GitError)) throw error;
+      if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
       out.push({ ...line, szz: null });
     }
   }
   return out;
 }
+
+// A GitHub reply that is a problem with one request, such as a 502. GitHubReplyError says
+// which replies would fail every later request too: those stop the run.
+const failsOneRequest = (error) => error instanceof GitHubReplyError && !error.stopsRun;
 
 async function hasCommit(dir, sha) {
   try {
@@ -146,7 +160,8 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
   for (const line of kept) {
     const pr = await findPr(line.blame.commit);
     if (pr === null) unlinked.push(line);
-    else byPr.set(pr, [...(byPr.get(pr) ?? []), line]);
+    else if (byPr.has(pr)) byPr.get(pr).push(line);
+    else byPr.set(pr, [line]);
   }
   const links = [...byPr]
     .map(([pr, prLines]) => ({ pr, confidence: prLines.length / kept.length, lines: prLines }))
@@ -226,11 +241,14 @@ function noLinkReason(dropped) {
 }
 
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
-// "Fixes #12" or "closes: #7". Only issues in the same repo count.
-export function bugReportNumbers(body) {
+// "Fixes #12", "closes: #7" or "Fixes https://github.com/owner/name/issues/12". Only issues in
+// `repo` ("owner/name") count.
+export function bugReportNumbers(body, repo) {
   const numbers = [];
-  for (const match of (body ?? '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)\b/gi)) {
-    const number = Number(match[1]);
+  const closing = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:#(\d+)|https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+))\b/gi;
+  for (const [, short, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
+    if (urlRepo !== undefined && urlRepo.toLowerCase() !== repo.toLowerCase()) continue;
+    const number = Number(short ?? urlNumber);
     if (!numbers.includes(number)) numbers.push(number);
   }
   return numbers;
@@ -242,7 +260,7 @@ export function bugReportNumbers(body) {
 // it came before the newest one.
 async function bugReportDate(fix, forge) {
   let newest = null;
-  for (const number of bugReportNumbers(fix.body)) {
+  for (const number of bugReportNumbers(fix.body, forge.repo)) {
     const issue = await forge.issue(number);
     if (issue === null || issue.pull_request || typeof issue.created_at !== 'string') continue;
     if (newest === null || Date.parse(issue.created_at) > Date.parse(newest)) newest = issue.created_at;
@@ -281,6 +299,9 @@ export function dropNewerLines(blamedLines, reportedAt) {
 //   In a Python file the indent at the start of a line is code for both rules.
 // - "comment": it is only a comment, and the fix does not turn it back into code. Or only the
 //   comment at its end changed: the same hunk adds a line with the same code.
+// When no line is left, but some lines with a letter or a digit moved inside their own file,
+// those lines count: the fix changed only their place, so their place was the bug. A moved
+// line with no letter or digit, such as "}" or a blank line, stays dropped.
 // Each added line pairs with one deleted line at most. A renamed file keeps its old path.
 // `files` holds the whole files before and after the fix, as readFiles returns them. With a
 // file, the rules know whether a row is inside a block comment, and which block a Python line
@@ -304,17 +325,28 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   const added = hunks.flatMap((hunk, at) => {
     const rows = hunk.added.map((text, i) => ({ at, line: hunk.newStart + i, text, used: false }));
     return side(rows, hunk.newPath, factsOf('after', after, hunk.newPath));
-  });
+  }).map((row, place) => ({ ...row, place }));
   const deleted = hunks.flatMap((hunk, at) => {
-    const rows = hunk.deleted.map((row) => ({ at, path: hunk.oldPath, ...row, reason: null }));
+    const rows = hunk.deleted.map((row) => ({ at, path: hunk.oldPath, ...row, reason: null, movedInFile: false }));
     return side(rows, hunk.oldPath, factsOf('before', before, hunk.oldPath));
   });
+  const index = indexByKey(added);
+  const sameFile = (deletedAt, addedAt) => hunks[deletedAt].newPath !== null && hunks[deletedAt].newPath === hunks[addedAt].newPath;
 
-  // Finds an added line with the same text, give or take whitespace, in the same hunk or in
-  // another one, and uses it up.
+  // Finds the first unused added line with the same text, give or take whitespace, in the same
+  // hunk or in another one, and uses it up.
   // Returns the matched line, or undefined.
   const pair = (line, sameHunk) => {
-    const match = added.find((row) => !row.used && row.key === line.key && (row.at === line.at) === sameHunk);
+    const byHunk = index.get(line.key);
+    let match;
+    if (byHunk && sameHunk) {
+      match = byHunk.get(line.at)?.firstUnused();
+    } else if (byHunk) {
+      for (const [at, rows] of byHunk) {
+        match = at === line.at ? undefined : rows.firstUnused();
+        if (match) break;
+      }
+    }
     if (match) match.used = true;
     return match;
   };
@@ -322,18 +354,21 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   for (const line of deleted) {
     const match = line.key === '' ? undefined : pair(line, true);
     if (match) line.reason = match.text === line.text ? 'moved' : 'whitespace';
+    if (line.reason === 'moved') line.movedInFile = hasWords(line.text);
   }
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
   for (let i = 0; i < deleted.length;) {
-    const block = movedBlock(deleted, added, i);
+    const block = movedBlock(deleted, added, index, i);
     if (block.filter((row) => hasWords(row.text)).length < 2) {
       i++;
       continue;
     }
+    const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
       deleted[i + k].reason = 'moved';
+      deleted[i + k].movedInFile = inFile && hasWords(deleted[i + k].text);
       row.used = true;
     }
     i += block.length;
@@ -352,47 +387,91 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   }
   // A code line where only the comment at its end changed, such as "x = 1; // old note" to
   // "x = 1;": the same hunk adds a code line with the same code once the comments come off both
-  // lines, give or take whitespace.
+  // lines, give or take whitespace. The added code lines are indexed by hunk and code, as above.
   const codeOf = (row, path) => squash(stripComments(row.text, path), path, row.level);
+  const byCode = new Map();
+  for (const row of added) {
+    if (row.comment) continue;
+    const id = `${row.at}\n${codeOf(row, hunks[row.at].oldPath)}`;
+    if (!byCode.has(id)) byCode.set(id, hunkRows());
+    byCode.get(id).rows.push(row);
+  }
   for (const line of deleted) {
     if (line.reason !== null || line.comment) continue;
     const key = codeOf(line, line.path);
     if (key === '') continue;
-    const match = added.find((row) => !row.used && !row.comment && row.at === line.at && codeOf(row, line.path) === key);
+    const match = byCode.get(`${line.at}\n${key}`)?.firstUnused();
     if (match) {
       match.used = true;
       line.reason = 'comment';
     }
+  }
+  // A fix that only moves lines inside a file, such as an export moved above the code that
+  // needs it, would get no link at all. Its moved lines are the change, so they count.
+  if (deleted.every((line) => line.reason !== null)) {
+    for (const line of deleted) if (line.movedInFile) line.reason = null;
   }
 
   const counted = new Map();
   const dropped = [];
   for (const { path, line, text, reason } of deleted) {
     if (reason !== null) dropped.push({ path, line, text, reason });
-    else counted.set(path, [...(counted.get(path) ?? []), line]);
+    else if (counted.has(path)) counted.get(path).push(line);
+    else counted.set(path, [line]);
   }
   return { counted, dropped };
 }
 
+// Groups the added lines by key, then by hunk, in the order of the diff, so a deleted line looks
+// only at the added lines with its key. A big generated file, such as a lockfile, has thousands
+// of lines, and reading all of them for each deleted line is slow. Each group keeps a cursor
+// past its used lines: a line that is used stays used.
+// Returns Map(key => Map(hunk => { rows, firstUnused() })).
+function indexByKey(added) {
+  const index = new Map();
+  for (const row of added) {
+    if (!index.has(row.key)) index.set(row.key, new Map());
+    const byHunk = index.get(row.key);
+    if (!byHunk.has(row.at)) byHunk.set(row.at, hunkRows());
+    byHunk.get(row.at).rows.push(row);
+  }
+  return index;
+}
+
+function hunkRows() {
+  const rows = [];
+  let next = 0;
+  return {
+    rows,
+    firstUnused() {
+      while (next < rows.length && rows[next].used) next++;
+      return rows[next];
+    }
+  };
+}
+
 // Finds the longest run of added lines, in one hunk other than the deleted line's, that matches
 // the deleted lines from `start` on, line by line. Each matched line is unused, and each deleted
-// line in the run is in the same hunk and is not dropped yet.
+// line in the run is in the same hunk and is not dropped yet. Only added lines with the key of
+// the line at `start` can begin a run, so the index gives them.
 // Returns the matched added lines, or [] when no other hunk adds back the line at `start`.
-function movedBlock(deleted, added, start) {
+function movedBlock(deleted, added, index, start) {
   const first = deleted[start];
   let best = [];
   if (first.reason !== null) return best;
-  for (let j = 0; j < added.length; j++) {
-    if (added[j].at === first.at) continue;
-    let size = 0;
-    while (true) {
-      const from = deleted[start + size];
-      const to = added[j + size];
-      if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
-      if (to.at !== added[j].at || to.used || to.key !== from.key) break;
-      size++;
+  for (const [at, { rows }] of index.get(first.key) ?? []) {
+    if (at === first.at) continue;
+    for (const { place: j } of rows) {
+      let size = 0;
+      while (true) {
+        const from = deleted[start + size];
+        const to = added[j + size];
+        if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
+        if (to.at !== added[j].at || to.used || to.key !== from.key) break;
+        size++;
+      }
+      if (size > best.length) best = added.slice(j, j + size);
     }
-    if (size > best.length) best = added.slice(j, j + size);
   }
   return best;
 }
@@ -404,12 +483,57 @@ const hasWords = (text) => /[\p{L}\p{N}]/u.test(text);
 // Python the indent says which block a line is in, so it is code. With the file, `level` says
 // how deep that block is, so a tab and four spaces at the same depth match, and a line inside
 // brackets (level null) has no indent that counts. Without the file (level undefined), the
-// indent stays as it is.
+// indent stays as it is. In a JavaScript, TypeScript or Python file, whitespace inside a string
+// stays too: 'Total:' and 'Total: ' print different text.
 const squash = (text, path, level) => {
-  const words = text.replace(/\s+/g, '');
-  if (words === '' || commentStyle(path) !== 'hash' || level === null) return words;
+  const style = commentStyle(path);
+  const words = style === null ? text.replace(/\s+/g, '') : squashCode(text, style);
+  if (words === '' || style !== 'hash' || level === null) return words;
   return (level === undefined ? /^\s*/.exec(text)[0] : '\t'.repeat(level + 1)) + words;
 };
+
+// Takes the whitespace out of a line of code, except inside a string. Code inside ${ } in a
+// template literal is code, so its whitespace goes too. A comment after the code, which starts
+// after whitespace as in stripComments, ends the search, so its whitespace goes.
+// Each line is read alone, so the next line of a string that spans lines reads as code. A quote
+// mark that opens no string, such as an apostrophe in JSX text or a quote in a regex, keeps the
+// whitespace after it on that line.
+function squashCode(text, style) {
+  const quotes = style === 'slash' ? ['"', "'", '`'] : ['"', "'"];
+  const comment = style === 'slash' ? '//' : '#';
+  let out = '';
+  // What the scan is inside, innermost last: a quote mark for a string, or, for code inside
+  // ${ } in a template literal, the number of other { still open there.
+  const inside = [];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const top = inside.at(-1);
+    if (typeof top === 'string') {
+      out += char;
+      if (char === '\\') {
+        // An escaped character, such as \' or \\, does not end the string.
+        i++;
+        out += text[i] ?? '';
+      } else if (char === top) {
+        inside.pop();
+      } else if (top === '`' && text.startsWith('${', i)) {
+        out += '{';
+        i++;
+        inside.push(0);
+      }
+      continue;
+    }
+    const spaced = i === 0 || /\s/.test(text[i - 1]);
+    if (spaced && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
+    if (/\s/.test(char)) continue;
+    out += char;
+    if (quotes.includes(char)) inside.push(char);
+    else if (top !== undefined && char === '{') inside[inside.length - 1] += 1;
+    else if (top !== undefined && char === '}' && top > 0) inside[inside.length - 1] -= 1;
+    else if (top !== undefined && char === '}') inside.pop();
+  }
+  return out;
+}
 
 // For each line of a whole file, by line number, what the hunk alone cannot show:
 // - In JavaScript, `inBlock`: the line starts inside a block comment.

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createGitHubForge } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
+import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 import { commitPullsFetch } from './fixtures/github/szz-replies.js';
@@ -221,6 +222,44 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
     const { szz } = await szzWithIssues(t, 'Fixes #51, fixes #52', { 51: { number: 51, created_at: '2026-01-01T00:00:00Z', pull_request: {} } });
     assert.deepEqual(szz.links.map((link) => link.pr), [1]);
   });
+});
+
+test('a GitHub error for one fix skips that fix, unless the token or the rate limit is the problem', async (t) => {
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  // Runs SZZ on fix PR 6, which links issue 50, with a GitHub that answers `status` for `failing`.
+  async function run(t, failing, status) {
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const pulls = commitPullsFetch(repo, REPO);
+    const fetch = async (url, init) => {
+      const { pathname } = new URL(url);
+      if (failing.test(pathname)) return json(status, { message: 'Server Error' });
+      return pathname.endsWith('/issues/50') ? json(200, { number: 50, created_at: '2026-02-01T00:00:00Z' }) : pulls(url, init);
+    };
+    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body: 'Fixes #50' };
+    const warnings = [];
+    const lines = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch, sleep: async () => {} }), warn: (text) => warnings.push(text) });
+    return { line: lines[0], warnings };
+  }
+
+  await t.test('a 500 on the linked-issue request gives szz: null and a warning', async (t) => {
+    const { line, warnings } = await run(t, /\/issues\/50$/, 500);
+    assert.equal(line.szz, null);
+    assert.deepEqual(warnings, ['PR 6: SZZ skipped, because GitHub answered 500 (Server Error) for /repos/fixture/shop/issues/50. GitHub had a problem: try again later.']);
+  });
+
+  await t.test('a 502 on the commit-to-PR request gives szz: null and a warning', async (t) => {
+    const { line, warnings } = await run(t, /\/pulls$/, 502);
+    assert.equal(line.szz, null);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^PR 6: SZZ skipped, because GitHub answered 502 \(Server Error\) for \/repos\/fixture\/shop\/commits\/[0-9a-f]{40}\/pulls\./);
+  });
+
+  for (const status of [401, 403, 429]) {
+    await t.test(`a ${status} stops the run, because every later request would fail too`, async (t) => {
+      await assert.rejects(run(t, /\/issues\/50$/, status), (error) => error instanceof ToolError && error.message.includes(`GitHub answered ${status}`));
+    });
+  }
 });
 
 test('commit-to-PR mapping', async (t) => {

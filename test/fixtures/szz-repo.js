@@ -84,13 +84,16 @@ const RECEIPT = [
 const HEADER = ['// Formats money for receipts.', ''];
 
 // format.js as each PR leaves it: PR 4 adds it, and PRs 8, 9 and 10 change it.
-// The pad body starts with four spaces. PR 8 fixes only that.
+// The pad body starts with four spaces. PR 8 fixes only that. PR 9 moves receipt to its own
+// file, receipt.js. A move to another file carries no bug, so SZZ makes no link for it.
 const FORMAT_PR4 = lines(...HEADER, ...MONEY, '', ...PAD('    '), '', ...RECEIPT);
 const FORMAT_PR8 = lines(...HEADER, ...MONEY, '', ...PAD('  '), '', ...RECEIPT);
-const FORMAT_PR9 = lines(...HEADER, ...RECEIPT, '', ...MONEY, '', ...PAD('  '));
+const REEXPORT = "export { receipt } from './receipt.js';";
+const FORMAT_PR9 = lines(...HEADER, REEXPORT, '', ...MONEY, '', ...PAD('  '));
+const RECEIPT_PR9 = lines(...RECEIPT);
 const FORMAT_PR10 = lines(
   ...HEADER,
-  ...RECEIPT,
+  REEXPORT,
   '',
   '// Turns cents into a string such as "12.50".',
   ...MONEY.slice(1),
@@ -154,8 +157,8 @@ const PRS = {
     ] },
   8: { title: 'Fix indentation in pad', author: 'ben', way: 'merge', fix: true,
     commits: [{ message: 'Indent pad with two spaces', files: { 'src/format.js': FORMAT_PR8 } }] },
-  9: { title: 'Fix the order of receipt helpers', author: 'cy', way: 'squash', fix: true,
-    commits: [{ message: 'Move receipt to the top', files: { 'src/format.js': FORMAT_PR9 } }] },
+  9: { title: 'Fix the place of receipt helpers', author: 'cy', way: 'squash', fix: true,
+    commits: [{ message: 'Move receipt to its own file', files: { 'src/format.js': FORMAT_PR9, 'src/receipt.js': RECEIPT_PR9 } }] },
   10: { title: 'Fix comments in format.js', author: 'ana', way: 'merge', fix: true,
     commits: [{ message: 'Say more in the comments', files: { 'src/format.js': FORMAT_PR10 } }] },
   11: { title: 'Add stock checks', author: 'ben', way: 'rebase', fix: false,
