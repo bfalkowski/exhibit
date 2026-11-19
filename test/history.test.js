@@ -35,8 +35,55 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
       { path: 'src/cache.js', additions: 120, deletions: 0 },
       { path: 'src/widget.js', additions: 8, deletions: 3 },
       { path: 'test/cache.test.js', additions: 64, deletions: 0 }
+    ],
+    reviews: {
+      change_request_rounds: 2,
+      list: [
+        { state: 'CHANGES_REQUESTED', author: 'rev1' },
+        { state: 'COMMENTED', author: 'dev7' },
+        { state: 'CHANGES_REQUESTED', author: 'rev1' },
+        { state: 'APPROVED', author: 'rev2' }
+      ]
+    },
+    ci: [
+      { name: 'lint', conclusion: 'success' },
+      { name: 'test', conclusion: 'failure' },
+      { name: 'Secret scan', conclusion: 'success' }
     ]
   });
+});
+
+test('a PR with no reviews gets an empty list and zero rounds', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.deepEqual(lines.find((l) => l.number === 5).reviews, { change_request_rounds: 0, list: [] });
+});
+
+test('a PR with two change requests and one approval gets two rounds', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.equal(lines.find((l) => l.number === 7).reviews.change_request_rounds, 2);
+});
+
+test('a dismissed change request is not a round, and a deleted reviewer is null', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.equal(lines.find((l) => l.number === 4).reviews.change_request_rounds, 0);
+  assert.deepEqual(lines.find((l) => l.number === 3).reviews.list, [{ state: 'APPROVED', author: null }]);
+});
+
+test('a PR with no check runs gets an empty ci list', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.deepEqual(lines.find((l) => l.number === 5).ci, []);
+});
+
+test('ci has the check runs from every page, read from the head commit', async () => {
+  const fetch = replayFetch(fixture('acme-widgets'));
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch });
+  assert.deepEqual(lines.find((l) => l.number === 7).ci.map((c) => c.name), ['lint', 'test', 'Secret scan']);
+  assert.ok(fetch.calls.some((c) => c.key === `/repos/acme/widgets/commits/${'c'.repeat(39)}7/check-runs?per_page=100`));
+});
+
+test('a check run that has not finished has a null conclusion', async () => {
+  const lines = await readHistory({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  assert.deepEqual(lines.find((l) => l.number === 1).ci, [{ name: 'test', conclusion: null }]);
 });
 
 test('readHistory keeps a null body and a deleted author as null', async () => {
@@ -58,6 +105,8 @@ test('readHistory with since and limit asks for the files of the kept PRs only',
   assert.deepEqual(lines.map((l) => l.number), [7, 4]);
   const fileCalls = fetch.calls.filter((c) => c.key.includes('/files'));
   assert.deepEqual(fileCalls.map((c) => c.key.match(/pulls\/(\d+)/)[1]).sort(), ['4', '7', '7']);
+  const otherCalls = fetch.calls.filter((c) => c.key.includes('/reviews') || c.key.includes('/check-runs'));
+  assert.ok(otherCalls.every((c) => /(pulls\/|c{39})[47]\b/.test(c.key)), otherCalls.map((c) => c.key).join(', '));
 });
 
 test('readHistory keeps a PR merged at exactly the since time', async () => {
