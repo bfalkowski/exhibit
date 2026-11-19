@@ -73,7 +73,8 @@ async function run(cwd, gh, args = []) {
   let stdout = '';
   let stderr = '';
   await history(['--repo', REPO, ...args], {
-    env: { GITHUB_TOKEN: 't' },
+    // The reply cache goes in a new folder, so a test never touches the real cache.
+    env: { GITHUB_TOKEN: 't', XDG_CACHE_HOME: newFolder() },
     cwd,
     fetch,
     stdout: { write: (text) => (stdout += text) },
@@ -125,8 +126,8 @@ test('every run prints how many GitHub requests it made, in text and in --json',
 
   const second = await run(cwd, gh, ['--json']);
   const summary = JSON.parse(second.stdout);
-  assert.equal(summary.requests, 11);
-  assert.equal(summary.requests, second.asked.length);
+  assert.equal(summary.github.requests, 11);
+  assert.equal(summary.github.requests, second.asked.length);
   assert.deepEqual({ mode: summary.mode, prs: summary.prs, read: summary.read }, { mode: 'incremental', prs: 4, read: 2 });
 });
 

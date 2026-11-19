@@ -56,9 +56,10 @@ test('whitespace: each added line pairs with one deleted line only', () => {
 test('moved: a line deleted in one place and added unchanged in another is dropped', () => {
   const result = countedLines(diff({ path: 'f.js', hunks: [
     { at: 3, added: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] },
-    { at: 12, deleted: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] }
+    { at: 12, deleted: ['export function receipt(rows) {', "  return rows.join('\\n');", '}'] },
+    { at: 30, deleted: ['  return total;'], added: ['  return total + tax;'] }
   ] }));
-  assert.deepEqual(counted(result), []);
+  assert.deepEqual(counted(result), [['f.js', [30]]]);
   assert.deepEqual(dropped(result), [['f.js', 12, 'moved'], ['f.js', 13, 'moved'], ['f.js', 14, 'moved']]);
 });
 
@@ -116,6 +117,104 @@ test('moved: a line that is added back changed is not moved', () => {
     { at: 9, deleted: ['return total - percent;'] }
   ] }));
   assert.deepEqual(counted(result), [['a.js', [9]]]);
+});
+
+test('moved: a fix that only moves lines inside one file counts the moved lines, because their place was the bug', () => {
+  // The case from the real run: chalk/chalk PR 569 moves five export lines up the file.
+  const exports = ['export const modifierNames = Object.keys(styles.modifier);', 'export const colorNames = [...foregroundColorNames];'];
+  const result = countedLines(diff({ path: 'index.js', hunks: [
+    { at: 68, added: [...exports, ''] },
+    { at: 219, deleted: ['', ...exports] }
+  ] }));
+  assert.deepEqual(counted(result), [['index.js', [220, 221]]]);
+  assert.deepEqual(dropped(result), [['index.js', 219, 'moved']]);
+});
+
+test('moved: a line with no letter or digit, such as "});", does not count when it moves inside one file', () => {
+  // The case from the review of PR 99: only "});" moves, and the other line changes whitespace.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: ['});', '  x=1;'], added: ['  x = 1;', '});'] }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'moved'], ['a.js', 3, 'whitespace']]);
+});
+
+test('moved: when lines with words move inside one file, a moved "}" next to them stays dropped', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, added: ['run(a);', 'run(b);', '}'] },
+    { at: 9, deleted: ['run(a);', 'run(b);', '}'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [9, 10]]]);
+  assert.deepEqual(dropped(result), [['a.js', 11, 'moved']]);
+});
+
+test('moved: a move inside one file is still dropped when the fix changes other lines too', () => {
+  const block = ['const tax = total * rate;', 'return total + tax;'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 2, added: block },
+    { at: 9, deleted: [...block, 'x = 1;'], added: ['x = 2;'] }
+  ] }));
+  assert.deepEqual(counted(result), [['a.js', [11]]]);
+  assert.deepEqual(dropped(result), [['a.js', 9, 'moved'], ['a.js', 10, 'moved']]);
+});
+
+test('moved: a fix that only moves lines to another file still counts no line', () => {
+  const block = ['const tax = total * rate;', 'return total + tax;'];
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 7, deleted: block }] },
+    { path: 'b.js', hunks: [{ at: 2, added: block }] }
+  ));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 7, 'moved'], ['a.js', 8, 'moved']]);
+});
+
+test('whitespace: a space inside a string is code in JavaScript, TypeScript and Python', () => {
+  for (const [path, before, after] of [
+    ['a.js', "  print('Total:' + n);", "  print('Total: ' + n);"],
+    ['a.ts', '  label = `Total:${n}`;', '  label = `Total: ${n}`;'],
+    ['a.py', '    print("Total:", n)', '    print("Total: ", n)'],
+    ['a.py', "    s = 'it\\'s:'", "    s = 'it\\'s: '"]
+  ]) {
+    const result = countedLines(diff({ path, hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(result), [[path, [3]]], `${path}: ${before}`);
+  }
+});
+
+test('whitespace: a space outside a string, or in a comment after the code, is still whitespace', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{
+    at: 3,
+    deleted: ["  print('Total: '+n); // don't", "  x = 'a';"],
+    added: ["  print( 'Total: ' + n );  //  don't", "  x  =  'a';"]
+  }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace'], ['a.js', 4, 'whitespace']]);
+});
+
+test('whitespace: whitespace inside ${ } in a template literal is code, not string text', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{
+    at: 3,
+    deleted: ['  s = `${ a }`;', '  t = `x ${ f({ k: 1 }) } y`;'],
+    added: ['  s = `${a}`;', '  t = `x ${f({k: 1})} y`;']
+  }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace'], ['a.js', 4, 'whitespace']]);
+  // The text around ${ } is still string text.
+  const text = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  t = `x ${a}y`;'], added: ['  t = `x ${a} y`;'] }] }));
+  assert.deepEqual(counted(text), [['a.js', [3]]]);
+});
+
+test('whitespace: in a file of another kind, a space inside quotes is whitespace, as before', () => {
+  const result = countedLines(diff({ path: 'a.rb', hunks: [{ at: 3, deleted: ["puts 'Total:'"], added: ["puts 'Total: '"] }] }));
+  assert.deepEqual(dropped(result), [['a.rb', 3, 'whitespace']]);
+});
+
+test('a fix that rewrites a big generated file, such as a lockfile, is fast', () => {
+  const size = 20000;
+  const deleted = Array.from({ length: size }, (_, i) => `    "integrity": "sha512-old${i}",`);
+  const added = Array.from({ length: size }, (_, i) => `    "integrity": "sha512-new${i}",`);
+  const start = Date.now();
+  const result = countedLines(diff({ path: 'package-lock.json', hunks: [{ at: 1, deleted, added }] }));
+  assert.equal(result.counted.get('package-lock.json').length, size);
+  // Before the added lines had an index, this took about 26 seconds.
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
 });
 
 test('comments: JavaScript and TypeScript line and block comments are dropped', () => {
@@ -198,10 +297,16 @@ test('a deleted line that starts with "-- " is a line, not a file header', () =>
 });
 
 test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', () => {
-  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30'), [12, 7, 30]);
-  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4'), [4]);
-  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5'), []);
-  assert.deepEqual(bugReportNumbers(null), []);
+  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', 'owner/repo'), [12, 7, 30]);
+  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4', 'owner/repo'), [4]);
+  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', 'owner/repo'), []);
+  assert.deepEqual(bugReportNumbers(null, 'owner/repo'), []);
+});
+
+test('bugReportNumbers reads a full issue URL when it names this repo', () => {
+  const body = 'Fixes https://github.com/Owner/Repo/issues/12\nCloses https://github.com/owner/other/issues/9\nresolves: https://github.com/owner/repo/issues/12 and fixes https://github.com/owner/repo/pull/3';
+  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12]);
+  assert.deepEqual(bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', 'owner/repo'), [4, 5]);
 });
 
 test('newer than the bug report: a line whose commit came after the report is dropped', () => {
@@ -224,8 +329,16 @@ test('whitespace: in Python the indent is code, so a fix that only moves a line 
 });
 
 test('whitespace: a line that the same hunk adds back exactly is a moved line, not whitespace', () => {
-  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] }] }));
+  const result = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] },
+    { at: 9, deleted: ['  return total;'], added: ['  return total + tax;'] }
+  ] }));
   assert.deepEqual(dropped(result), [['a.js', 1, 'moved'], ['a.js', 2, 'moved']]);
+});
+
+test('moved: a fix that only swaps two lines in one hunk counts them, because their order was the bug', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['unlock();', 'save();'], added: ['save();', 'unlock();'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [1, 2]]]);
 });
 
 test('comments: a code line that starts with the * operator counts', () => {
@@ -299,4 +412,63 @@ test('comments: a trailing comment pairs only with a line in the same hunk', () 
     { at: 9, added: ['x = 1;'] }
   ] }));
   assert.deepEqual(counted(result), [['a.js', [1]]]);
+});
+
+// The whole files before and after the fix, as SZZ reads them at blamed_commit and merge_sha.
+const files = (before, after) => ({ before: new Map(Object.entries(before)), after: new Map(Object.entries(after)) });
+
+test('comments: with the file, a JSDoc text row whose block opens and closes outside the hunk is a comment', () => {
+  const before = '/**\n * Pads a label.\n */\nexport const pad = (s) => s;\n';
+  const after = '/**\n * Pads a label on the right.\n */\nexport const pad = (s) => s;\n';
+  const hunks = [{ at: 2, deleted: [' * Pads a label.'], added: [' * Pads a label on the right.'] }];
+  // Without the file, the row looks like code that starts with the * operator.
+  assert.deepEqual(counted(countedLines(diff({ path: 'a.js', hunks }))), [['a.js', [2]]]);
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'comment']]);
+});
+
+test('comments: with the file, a row that starts with the * operator outside a block counts', () => {
+  const before = 'const total = price\n  * qty;\n';
+  const after = 'const total = price\n  * qty * rate;\n';
+  const hunks = [{ at: 2, deleted: ['  * qty;'], added: ['  * qty * rate;'] }];
+  // A "*/" later in the hunk does not make it a comment when the file shows no open block.
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), [['a.js', [2]]]);
+});
+
+test('comments: with the file, a block row with no * and a "/*" inside a string are read right', () => {
+  const before = "const glob = 'src/**/*.js';\n/*\n  Old words.\n*/\nlet n = 1;\n";
+  const after = "const glob = 'src/**/*.js';\n/*\n  New words.\n*/\nlet n = 1;\n";
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  Old words.'], added: ['  New words.'] }] }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(dropped(result), [['a.js', 3, 'comment']]);
+});
+
+test('whitespace: with the file, a Python line that keeps its block level is whitespace, tabs or spaces', () => {
+  const before = 'def total(xs):\n\tt = 0\n\treturn t\n';
+  const after = 'def total(xs):\n    t = 0\n    return t\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['\tt = 0', '\treturn t'], added: ['    t = 0', '    return t'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.py', 2, 'whitespace'], ['a.py', 3, 'whitespace']]);
+});
+
+test('whitespace: with the file, a Python line that changes its block level counts', () => {
+  const before = 'def f(xs):\n    for x in xs:\n        go(x)\n        done()\n';
+  const after = 'def f(xs):\n    for x in xs:\n        go(x)\n    done()\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 4, deleted: ['        done()'], added: ['    done()'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), [['a.py', [4]]]);
+});
+
+test('whitespace: with the file, the indent of a Python line inside brackets is not code', () => {
+  const before = 'x = call(a,\n         b)\n';
+  const after = 'x = call(a,\n    b)\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['         b)'], added: ['    b)'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(dropped(result), [['a.py', 2, 'whitespace']]);
+});
+
+test('comments: with the file, an indented Python comment that the fix turns back into code counts', () => {
+  const before = 'def f():\n    # return total\n';
+  const after = 'def f():\n    return total\n';
+  const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['    # return total'], added: ['    return total'] }] }), files({ 'a.py': before }, { 'a.py': after }));
+  assert.deepEqual(counted(result), [['a.py', [2]]]);
 });

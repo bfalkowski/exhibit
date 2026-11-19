@@ -250,9 +250,12 @@ test('the fixture repo and its records match the answer key', async (t) => {
     assert.notEqual(diff(ws), '');
     assert.equal(diff(ws, ['-w']), '');
 
+    // Every deleted line is added back. The fix also adds a line that exports receipt from its
+    // new file, but an added line has nothing to blame.
     const moved = diff(noLink.get('moved lines only'));
+    const added = changed(moved, '+');
     assert.ok(changed(moved, '-').length > 0);
-    assert.deepEqual(changed(moved, '-').sort(), changed(moved, '+').sort());
+    for (const row of changed(moved, '-')) assert.ok(added.includes(row), row);
 
     const comments = diff(noLink.get('comments only'));
     const rows = [...changed(comments, '-'), ...changed(comments, '+')];

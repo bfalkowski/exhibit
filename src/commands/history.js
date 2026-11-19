@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { readFixSignals } from '../fix-signals.js';
 import { createGitHubForge, isRepoName } from '../github.js';
+import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { buildReport } from '../report.js';
@@ -13,17 +14,20 @@ const OUTPUT = '.exhibit/history.jsonl';
 const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
-// `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--json]`
+// `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--no-cache] [--json]`
 // Writes one line for each merged PR to .exhibit/history.jsonl, and marks fix PRs by the fix
 // signals in evidence.yml, or the defaults. When the file is there from an earlier run, it reads
 // only the PRs the file lacks and the PRs in the look-back window, and keeps the other lines
-// (spec 8.3). --full, or an old file that does not fit the schema, reads every PR again. Every line must pass the schema before the file is
+// (spec 8.3). --full, or an old file that does not fit the schema, reads every PR again.
+// Every line must pass the schema before the file is
 // written, so a failed run leaves no partial file and keeps an older one.
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
 // Then it writes the report of escaped defects, as report.md and report.html (spec 8.5).
-// Last it prints how many GitHub requests the run made.
+// GitHub replies go through the shared reply cache (spec 8.6), unless --no-cache turns it off. At
+// the end it says how many requests went to GitHub and how many got a 304. A run that fails says
+// it too, on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
@@ -32,7 +36,19 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
   const fixSignals = await readFixSignals(cwd);
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const forge = createGitHubForge({ repo: options.repo, token, fetch });
+  const folder = options.cache ? cacheFolder({ env }) : null;
+  const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
+  const forge = createGitHubForge({ repo: options.repo, token, fetch, cache });
+  try {
+    await run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr });
+  } catch (error) {
+    const { requests, not_modified: notModified } = forge.counts();
+    if (requests > 0) stderr.write(`exhibit: note: this run made ${requests} GitHub requests, and ${notModified} got a 304.\n`);
+    throw error;
+  }
+}
+
+async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, warn });
   const read = keepSzz(updated.lines, previous);
@@ -64,18 +80,21 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
   const fixes = lines.filter((line) => line.classification.fix);
   const szz = root ? { fix_prs: fixes.length, linked: fixes.filter((line) => line.szz?.links.length > 0).length, skipped: fixes.filter((line) => line.szz === null).length } : null;
+  const { requests, not_modified: notModified } = forge.counts();
+  const github = { requests, not_modified: notModified, cache: folder };
   const mode = previous.length > 0 ? 'incremental' : 'full';
-  const requests = forge.requestCount();
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, mode, read: updated.read, requests }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
+    const cached = folder ? `${notModified} got a 304 and came from the cache in ${folder}.` : 'The cache was off.';
     const days = LOOK_BACK_MS / (24 * 60 * 60 * 1000);
     const readText = mode === 'full'
       ? `Read all ${updated.read} merged PRs from GitHub.`
       : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
-    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText} Made ${requests} GitHub requests.\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n`);
+    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n` +
+      `Made ${requests} GitHub requests. ${cached}\n`);
   }
 }
 
@@ -131,12 +150,12 @@ function parseOptions(argv) {
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { repo: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' }, full: { type: 'boolean' }, json: { type: 'boolean' } },
+      options: { repo: { type: 'string' }, since: { type: 'string' }, limit: { type: 'string' }, full: { type: 'boolean' }, json: { type: 'boolean' }, 'no-cache': { type: 'boolean' } },
       strict: true,
       allowPositionals: false
     }));
   } catch (error) {
-    throw new ToolError(`${error.message}. Usage: exhibit history --repo owner/name [--since YYYY-MM-DD] [--limit N] [--full] [--json]`);
+    throw new ToolError(`${error.message}. Usage: exhibit history --repo owner/name [--since YYYY-MM-DD] [--limit N] [--full] [--no-cache] [--json]`);
   }
 
   if (values.repo === undefined) throw new ToolError('history needs --repo owner/name, for example --repo bfalkowski/Building58.');
@@ -154,7 +173,7 @@ function parseOptions(argv) {
     if (!/^\d+$/.test(values.limit) || limit < 1) throw new ToolError(`--limit must be a whole number of 1 or more, not "${values.limit}".`);
   }
 
-  return { repo: values.repo, since, limit, full: values.full === true, json: values.json === true };
+  return { repo: values.repo, since, limit, full: values.full === true, json: values.json === true, cache: values['no-cache'] !== true };
 }
 
 // Returns the Date for a --since value, or null when it is not a real date. new Date() rolls a

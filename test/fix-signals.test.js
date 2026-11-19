@@ -1,4 +1,4 @@
-import { afterEach, test } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,45 +85,40 @@ test('a PR with no matching signal is not a fix', () => {
 });
 
 // readFixSignals reads evidence.yml in a folder.
-// Each folder is removed when the test that made it ends.
-const madeFolders = [];
-afterEach(() => {
-  for (const dir of madeFolders.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function folderWith(evidenceYml) {
+// The folder is removed when test t ends.
+function folderWith(t, evidenceYml) {
   const cwd = mkdtempSync(join(tmpdir(), 'exhibit-signals-'));
-  madeFolders.push(cwd);
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
   if (evidenceYml !== undefined) writeFileSync(join(cwd, 'evidence.yml'), evidenceYml);
   return cwd;
 }
 
-test('readFixSignals uses the defaults when there is no evidence.yml', async () => {
-  assert.deepEqual(await readFixSignals(folderWith()), DEFAULT_FIX_SIGNALS);
+test('readFixSignals uses the defaults when there is no evidence.yml', async (t) => {
+  assert.deepEqual(await readFixSignals(folderWith(t)), DEFAULT_FIX_SIGNALS);
 });
 
-test('readFixSignals uses the defaults when evidence.yml has no settings.fix_signals', async () => {
-  assert.deepEqual(await readFixSignals(folderWith('version: 3\nsettings:\n  test_command: npm test\n')), DEFAULT_FIX_SIGNALS);
-  assert.deepEqual(await readFixSignals(folderWith('version: 3\n')), DEFAULT_FIX_SIGNALS);
-  assert.deepEqual(await readFixSignals(folderWith('')), DEFAULT_FIX_SIGNALS);
+test('readFixSignals uses the defaults when evidence.yml has no settings.fix_signals', async (t) => {
+  assert.deepEqual(await readFixSignals(folderWith(t, 'version: 3\nsettings:\n  test_command: npm test\n')), DEFAULT_FIX_SIGNALS);
+  assert.deepEqual(await readFixSignals(folderWith(t, 'version: 3\n')), DEFAULT_FIX_SIGNALS);
+  assert.deepEqual(await readFixSignals(folderWith(t, '')), DEFAULT_FIX_SIGNALS);
 });
 
-test('readFixSignals uses a custom list in place of the defaults', async () => {
-  const cwd = folderWith('settings:\n  fix_signals: [label:defect, title:hotfix]\n');
+test('readFixSignals uses a custom list in place of the defaults', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:defect, title:hotfix]\n');
   assert.deepEqual(await readFixSignals(cwd), ['label:defect', 'title:hotfix']);
 });
 
-test('readFixSignals accepts title_after_key: like the other types', async () => {
-  const cwd = folderWith('settings:\n  fix_signals: [label:bug, title_after_key:fix, branch:fix/]\n');
+test('readFixSignals accepts title_after_key: like the other types', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title_after_key:fix, branch:fix/]\n');
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
 });
 
-test('readFixSignals reads only fix_signals, so the rest of the file is not checked', async () => {
-  const cwd = folderWith('version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n  mutation_budget_seconds: soon\nkinds: 7\n');
+test('readFixSignals reads only fix_signals, so the rest of the file is not checked', async (t) => {
+  const cwd = folderWith(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n  mutation_budget_seconds: soon\nkinds: 7\n');
   assert.deepEqual(await readFixSignals(cwd), ['branch:bugfix/']);
 });
 
-test('readFixSignals refuses a malformed fix_signals with a tool error that says what is wrong', async () => {
+test('readFixSignals refuses a malformed fix_signals with a tool error that says what is wrong', async (t) => {
   const cases = [
     ['settings:\n  fix_signals: label:bug\n', /must be a list/],
     ['settings:\n  fix_signals: []\n', /at least one signal/],
@@ -138,6 +133,6 @@ test('readFixSignals refuses a malformed fix_signals with a tool error that says
     ['settings:\n  fix_signals: [label:bug\n', /evidence\.yml is not valid YAML/]
   ];
   for (const [text, message] of cases) {
-    await assert.rejects(readFixSignals(folderWith(text)), (error) => error instanceof ToolError && message.test(error.message), text);
+    await assert.rejects(readFixSignals(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
   }
 });
