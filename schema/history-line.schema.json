@@ -52,14 +52,14 @@
     },
     "ci": {
       "type": "array",
-      "description": "Each check run on the PR's last head commit.",
+      "description": "Each check run, then each commit status, on the PR's last head commit.",
       "items": {
         "type": "object",
         "required": ["name", "conclusion"],
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string" },
-          "conclusion": { "type": ["string", "null"], "description": "null when the check run has not finished." }
+          "name": { "type": "string", "description": "The check run's name, or the commit status's context." },
+          "conclusion": { "type": ["string", "null"], "description": "The check run's conclusion, or the commit status's state. null when the check run has not finished or the status is pending." }
         }
       }
     },
