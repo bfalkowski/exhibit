@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { GitHubReplyError, PERMISSIONS } from './github.js';
+import { GitHubReplyError } from './github.js';
 
 const run = promisify(execFile);
 
@@ -28,10 +28,9 @@ async function git(dir, args) {
 }
 
 // Returns the top folder of the git clone that holds `dir`, when one of its remotes points at
-// `repo` ("owner/name") on GitHub, or null. Any URL form counts: https, ssh, or scp-like
-// (git@github.com:owner/name.git). Git runs from the top folder, because blame reads paths
-// from where it runs.
-export async function cloneRoot(dir, repo) {
+// the forge's repo, or null. The forge decides which remote URLs point at its repo. Git runs
+// from the top folder, because blame reads paths from where it runs.
+export async function cloneRoot(dir, forge) {
   let root;
   let remotes;
   try {
@@ -40,35 +39,33 @@ export async function cloneRoot(dir, repo) {
   } catch {
     return null;
   }
-  const want = repo.toLowerCase();
   const matches = remotes.split('\n').some((row) => {
     const url = row.split(/\s+/)[1];
-    const match = url ? /github\.com[:/]+([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(url) : null;
-    return match !== null && match[1].toLowerCase() === want;
+    return url ? forge.isRemote(url) : false;
   });
   return matches ? root : null;
 }
 
 // Returns a function that maps a commit SHA to the number of the PR that brought it to the main
 // branch, or null when no merged PR holds it. It looks first at the merge SHAs in `lines` (a
-// squash merge's one commit), then asks GitHub which PRs hold the commit, and keeps each answer.
+// squash merge's one commit), then asks the forge which PRs hold the commit, and keeps each answer.
 // A merge SHA decides only for a PR into the default branch. A PR squash merged into a release
-// branch did not bring its commit to main, so GitHub is asked about that commit.
-export function createPrFinder({ lines, repo, github }) {
+// branch did not bring its commit to main, so the forge is asked about that commit.
+export function createPrFinder({ lines, forge }) {
   const byMergeSha = new Map(lines.map((line) => [line.merge_sha, line]));
   const asked = new Map();
   let mainBranch = null;
   // The repo's default branch, asked for once, and only when a merge SHA or two merged PRs need it.
   // A failed request is not kept, so the next fix asks again.
   const defaultBranch = () => {
-    mainBranch ??= github.getOne(`/repos/${repo}`).then((reply) => reply.default_branch);
+    mainBranch ??= forge.defaultBranch();
     mainBranch.catch(() => { mainBranch = null; });
     return mainBranch;
   };
   const find = async (sha) => {
     const line = byMergeSha.get(sha);
     if (line && line.base_ref === (await defaultBranch())) return line.number;
-    return askGitHub(github, repo, sha, defaultBranch);
+    return askForge(forge, sha, defaultBranch);
   };
   return (sha) => {
     if (!asked.has(sha)) {
@@ -80,10 +77,9 @@ export function createPrFinder({ lines, repo, github }) {
   };
 }
 
-async function askGitHub(github, repo, sha, defaultBranch) {
-  // GitHub answers 422 for a commit it does not know, such as one that was never pushed. A 404
-  // means the same here: the repo itself was read a moment before.
-  const pulls = await github.getAll(`/repos/${repo}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], permission: PERMISSIONS.pullRequests });
+async function askForge(forge, sha, defaultBranch) {
+  // A commit the forge does not know, such as one that was never pushed, gives an empty list.
+  const pulls = await forge.pullsForCommit(sha);
   const merged = pulls.filter((pr) => pr.merged_at).sort((a, b) => a.merged_at.localeCompare(b.merged_at));
   if (merged.length < 2) return merged.length === 1 ? merged[0].number : null;
   // A commit can sit in more than one merged PR, such as a fix merged into a release branch and
@@ -95,11 +91,11 @@ async function askGitHub(github, repo, sha, defaultBranch) {
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
 // not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
-// GitHub fails for one of its requests, gets null and a warning. A shallow clone gives one
+// the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
 // warning first, because blame there can give old lines to the shallow boundary commit.
-// `dir` must be the top folder of a clone of `repo`, as cloneRoot returns it.
-export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
-  const findPr = createPrFinder({ lines, repo, github });
+// `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
+export async function addSzz(lines, { dir, forge, warn = () => {} }) {
+  const findPr = createPrFinder({ lines, forge });
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -115,7 +111,7 @@ export async function addSzz(lines, { dir, repo, github, warn = () => {} }) {
       continue;
     }
     try {
-      const reportedAt = await bugReportDate(line, { repo, github });
+      const reportedAt = await bugReportDate(line, forge);
       out.push({ ...line, szz: await szzForFix(dir, line, findPr, reportedAt) });
     } catch (error) {
       if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
@@ -225,10 +221,10 @@ export function bugReportNumbers(body, repo) {
 // links, or null when it links none. A linked number that is a PR, or that GitHub does not
 // know, gives no date. With more than one report, a commit can have brought the bug only when
 // it came before the newest one.
-async function bugReportDate(fix, { repo, github }) {
+async function bugReportDate(fix, forge) {
   let newest = null;
-  for (const number of bugReportNumbers(fix.body, repo)) {
-    const issue = await github.getOne(`/repos/${repo}/issues/${number}`, { emptyOn: [404, 410] });
+  for (const number of bugReportNumbers(fix.body, forge.repo)) {
+    const issue = await forge.issue(number);
     if (issue === null || issue.pull_request || typeof issue.created_at !== 'string') continue;
     if (newest === null || Date.parse(issue.created_at) > Date.parse(newest)) newest = issue.created_at;
   }
