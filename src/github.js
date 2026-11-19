@@ -1,6 +1,7 @@
 import { ToolError } from './tool-error.js';
 
 const API = 'https://api.github.com';
+const GRAPHQL = `${API}/graphql`;
 
 // The token permissions that Exhibit's requests need (spec 8.3). Pass one as `permission`.
 const PERMISSIONS = {
@@ -24,44 +25,57 @@ const SAVED_HEADERS = ['content-type', 'link'];
 // The one form of HTTP date that GitHub sends, as in "Thu, 19 Nov 2026 10:00:30 GMT".
 const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
-// A small GitHub REST client. It takes the fetch function as a parameter, so tests can pass one
-// that replays recorded responses. `getAll` follows the Link header's rel="next" URL exactly as
-// GitHub gives it, until there is no next page, and returns the items of every page in order.
+// A small GitHub client, for the REST API and the GraphQL API. It takes the fetch function as a
+// parameter, so tests can pass one that replays recorded responses. `getAll` follows the Link
+// header's rel="next" URL exactly as GitHub gives it, until there is no next page, and returns the
+// items of every page in order.
 // Most lists come as a JSON list. A few, such as check runs, come as an object that holds the
 // list in one field: pass that field's name as `listField`. `emptyOn` lists HTTP statuses that
 // mean "nothing here", such as 422 for a commit GitHub does not know: they give an empty list.
 // `permission` names the token permission that the request needs, such as "Checks: read". A 403
 // that is not a rate limit then says which permission a fine-grained token may lack.
 // `getOne` returns the object at one path, or null for a status in its `emptyOn`.
+// `graphql` sends one GraphQL query and returns its `data`. The query must ask for
+// `rateLimit { cost }`, so the client can add up the points it used. A reply with errors throws a
+// ToolError, and a reply that says the rate limit is used up waits as a REST reply does.
 // `sleep`, `now` and `random` are parameters too, so tests can check a rate-limit wait without waiting.
 // `cache` is a reply cache from src/github-cache.js, or undefined for none. With a cache, a
 // request for a URL that has an entry sends If-None-Match, and a 304 reply gives the saved body.
 // A 200 reply with an ETag replaces the entry. GitHub's ETag covers the body only, not the Link
-// header, so a full page from the cache with no next page is asked again (see `get`).
-// `counts()` returns how many requests went to GitHub, and how many of them got a 304.
+// header, so a full page from the cache with no next page is asked again (see `get`). GraphQL
+// queries are POST requests, which have no ETag, so they never use the cache.
+// `counts()` returns how many REST requests went to GitHub, how many of them got a 304, how many
+// GraphQL queries went, and how many GraphQL points they used.
 export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
-  const counts = { requests: 0, not_modified: 0 };
+  const counts = { requests: 0, not_modified: 0, queries: 0, points: 0 };
 
   // A response that the client made from a saved entry, after a 304.
   const fromCache = new WeakSet();
 
-  // `useSaved` false sends no If-None-Match. The reply still replaces the entry.
-  async function request(url, useSaved = true) {
-    const saved = cache && useSaved ? await cache.read(url) : null;
-    const headers = {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${token}`,
-      'x-github-api-version': '2022-11-28',
-      'user-agent': 'exhibit'
-    };
-    if (saved) headers['if-none-match'] = saved.etag;
-    let response;
+  const headers = () => ({
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${token}`,
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'exhibit'
+  });
+
+  // Sends one request, and adds one to counts[counter] when it reached GitHub.
+  async function send(url, init, counter) {
     try {
-      response = await fetch(url, { headers });
-      counts.requests++;
+      const response = await fetch(url, init);
+      counts[counter]++;
+      return response;
     } catch (error) {
       throw new ToolError(`could not reach GitHub (${error.message}). Check the network and try again.`);
     }
+  }
+
+  // `useSaved` false sends no If-None-Match. The reply still replaces the entry.
+  async function request(url, useSaved = true) {
+    const saved = cache && useSaved ? await cache.read(url) : null;
+    const init = { headers: headers() };
+    if (saved) init.headers['if-none-match'] = saved.etag;
+    const response = await send(url, init, 'requests');
     if (saved && response.status === 304) {
       counts.not_modified++;
       const cached = new Response(saved.body, { status: 200, headers: saved.headers });
@@ -81,20 +95,27 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
     return new Response(body, { status: 200, headers: response.headers });
   }
 
+  // Calls `ask` for a response, and calls it again when GitHub says to wait, at most MAX_WAITS
+  // times. Returns the last response, and `limited`: true when it is still a rate limit.
+  // `limitedReply(response)` says whether a reply is a rate limit even though it is OK, as a
+  // GraphQL reply can be.
+  async function withWaits(ask, limitedReply = async () => false) {
+    let response = await ask();
+    for (let waits = 0, secondaryWaits = 0; ; waits++) {
+      const wait = await rateLimitWait(response, now(), secondaryWaits, random, await limitedReply(response));
+      if (wait === null) return { response, limited: false };
+      if (waits === MAX_WAITS || wait.ms > LONGEST_WAIT_MS) return { response, limited: true };
+      if (wait.secondary) secondaryWaits++;
+      await sleep(wait.ms);
+      response = await ask();
+    }
+  }
+
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
   // A reply that is still a rate limit when the waits end does not blame a missing permission.
   async function getJson(url, emptyOn = [], permission, useSaved = true) {
-    let response = await request(url, useSaved);
-    let limited = false;
-    for (let waits = 0, secondaryWaits = 0; !response.ok; waits++) {
-      const wait = await rateLimitWait(response, now(), secondaryWaits, random);
-      limited = wait !== null;
-      if (!limited || waits === MAX_WAITS || wait.ms > LONGEST_WAIT_MS) break;
-      if (wait.secondary) secondaryWaits++;
-      await sleep(wait.ms);
-      response = await request(url, useSaved);
-    }
+    const { response, limited } = await withWaits(() => request(url, useSaved));
     if (emptyOn.includes(response.status)) return { reply: [], response };
     if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
     try {
@@ -141,7 +162,46 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
     return reply;
   }
 
-  return { getAll, getOne, counts: () => ({ ...counts }) };
+  // Sends one GraphQL query with its variables, and returns the reply's `data`. `permission`
+  // lists the token permissions the query needs, for the message of a refused request.
+  async function graphql(query, variables, { permission } = {}) {
+    const init = { method: 'POST', headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) };
+    const { response, limited } = await withWaits(() => send(GRAPHQL, init, 'queries'), async (reply) => reply.ok && graphqlRateLimited(await jsonOf(reply.clone())));
+    if (!response.ok) throw await apiError(response, GRAPHQL, limited ? undefined : permission);
+    const reply = await jsonOf(response);
+    const cost = reply?.data?.rateLimit?.cost;
+    if (Number.isInteger(cost)) counts.points += cost;
+    if (Array.isArray(reply?.errors) && reply.errors.length > 0) throw graphqlError(reply.errors, permission);
+    if (reply?.data === null || typeof reply?.data !== 'object') throw notShaped(GRAPHQL, 'a GraphQL reply with data');
+    return reply.data;
+  }
+
+  return { getAll, getOne, graphql, counts: () => ({ ...counts }) };
+}
+
+// Returns the parsed JSON body of a response, or undefined when it is not JSON.
+async function jsonOf(response) {
+  try {
+    return await response.json();
+  } catch {
+    return undefined;
+  }
+}
+
+// GitHub answers a GraphQL query with 200 when the rate limit is used up, and says so in an error
+// of the type RATE_LIMITED.
+function graphqlRateLimited(reply) {
+  return Array.isArray(reply?.errors) && reply.errors.some((error) => error?.type === 'RATE_LIMITED');
+}
+
+// A GraphQL reply with errors. Its status is the HTTP status that the first error's type stands
+// for, so `stopsRun` works as for a REST reply.
+const GRAPHQL_ERROR_STATUS = { NOT_FOUND: 404, FORBIDDEN: 403, RATE_LIMITED: 429 };
+
+function graphqlError(errors, permission) {
+  const status = GRAPHQL_ERROR_STATUS[errors[0]?.type] ?? 200;
+  const detail = [...new Set(errors.map((error) => String(error?.message ?? error?.type ?? 'no message')))].join('; ');
+  return new GitHubReplyError(`GitHub's GraphQL API answered with an error (${detail}).${status === 200 ? '' : advice(status, permission)}`, status);
 }
 
 function notShaped(url, shape) {
@@ -156,8 +216,10 @@ function notShaped(url, shape) {
 // - a message that names a secondary rate limit, with neither header. Then we wait one minute,
 //   twice that after the second limit, and so on, plus a random spread. `secondaryWaits` is how
 //   many secondary-limit waits this request has had before.
-async function rateLimitWait(response, nowMs, secondaryWaits, random) {
-  if (response.status !== 403 && response.status !== 429) return null;
+// A GraphQL reply that is a rate limit has the status 200: `limitedReply` is true for one, and
+// then the same headers say how long to wait.
+async function rateLimitWait(response, nowMs, secondaryWaits, random, limitedReply = false) {
+  if (!limitedReply && response.status !== 403 && response.status !== 429) return null;
   const retryAfter = response.headers.get('retry-after');
   if (retryAfter !== null && /^\d+$/.test(retryAfter)) return { ms: Number(retryAfter) * 1000, secondary: false };
   if (retryAfter !== null && HTTP_DATE.test(retryAfter)) return { ms: Math.max(0, Date.parse(retryAfter) - nowMs), secondary: false };
@@ -216,16 +278,24 @@ async function apiError(response, url, permission) {
   return new GitHubReplyError(`${what}.${advice(response.status, permission)}`, response.status);
 }
 
+// `permission` is one permission, or a list of them.
 function advice(status, permission) {
   if (status === 401) return ' GITHUB_TOKEN was refused: make a new token and set it.';
   if (status === 403 || status === 429) {
     // A 429 is always a rate limit, so only a 403 can mean a missing permission.
-    const needs = permission && status === 403 ? ` A fine-grained GITHUB_TOKEN needs the permission "${permission}" for this request.` : '';
+    const needs = permission && status === 403 ? ` A fine-grained GITHUB_TOKEN needs ${permissionWords(permission)} for this request.` : '';
     return ` The token may lack access, or the rate limit is used up: check the token, or wait and try again.${needs}`;
   }
   if (status === 404) return ' Check the repo name, and that GITHUB_TOKEN can read that repo.';
   if (status >= 500) return ' GitHub had a problem: try again later.';
   return '';
+}
+
+// "the permission "A"", or "the permissions "A", "B" and "C"".
+function permissionWords(permission) {
+  const names = [permission].flat().map((name) => `"${name}"`);
+  if (names.length === 1) return `the permission ${names[0]}`;
+  return `the permissions ${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 // A GitHub repo name is owner/name, and each part uses only letters, digits, _, . and -.
@@ -236,23 +306,135 @@ export function isRepoName(text) {
   return REPO_NAME.test(text);
 }
 
+// How many merged PRs one GraphQL query reads, with the first page of each PR's lists.
+const PULLS_PER_QUERY = 50;
+// How many items of one list (files, reviews, comments, labels, CI results) one query reads.
+const ITEMS_PER_PAGE = 100;
+
+// The fields of one GraphQL query. An author is a user, a bot or another kind of account, and is
+// null when the account was deleted.
+const AUTHOR = 'author { __typename login }';
+const CI_RESULT = '__typename ... on CheckRun { databaseId name conclusion url } ... on StatusContext { context state targetUrl }';
+// The lists inside one PR, each with the fields of one item.
+const PULL_LISTS = {
+  labels: 'name',
+  files: 'path additions deletions',
+  reviews: `state submittedAt ${AUTHOR}`,
+  comments: `body createdAt ${AUTHOR}`
+};
+
+// One page of a list, from the cursor `$after` when `paged` is true.
+function listPage(field, item, paged = false) {
+  return `${field}(first: ${ITEMS_PER_PAGE}${paged ? ', after: $after' : ''}) { pageInfo { hasNextPage endCursor } nodes { ${item} } }`;
+}
+
+// A PR with the first page of each list. The CI results are on the PR's last commit: its check
+// runs and its commit statuses together, in GitHub's status check rollup.
+const PULL = `number url title body mergedAt changedFiles ${AUTHOR} mergeCommit { oid }
+  baseRefName baseRefOid headRefName headRefOid
+  ${Object.entries(PULL_LISTS).map(([field, item]) => listPage(field, item)).join('\n  ')}
+  commits(last: 1) { nodes { commit { oid statusCheckRollup { ${listPage('contexts', CI_RESULT)} } } } }`;
+
+const REPO_VARIABLES = '$owner: String!, $name: String!';
+
+const MERGED_PULLS = `query MergedPulls(${REPO_VARIABLES}, $after: String) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, first: ${PULLS_PER_QUERY}, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ${PULL} }
+    }
+  }
+}`;
+
+const ONE_PULL = `query Pull(${REPO_VARIABLES}, $number: Int!) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${PULL} } }
+}`;
+
+// The query for the next page of one list in one PR, such as PullFiles.
+function pullListQuery(field) {
+  const name = `Pull${field[0].toUpperCase()}${field.slice(1)}`;
+  return `query ${name}(${REPO_VARIABLES}, $number: Int!, $after: String) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${listPage(field, PULL_LISTS[field], true)} } }
+}`;
+}
+
+// The CI results on one commit, from the cursor `$after`, or from the start when it is null.
+const COMMIT_CI = `query CommitCi(${REPO_VARIABLES}, $oid: GitObjectID!, $after: String) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { statusCheckRollup { ${listPage('contexts', CI_RESULT, true)} } } } }
+}`;
+
+const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
+
 // The GitHub forge: every request that history and SZZ send to GitHub, as one method each, for
-// the one repo `repo` ("owner/name"). Only this module builds GitHub API paths, so another forge,
-// such as GitLab, can come later as a second module with the same methods. The other options go
-// to createGitHub.
-// Most methods return GitHub's own objects. A PR from mergedPulls has html_url, its web page. ciResults returns one shape for check runs and
-// commit statuses: { name, conclusion, url }, with check runs first.
+// the one repo `repo` ("owner/name"). Only this module builds GitHub API paths and queries, so
+// another forge, such as GitLab, can come later as a second module with the same methods. The
+// other options go to createGitHub.
+// History's methods use the GraphQL API: one query reads up to 50 merged PRs, with the first page
+// of each PR's labels, files, reviews, comments and CI results. The REST API needs one request
+// for each PR and each of those lists. mergedPulls keeps what it read, so pullFiles, pullReviews,
+// pullComments, pullFileCount and ciResults read from it, and send a query only for a list with
+// more than one page, or for a PR or commit that mergedPulls did not read.
+// SZZ's methods (defaultBranch, pullsForCommit and issue) use the REST API, with the reply cache.
+// The methods return objects with the field names of GitHub's REST API, so a caller does not
+// depend on which API gave them:
+// - mergedPulls: { number, title, body, user, labels, merged_at, base, head, merge_commit_sha,
+//   html_url }, where user is { login } or null, and each label is { name }.
+// - pullFiles: { filename, additions, deletions }.
+// - pullReviews: { state, user, submitted_at }.
+// - pullComments: { body, user, created_at }.
+// - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
+// - defaultBranch, pullsForCommit and issue return GitHub's REST objects.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
   const base = `/repos/${repo}`;
+  const [owner, name] = repo.split('/');
   const pullRequests = { permission: PERMISSIONS.pullRequests };
+  // The permissions that the GraphQL queries for history need.
+  const forHistory = { permission: [PERMISSIONS.pullRequests, PERMISSIONS.checks, PERMISSIONS.commitStatuses] };
+
+  // What GraphQL gave for each PR, by number, and the first page of CI results for each commit.
+  const pulls = new Map();
+  const ciPages = new Map();
+
+  function keep(pull) {
+    pulls.set(pull.number, pull);
+    const commit = pull.commits.nodes[0]?.commit;
+    if (commit) ciPages.set(commit.oid, commit.statusCheckRollup?.contexts ?? NO_ITEMS);
+  }
+
+  async function pull(number) {
+    if (!pulls.has(number)) {
+      const found = (await github.graphql(ONE_PULL, { owner, name, number }, forHistory)).repository?.pullRequest;
+      if (!found) throw new ToolError(`GitHub has no PR ${number} in ${repo}.`);
+      keep(found);
+    }
+    return pulls.get(number);
+  }
+
+  // Returns every item of the list `field` of PR `number`, paging until the list is complete.
+  async function pullList(number, field) {
+    const found = await pull(number);
+    const items = await allItems(found[field], async (after) => {
+      const data = await github.graphql(pullListQuery(field), { owner, name, number, after }, forHistory);
+      return data.repository?.pullRequest?.[field];
+    });
+    // Later calls get the whole list with no more queries.
+    found[field] = { pageInfo: NO_ITEMS.pageInfo, nodes: items };
+    return items;
+  }
+
   return {
     // The forge's name in a history line's forge field.
     name: 'github',
     repo,
 
-    // How many requests went to GitHub so far, and how many of them got a 304 from the cache:
-    // { requests, not_modified }.
+    // How many REST requests went to GitHub so far, how many of them got a 304 from the cache, how
+    // many GraphQL queries went, and how many GraphQL points they used:
+    // { requests, not_modified, queries, points }.
     counts: github.counts,
 
     // GitHub lists at most this many files for one PR. A shorter list is complete.
@@ -270,31 +452,44 @@ export function createGitHubForge({ repo, ...client }) {
       return typeof url === 'string' && url.toLowerCase().startsWith(`https://github.com/${repo}/pull/`.toLowerCase());
     },
 
-    // The PRs that were merged, in the order GitHub lists them. GitHub lists merged PRs with the
-    // closed ones, so the PRs closed without a merge are left out here.
+    // The PRs that were merged, in the order GitHub lists them.
     async mergedPulls() {
-      const pulls = await github.getAll(`${base}/pulls?state=closed&per_page=100`, pullRequests);
-      return pulls.filter((pr) => pr.merged_at !== null);
+      const merged = [];
+      for (let after = null, more = true; more; ) {
+        const data = await github.graphql(MERGED_PULLS, { owner, name, after }, forHistory);
+        const page = data.repository?.pullRequests;
+        if (!Array.isArray(page?.nodes)) throw notShaped(GRAPHQL, 'a list of PRs');
+        for (const found of page.nodes) {
+          keep(found);
+          merged.push(fromPull(found, await pullList(found.number, 'labels')));
+        }
+        ({ hasNextPage: more, endCursor: after } = page.pageInfo);
+      }
+      return merged;
     },
 
-    pullFiles: (number) => github.getAll(`${base}/pulls/${number}/files?per_page=100`, pullRequests),
-    pullReviews: (number) => github.getAll(`${base}/pulls/${number}/reviews?per_page=100`, pullRequests),
+    pullFiles: async (number) => (await pullList(number, 'files')).map((file) => ({ filename: file.path, additions: file.additions, deletions: file.deletions })),
+    pullReviews: async (number) => (await pullList(number, 'reviews')).map((review) => ({ state: review.state, user: fromAuthor(review.author), submitted_at: review.submittedAt })),
     // A PR's comments are the comments of the issue with the same number.
-    pullComments: (number) => github.getAll(`${base}/issues/${number}/comments?per_page=100`, pullRequests),
+    pullComments: async (number) => (await pullList(number, 'comments')).map((comment) => ({ body: comment.body, user: fromAuthor(comment.author), created_at: comment.createdAt })),
 
-    // How many files the PR changed. The list of PRs has no such count, so it costs one request.
-    async pullFileCount(number) {
-      return (await github.getOne(`${base}/pulls/${number}`, pullRequests)).changed_files;
-    },
+    // How many files the PR changed. GraphQL gives it with the PR, so it costs no request.
+    pullFileCount: async (number) => (await pull(number)).changedFiles,
 
     // The CI results on a commit, such as a PR's last head commit. Some CI services post check
     // runs, and some post the older commit statuses, so the list holds both, check runs first.
     async ciResults(headSha) {
-      const [checkRuns, statuses] = await Promise.all([
-        github.getAll(`${base}/commits/${headSha}/check-runs?per_page=100`, { listField: 'check_runs', permission: PERMISSIONS.checks }),
-        // The combined status: GitHub gives only the newest status for each context.
-        github.getAll(`${base}/commits/${headSha}/status?per_page=100`, { listField: 'statuses', permission: PERMISSIONS.commitStatuses })
-      ]);
+      const ask = async (after) => {
+        const data = await github.graphql(COMMIT_CI, { owner, name, oid: headSha, after }, forHistory);
+        return data.repository?.object?.statusCheckRollup?.contexts ?? NO_ITEMS;
+      };
+      const first = ciPages.get(headSha) ?? await ask(null);
+      const results = await allItems(first, ask);
+      // The REST API lists the newest check run first, and so does this list.
+      const checkRuns = results.filter((result) => result.__typename === 'CheckRun').sort((a, b) => b.databaseId - a.databaseId);
+      // GitHub adds an EXPECTED status for a required check that has not posted yet. The REST
+      // API does not list it, so it is left out here too.
+      const statuses = results.filter((result) => result.__typename === 'StatusContext' && result.state !== 'EXPECTED');
       return [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     },
 
@@ -316,12 +511,51 @@ export function createGitHubForge({ repo, ...client }) {
   };
 }
 
+// Returns every item of a GraphQL list, from its first page `page` on. `nextPage(cursor)` asks
+// for the page after the cursor.
+async function allItems(page, nextPage) {
+  const items = [];
+  for (;;) {
+    if (!Array.isArray(page?.nodes)) throw notShaped(GRAPHQL, 'a list');
+    items.push(...page.nodes);
+    if (!page.pageInfo?.hasNextPage) return items;
+    page = await nextPage(page.pageInfo.endCursor);
+  }
+}
+
+// A PR from GraphQL, with the REST API's field names. GraphQL gives an empty body as "", and the
+// REST API as null.
+function fromPull(found, labels) {
+  return {
+    number: found.number,
+    title: found.title,
+    body: found.body === '' ? null : found.body,
+    user: fromAuthor(found.author),
+    labels: labels.map((label) => ({ name: label.name })),
+    merged_at: found.mergedAt,
+    base: { ref: found.baseRefName, sha: found.baseRefOid },
+    head: { ref: found.headRefName, sha: found.headRefOid },
+    merge_commit_sha: found.mergeCommit?.oid ?? null,
+    html_url: found.url
+  };
+}
+
+// An author from GraphQL as a REST user. GraphQL gives a bot's login without the "[bot]" that
+// the REST API adds, as in "dependabot" for "dependabot[bot]".
+function fromAuthor(author) {
+  if (!author) return null;
+  return { login: author.__typename === 'Bot' ? `${author.login}[bot]` : author.login };
+}
+
+// GraphQL gives a check run's conclusion and a status's state in capitals, as in SUCCESS. The
+// REST API gives them in small letters.
 function fromCheckRun(run) {
-  return { name: run.name, conclusion: run.conclusion, url: run.html_url ?? null };
+  return { name: run.name, conclusion: run.conclusion?.toLowerCase() ?? null, url: run.url ?? null };
 }
 
 // A commit status has a state: success, failure, error or pending. A pending status has not
 // finished, so its conclusion is null, as for a check run that has not finished.
 function fromStatus(status) {
-  return { name: status.context, conclusion: status.state === 'pending' ? null : status.state, url: status.target_url ?? null };
+  const state = status.state.toLowerCase();
+  return { name: status.context, conclusion: state === 'pending' ? null : state, url: status.targetUrl ?? null };
 }

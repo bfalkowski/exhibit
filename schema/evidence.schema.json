@@ -38,7 +38,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^(label|title|title_after_key|branch):\\S(.*\\S)?$"
+            "pattern": "^((label|title|title_after_key|branch):\\S(.*\\S)?|pr:[1-9][0-9]*)$"
           },
           "description": "The signals that mark a PR as a fix (spec 9.1). null or absent means the defaults [label:bug, title:fix, branch:fix/]."
         },

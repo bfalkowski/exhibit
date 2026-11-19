@@ -9,12 +9,13 @@
   "properties": {
     "id": { "type": "string", "pattern": "^D-\\d{3,}$", "description": "D- and the fix PR number, with zeros in front to make at least three digits, such as D-004 for PR 4 and D-1234 for PR 1234. exhibit label also checks that it matches fix_pr." },
     "fix_pr": { "type": "integer", "minimum": 1, "description": "The number of the PR that fixed the bug." },
-    "introducing_prs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The PRs that SZZ linked to the fix, highest confidence first." },
+    "introducing_prs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The PRs that SZZ linked to the fix and the person kept, highest confidence first. It is empty when the person rejected every link." },
+    "rejected_prs": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "The PRs that SZZ linked to the fix and the person rejected, highest confidence first. Lines written before link rejection have no rejected_prs, which means none were rejected." },
     "code": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,199}$", "description": "A short description of what went wrong: one line of at most 200 characters." },
     "category": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,59}$", "description": "The kind of bug: one line of at most 60 characters." },
     "would_have_caught": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,499}$", "description": "The evidence that would have caught the bug: one line of at most 500 characters." },
     "labeled_by": { "type": "string", "pattern": "^(person|claude_draft_confirmed|claude_draft_edited)$" },
-    "szz_link_rejected": { "type": "boolean", "description": "true when the person rejected the SZZ link." },
+    "szz_link_rejected": { "type": "boolean", "description": "true when the person rejected at least one SZZ link of the defect. exhibit label also checks that it is true exactly when rejected_prs is not empty." },
     "labeled_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" }
   }
 }

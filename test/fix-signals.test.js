@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyFix, DEFAULT_FIX_SIGNALS } from '../src/fix-signals.js';
 
-const pr = (fields) => ({ title: 'Add a page', labels: [], branch: 'topic', ...fields });
+const pr = (fields) => ({ number: 1, title: 'Add a page', labels: [], branch: 'topic', ...fields });
 const notFix = { fix: false, fix_signal: null };
 
 test('the default signals are the ones in the spec', () => {
@@ -74,6 +74,21 @@ test('when more than one signal matches, the first in the list is recorded', () 
   const both = pr({ title: 'Fix the crash', labels: ['bug'], branch: 'fix/crash' });
   assert.deepEqual(classifyFix(both, DEFAULT_FIX_SIGNALS), { fix: true, fix_signal: 'label:bug' });
   assert.deepEqual(classifyFix(both, ['branch:fix/', 'title:fix']), { fix: true, fix_signal: 'branch:fix/' });
+});
+
+test('pr: matches the PR with that number, and no other', () => {
+  const signals = ['pr:96', 'pr:99'];
+  assert.deepEqual(classifyFix(pr({ number: 96 }), signals), { fix: true, fix_signal: 'pr:96' });
+  assert.deepEqual(classifyFix(pr({ number: 99 }), signals), { fix: true, fix_signal: 'pr:99' });
+  for (const number of [9, 960, 97, 1]) assert.deepEqual(classifyFix(pr({ number }), signals), notFix, `PR ${number}`);
+});
+
+test('pr: adds to the other signals, and the first match in the list is recorded', () => {
+  const labelled = pr({ number: 96, labels: ['bug'] });
+  assert.deepEqual(classifyFix(labelled, ['label:bug', 'pr:96']), { fix: true, fix_signal: 'label:bug' });
+  assert.deepEqual(classifyFix(labelled, ['pr:96', 'label:bug']), { fix: true, fix_signal: 'pr:96' });
+  // A PR that only the label marks is still a fix when the list also has pr: signals.
+  assert.deepEqual(classifyFix(pr({ number: 5, labels: ['bug'] }), ['pr:96', 'label:bug']), { fix: true, fix_signal: 'label:bug' });
 });
 
 test('a PR with no matching signal is not a fix', () => {

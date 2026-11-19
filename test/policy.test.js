@@ -131,6 +131,29 @@ test('readPolicy uses a custom fix_signals list in place of the defaults', async
   assert.deepEqual(await readFixSignals(cwd), ['label:defect', 'title:hotfix']);
 });
 
+test('readPolicy accepts pr: with a PR number, like the other types', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title:fix, branch:fix/, pr:96, pr:99, pr:1]\n');
+  assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title:fix', 'branch:fix/', 'pr:96', 'pr:99', 'pr:1']);
+});
+
+test('readPolicy refuses a pr: value that is not a PR number, with a message for each', async (t) => {
+  const cases = [
+    ['settings:\n  fix_signals: ["pr:"]\n', /fix_signals\[0\] is "pr:", which needs a value after the colon\./],
+    ['settings:\n  fix_signals: [label:bug, pr:abc]\n', /fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:-3"]\n', /"pr:-3"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:0"]\n', /"pr:0"\. A pr: signal needs a PR number of 1 or more/],
+    ['settings:\n  fix_signals: ["pr:9.5"]\n', /"pr:9\.5"\. A pr: signal needs a PR number/],
+    ['settings:\n  fix_signals: ["pr:#96"]\n', /"pr:#96"\. A pr: signal needs a PR number/],
+    ['settings:\n  fix_signals: ["pr:096"]\n', /"pr:096"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr: 96"]\n', /"pr: 96"\. Remove the space before or after the value, as in pr:96\./],
+    // Without quotes, YAML reads "pr: 96" in a list as a mapping, not as text.
+    ['settings:\n  fix_signals: [pr: 96]\n', /fix_signals\[0\] must be text like label:bug, not \{"pr":96\}\. Write it with no space after the colon, as in pr:96\./]
+  ];
+  for (const [text, message] of cases) {
+    await assert.rejects(readPolicy(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
+  }
+});
+
 test('readPolicy accepts title_after_key: like the other types', async (t) => {
   const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title_after_key:fix, branch:fix/]\n');
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
@@ -147,8 +170,8 @@ test('readPolicy refuses a malformed fix_signals with a tool error that says wha
     ['settings:\n  fix_signals: label:bug\n', /must be a list/],
     ['settings:\n  fix_signals: []\n', /at least one signal/],
     ['settings:\n  fix_signals: [label:bug, 7]\n', /fix_signals\[1\].*not 7/],
-    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key: or branch:/],
-    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key: or branch:/],
+    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, branch: or pr:/],
+    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, branch: or pr:/],
     ['settings:\n  fix_signals: ["title_after_key:"]\n', /"title_after_key:".*needs a value/],
     ['settings:\n  fix_signals: ["title_after_key: fix"]\n', /"title_after_key: fix".*space/],
     ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],
