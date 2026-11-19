@@ -5,23 +5,44 @@ import { ToolError } from './tool-error.js';
 // How many PRs ask for their files, reviews, comments and CI results at the same time.
 const PRS_AT_ONCE = 8;
 
+// The look-back window of an incremental run (spec 8.3): the PRs merged in the last 7 days
+// before the newest line in the old file are read again, for late reviews, comments and CI.
+export const LOOK_BACK_MS = 7 * 24 * 60 * 60 * 1000;
+
 // Reads the merged PRs of the forge's repo and returns one history line for each, newest merge
-// first. `forge` is the forge module for the repo, such as createGitHubForge in src/github.js.
-// `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N.
-// Only the kept PRs ask for their files, reviews, comments and CI results.
-// `fixSignals` (spec 9.1, the defaults when left out) fills `classification`. The lines fill the spec 8.3 fields this version
-// knows: the later fields (evidence_section, szz, exhibit) are left out. The schema requires szz,
-// so the history command (src/commands/history.js) adds szz to each line before it checks and
-// writes the lines.
+// first. It reads every PR. See updateHistory for the options.
+export async function readHistory(options) {
+  return (await updateHistory({ ...options, previous: [] })).lines;
+}
+
+// Returns { lines, read }: one history line for each merged PR, newest merge first, and how
+// many of them it read from the forge. `forge` is the forge module for the repo, such as
+// createGitHubForge in src/github.js.
+// `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N. The forge's list
+// of merged PRs is always read in full, and these two options pick from it.
+// `previous` holds the lines of the old history file, which must pass the schema. A kept PR that
+// has a line there is not read again, and keeps that line as it is, unless it was merged in the
+// look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
+// line there is read. So an empty `previous` reads every kept PR.
+// Only the PRs that are read ask for their files, reviews, comments and CI results.
+// `fixSignals` (spec 9.1, the defaults when left out) fills `classification`. The lines that are
+// read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
+// exhibit) are left out. The schema requires szz, so the history command
+// (src/commands/history.js) adds szz to each line that has none before it checks and writes the
+// lines.
 // `warn` gets one text for each PR whose files list the forge cut short, and one for each comment
 // whose only verdict is in a quoted line, in the order of the lines.
-export async function readHistory({ forge, since, limit, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
+export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   let merged = await forge.mergedPulls();
   if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
   merged.sort((a, b) => b.merged_at.localeCompare(a.merged_at) || b.number - a.number);
   if (limit !== undefined) merged = merged.slice(0, limit);
 
-  const read = await mapInBatches(merged, PRS_AT_ONCE, async (pr) => {
+  const old = new Map(previous.map((line) => [line.number, line]));
+  const windowStart = previous.length === 0 ? null : Math.max(...previous.map((line) => Date.parse(line.merged_at))) - LOOK_BACK_MS;
+  const toRead = merged.filter((pr) => !old.has(pr.number) || Date.parse(pr.merged_at) >= windowStart);
+
+  const read = await mapInBatches(toRead, PRS_AT_ONCE, async (pr) => {
     const [files, reviews, comments, ci] = await Promise.all([
       forge.pullFiles(pr.number),
       forge.pullReviews(pr.number),
@@ -37,7 +58,8 @@ export async function readHistory({ forge, since, limit, fixSignals = DEFAULT_FI
     };
   });
   for (const { warnings } of read) for (const warning of warnings) warn(warning);
-  return read.map(({ line }) => line);
+  const fresh = new Map(read.map(({ line }) => [line.number, line]));
+  return { lines: merged.map((pr) => fresh.get(pr.number) ?? old.get(pr.number)), read: read.length };
 }
 
 // Returns a warning when the forge listed fewer files than the PR changed, or null. Only a PR

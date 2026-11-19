@@ -11,14 +11,19 @@ import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
+import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 import { commitPullsFetch } from './fixtures/github/szz-replies.js';
 
 const REPO = 'fixture/shop';
 // cloneRoot asks only the forge's remote rule, so this forge never fetches.
 const SHOP_FORGE = createGitHubForge({ repo: REPO, token: 't', fetch: async () => { throw new Error('cloneRoot must not fetch'); } });
 
+// src/szz.js runs git in this process with process.env. Drop the env that a git hook sets, so
+// git reads the fixture repo and not the repo that runs the hook.
+dropGitEnv();
+
 function git(dir, args) {
-  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
+  return execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: gitEnv(dir) }).trim();
 }
 
 // Builds the fixture repo, runs SZZ on its history with a GitHub that answers from the repo's
@@ -173,6 +178,58 @@ test('the walk to a squash fix\'s first commit', async (t) => {
     assert.equal(parent, repo.history.find((pr) => pr.number === 8).merge_sha);
     assert.deepEqual(askedShas(fetch), [parent]);
     assert.equal(line.szz.blamed_commit, parent);
+  });
+
+  await t.test('an incremental run passes the whole file as known, so SZZ on PR 9 alone asks GitHub nothing', async (t) => {
+    // The same fix as above, but the commit-to-PR map sees every line, as in an incremental run
+    // where only PR 9 is new. PR 8's merge SHA is then known, so the walk costs no request.
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const fix9 = repo.history.find((pr) => pr.number === 9);
+    const fetch = commitPullsFetch(repo, REPO);
+    const lines = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), known: repo.history });
+    assert.deepEqual(lines.map((line) => line.number), [9]);
+    assert.deepEqual(askedShas(fetch), []);
+    assert.equal(lines[0].szz.blamed_commit, repo.history.find((pr) => pr.number === 8).merge_sha);
+  });
+});
+
+// After a repo renames its default branch, such as from master to main, the PRs merged before
+// keep base_ref "master". Fix 7 blames a line on PR 2's squash commit. Here PR 2 has base_ref
+// "master", and GitHub lists no PR for its commit.
+test('a merge SHA from before a default branch rename', async (t) => {
+  async function run(t, defaultBranch) {
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const history = repo.history.map((pr) => (pr.number === 2 ? { ...pr, base_ref: 'master' } : pr));
+    const pr2Sha = history.find((pr) => pr.number === 2).merge_sha;
+    const replies = commitPullsFetch(repo, REPO);
+    const calls = [];
+    const fetch = async (url, init) => {
+      const { pathname } = new URL(url);
+      calls.push(pathname);
+      const body = pathname === `/repos/${REPO}` ? { full_name: REPO, default_branch: defaultBranch }
+        : pathname.includes(`/commits/${pr2Sha}/pulls`) ? [] : null;
+      if (body === null) return replies(url, init);
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
+    const asked = calls.some((path) => path.includes(`/commits/${pr2Sha}/pulls`));
+    return { fix7: lines.find((line) => line.number === 7), asked };
+  }
+
+  await t.test('links to its PR with no pulls request, when the commit is on the first-parent line of the default branch in the clone', async (t) => {
+    const { fix7, asked } = await run(t, 'main');
+    assert.deepEqual(fix7.szz.links.map((link) => link.pr), [2, 3]);
+    assert.deepEqual(fix7.szz.unlinked_lines, []);
+    assert.equal(asked, false);
+  });
+
+  await t.test('asks GitHub when the clone has no branch with the default branch name', async (t) => {
+    const { fix7, asked } = await run(t, 'trunk');
+    assert.equal(asked, true);
+    assert.deepEqual(fix7.szz.links.map((link) => link.pr), [3]);
+    assert.equal(fix7.szz.unlinked_lines.length, 1);
   });
 });
 

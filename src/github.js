@@ -265,6 +265,11 @@ export function createGitHubForge({ repo, ...client }) {
       return match !== null && match[1].toLowerCase() === repo.toLowerCase();
     },
 
+    // Returns true when `url` is the web page of a PR in this repo, as a history line's url is.
+    isPullUrl(url) {
+      return typeof url === 'string' && url.toLowerCase().startsWith(`https://github.com/${repo}/pull/`.toLowerCase());
+    },
+
     // The PRs that were merged, in the order GitHub lists them. GitHub lists merged PRs with the
     // closed ones, so the PRs closed without a merge are left out here.
     async mergedPulls() {
