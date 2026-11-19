@@ -1,6 +1,7 @@
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { readFixSignals } from '../fix-signals.js';
 import { readHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { ToolError } from '../tool-error.js';
@@ -10,16 +11,19 @@ const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
 // `exhibit history --repo owner/name [--since DATE] [--limit N] [--json]`
-// Writes one line for each merged PR to .exhibit/history.jsonl. Every line must pass the schema
-// before the file is written, so a failed run leaves no partial file and keeps an older one.
+// Writes one line for each merged PR to .exhibit/history.jsonl, and marks fix PRs by the fix
+// signals in evidence.yml, or the defaults. Every line must pass the schema before the file is
+// written, so a failed run leaves no partial file and keeps an older one.
 // A PR whose files list GitHub cut short gives a warning on stderr. The run still succeeds.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const options = parseOptions(argv);
   const token = env.GITHUB_TOKEN;
   if (!token) throw new ToolError('GITHUB_TOKEN is not set. Set it to a GitHub token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).');
 
+  // Read the fix signals before asking GitHub, so a bad evidence.yml fails fast.
+  const fixSignals = await readFixSignals(cwd);
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const lines = await readHistory({ repo: options.repo, token, fetch, since: options.since, limit: options.limit, warn });
+  const lines = await readHistory({ repo: options.repo, token, fetch, since: options.since, limit: options.limit, fixSignals, warn });
 
   const problems = lines.flatMap((line) => checkHistoryLine(line).map((problem) => `PR ${line.number} ${problem}`));
   if (problems.length > 0) {

@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bfalkowski/exhibit/schema/history-line.schema.json",
   "title": "One line of .exhibit/history.jsonl",
-  "description": "One merged PR (spec section 8.3). This version fills the PR fields, files, reviews and ci. The fields that later tickets fill may be absent or null.",
+  "description": "One merged PR (spec section 8.3). This version fills the PR fields, files, reviews, ci and classification. The fields that later tickets fill may be absent or null.",
   "type": "object",
-  "required": ["number", "title", "body", "author", "labels", "merged_at", "base_sha", "merge_sha", "files", "reviews", "ci"],
+  "required": ["number", "title", "body", "author", "labels", "merged_at", "base_sha", "merge_sha", "files", "reviews", "ci", "classification"],
   "additionalProperties": false,
   "properties": {
     "number": { "type": "integer", "minimum": 1 },
@@ -62,7 +62,20 @@
         }
       }
     },
-    "classification": { "type": "null", "description": "Filled by a later ticket." },
+    "classification": {
+      "type": "object",
+      "description": "Whether the PR is a fix, by the fix signals (spec 9.1). Slice S4 adds the kinds of change.",
+      "required": ["fix", "fix_signal"],
+      "additionalProperties": false,
+      "properties": {
+        "fix": { "type": "boolean" },
+        "fix_signal": {
+          "type": ["string", "null"],
+          "pattern": "^(label|title|branch):.+$",
+          "description": "The first fix signal that matched, such as label:bug. null when the PR is not a fix."
+        }
+      }
+    },
     "evidence_section": { "type": "null", "description": "Filled by a later ticket." },
     "szz": { "type": "null", "description": "Filled by slice S2." },
     "exhibit": { "type": "null", "description": "Filled by a later ticket." }

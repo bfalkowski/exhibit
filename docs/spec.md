@@ -180,8 +180,9 @@ The schema for one line is `schema/history-line.schema.json`. `exhibit history` 
 What each version fills:
 
 - **S1, first half:** `number`, `title`, `body`, `author`, `labels`, `merged_at`, `base_sha`, `merge_sha` and `files`. `body` is null when the PR has no description. `author` is null when the account was deleted. Lines are in merge order, newest first. GitHub lists at most 3,000 files for one PR, so `files` for a larger PR is cut short. When that happens, `exhibit history` prints a warning on stderr that names the PR and both counts, and still exits 0. Only a PR whose list reaches 3,000 files costs one more API request, to read its `changed_files` count. `base_sha` is GitHub's `base.sha`: the tip of the base branch when the PR was last updated. It is not always the merge-base of the PR.
-- **S1, second half (now):** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs has an empty `ci` list. A check run that has not finished has a null `conclusion`. Comments on the PR are not reviews, so they are not in `reviews`.
-- **Later slices:** `classification`, `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null.
+- **S1, second half:** `reviews` and `ci`. The schema requires both. A PR with no reviews has `{"change_request_rounds": 0, "list": []}`. A change request that was later dismissed has the state `DISMISSED`, so it is not a round. A review `author` is null when the account was deleted. A PR with no check runs has an empty `ci` list. A check run that has not finished has a null `conclusion`. Comments on the PR are not reviews, so they are not in `reviews`.
+- **S2, fix signals:** `classification` holds two fields. `fix` is true when any fix signal matches (section 9.1). `fix_signal` is the first signal in the list that matched, such as `label:bug`, so a person can see why the PR counts as a fix. It is null when no signal matched. Every line has `classification`.
+- **Later slices:** the kinds of change in `classification` (S4), `evidence_section`, `szz` and `exhibit`. Until then they are absent, and the schema allows them only as null.
 
 When GitHub says to wait (a 429 or 403 reply with a `retry-after` header, or with no requests left until `x-ratelimit-reset`), `exhibit history` waits and asks again, at most three times. If GitHub asks for a wait longer than 15 minutes, it stops and exits 2.
 
@@ -210,7 +211,14 @@ One escaped defect per line, with these fields:
 ### 9.1 Classifying a change
 
 - Kinds are matched by globs on the changed file paths.
-- A PR counts as a fix when any signal in `fix_signals` matches: a label, a title prefix, a branch prefix, or a linked issue with a bug label.
+- A PR counts as a fix when any signal in `fix_signals` matches. A signal is a type and a value, with a colon between them:
+  - `label:bug` matches a label named `bug`. The whole name must match.
+  - `title:fix` matches a title that starts with the word `fix`. It matches "fix: crash", "Fix the crash" and "fix(cli): crash". It does not match "Fixture for tests" or "Add prefix fixer", because a prefix is not "contains", and the word must end where the prefix ends.
+  - `branch:fix/` matches a head branch whose name starts with `fix/`.
+  - All matching ignores case.
+- The signals come from `settings.fix_signals` in `evidence.yml`. With no `evidence.yml`, or no `settings.fix_signals` in it, Exhibit uses `[label:bug, title:fix, branch:fix/]`. A custom list replaces these defaults. `exhibit history` reads only this one setting from the file, and the other settings are not checked until slice S4.
+- A `fix_signals` that is not a list, is empty, has a signal that does not start with `label:`, `title:` or `branch:`, or has a space before or after the value (such as "label: bug") makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too.
+- A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
 - A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
 
 ### 9.2 SZZ
