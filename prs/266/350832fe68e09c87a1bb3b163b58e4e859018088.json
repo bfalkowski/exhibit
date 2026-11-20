@@ -1,0 +1,59 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "f69c1b452930c5cc6454f99a03c8a0c226b763ecb3f0aca13d692286e8c1f5bc"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 266,
+  "base": "2250e99a09f73305f674c6dcdda04f6397f361bc",
+  "head": "350832fe68e09c87a1bb3b163b58e4e859018088",
+  "classification": {
+    "kinds": [
+      "docs"
+    ],
+    "risk": "low",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "met",
+      "details": {
+        "exit_code": 0,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 42
+    }
+  ],
+  "verdict": "meets_policy",
+  "gaps": [],
+  "checks_by_author": {
+    "builder": 1,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-20T23:01:03.181Z"
+}
