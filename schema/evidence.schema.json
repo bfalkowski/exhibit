@@ -50,7 +50,8 @@
         "probe_timeout_seconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "The time limit for each probe (spec 9.6). A probe that runs longer is stopped and fails. Absent means 600."
+          "maximum": 86400,
+          "description": "The time limit for each probe (spec 9.6), at most 86400 (one day). A probe that runs longer is stopped and fails. Absent means 600."
         }
       }
     },

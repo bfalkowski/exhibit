@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProbe } from '../src/probe.js';
@@ -57,6 +57,20 @@ test('an artifact path outside the worktree counts as missing', async (t) => {
   const result = await runProbe(probe({ run: 'echo x > ../outside.log', artifacts: ['../outside.log'] }), { ...where, timeoutSeconds: 10 });
   assert.equal(result.status, 'failed');
   assert.deepEqual(result.details.missing_artifacts, ['../outside.log']);
+});
+
+test('a folder artifact does not copy a symbolic link that leads outside the worktree', async (t) => {
+  const where = setup(t);
+  const secret = join(where.dir, 'secret.txt');
+  writeFileSync(secret, 'TOP-SECRET\n');
+  const run = `mkdir -p rep && echo fine > rep/ok.txt && ln -s '${secret}' rep/leak && ln -s ok.txt rep/same`;
+  const result = await runProbe(probe({ run, artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  const copy = join(where.outDir, 'artifacts', 'rep');
+  assert.equal(readFileSync(join(copy, 'ok.txt'), 'utf8'), 'fine\n');
+  // A link to a file inside the worktree is copied as that file.
+  assert.equal(readFileSync(join(copy, 'same'), 'utf8'), 'fine\n');
+  assert.equal(existsSync(join(copy, 'leak')), false);
 });
 
 test('a probe that runs past the time limit is failed, and the gap says it timed out', async (t) => {

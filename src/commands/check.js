@@ -86,8 +86,9 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   return code;
 }
 
-// The collector for probe requirements. Each probe runs in the head worktree, and keeps its files
-// in its own folder under .exhibit/probes, named after the probe.
+// The collector for probe requirements. Each probe runs in the head worktree, made clean again
+// before each probe, so no probe sees the files of the one before it. Each keeps its files in its
+// own folder under .exhibit/probes, named after the probe.
 function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
   const used = new Set();
   return async (requirement) => {
@@ -95,7 +96,7 @@ function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
     const outPath = `${PROBES}/${folder}`;
     return runProbe(
       { ...requirement.params, hidden: requirement.author === 'hidden' },
-      { worktree: await headWorktree.path(), outDir: join(cwd, outPath), outPath, timeoutSeconds }
+      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds }
     );
   };
 }

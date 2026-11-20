@@ -237,3 +237,23 @@ test('the time limit comes from settings.probe_timeout_seconds, and old probe fi
   assert.match(evidence.gaps[0].how_to_fix, /timed out/);
   assert.equal(existsSync(join(fixture.repo, '.exhibit', 'probes', 'old')), false);
 });
+
+test('each probe starts in a clean head worktree, so it cannot see the files of the probe before it', (t) => {
+  const fixture = buildRepo(t);
+  withProbes(fixture, [
+    { name: 'hidden one', run: 'echo secret-$((40 + 2)) > h.txt; echo changed >> notes/one.md', artifacts: ['h.txt'], author: 'hidden' },
+    { name: 'builder', run: 'test ! -e h.txt && cat notes/one.md', artifacts: ['h.txt'] }
+  ]);
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  const builder = evidence.requirements[1];
+  // The builder probe did not write h.txt, so it is not met by the hidden probe's file.
+  assert.equal(builder.status, 'failed');
+  assert.deepEqual([builder.details.exit_code, builder.details.missing_artifacts], [0, ['h.txt']]);
+  // The tracked file is back to the head's version too.
+  assert.equal(readFileSync(join(fixture.repo, builder.details.output), 'utf8'), 'one\n');
+  for (const file of filesUnder(join(fixture.repo, '.exhibit'))) {
+    if (statSync(file).isFile()) assert.doesNotMatch(readFileSync(file, 'utf8'), /secret-42/, file);
+  }
+});

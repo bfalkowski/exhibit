@@ -26,10 +26,11 @@ export async function runProbe({ name, run, artifacts = [], hidden = false }, { 
   if (!hidden) await mkdir(outDir, { recursive: true });
   const outcome = await runInGroup(run, { cwd: worktree, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
 
+  const root = await realpath(worktree);
   const found = [];
   const missing = [];
   for (const path of artifacts) {
-    const source = await artifactSource(worktree, path);
+    const source = await artifactSource(root, path);
     if (source === null) missing.push(path);
     else found.push({ path, source });
   }
@@ -37,7 +38,10 @@ export async function runProbe({ name, run, artifacts = [], hidden = false }, { 
   if (!hidden) {
     for (const { path, source } of found) {
       const name = posix.normalize(path);
-      await cp(source, join(outDir, 'artifacts', name), { recursive: true, dereference: true });
+      // A folder artifact can hold symbolic links. Copy only the entries whose real path is inside
+      // the worktree, so a link cannot bring a file from elsewhere on the machine.
+      const filter = async (entry) => (await insideRoot(root, entry)) !== null;
+      await cp(source, join(outDir, 'artifacts', name), { recursive: true, dereference: true, filter });
       copied.push({ path, copy: `${outPath}/artifacts/${name}` });
     }
   }
@@ -104,16 +108,24 @@ async function runInGroup(command, { cwd, logFile, timeoutMs }) {
 // The real path of an artifact when it exists inside the worktree, or null. A path that leaves
 // the worktree, by "..", an absolute path or a symbolic link, counts as missing, so a probe cannot
 // copy a file from elsewhere on the machine into the exhibit.
-async function artifactSource(worktree, path) {
+// `root` is the real path of the worktree.
+async function artifactSource(root, path) {
   if (isAbsolute(path)) return null;
+  const real = await insideRoot(root, join(root, path));
+  return real === root ? null : real;
+}
+
+// The real path of `path` when it exists, can be read, and is inside `root` or is `root`. Otherwise
+// null.
+async function insideRoot(root, path) {
   let real;
   try {
-    real = await realpath(join(worktree, path));
+    real = await realpath(path);
     await access(real, constants.R_OK);
   } catch {
     return null;
   }
-  const inside = relative(await realpath(worktree), real);
-  if (inside === '' || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
+  const inside = relative(root, real);
+  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
   return real;
 }
