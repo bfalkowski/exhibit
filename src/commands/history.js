@@ -184,7 +184,11 @@ async function readPrevious(cwd, forge, note) {
   }
   for (const line of lines) {
     const problems = checkHistoryLine(line);
-    if (problems.length > 0) return again(`does not fit the history schema, as a file from an older version of Exhibit does (PR ${line.number ?? '?'} ${problems[0]})`);
+    if (problems.length === 0) continue;
+    // A problem at the top of the line starts with "/: ". A person does not know that "/" means
+    // the whole line, so the note leaves it out: "PR 137 misses the field base_ref".
+    const problem = problems[0].replace(/^\/: /, '');
+    return again(`does not fit the history schema, as a file from an older version of Exhibit does (PR ${line.number ?? '?'} ${problem})`);
   }
   const stranger = lines.find((line) => line.forge !== forge.name || !forge.isPullUrl(line.url));
   if (stranger) return again(`holds PRs from another repo (PR ${stranger.number} is ${stranger.url}), not ${forge.repo}`);

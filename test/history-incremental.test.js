@@ -210,6 +210,33 @@ test('a file from an older schema version forces a full run, with one line that 
   for (const line of readLines(cwd)) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
 });
 
+// Runs history once, changes each line of the file with `change`, runs it again, and returns the
+// one note that says why the second run read every PR again.
+async function noteForOlderFile(change) {
+  const cwd = newFolder();
+  const gh = repo();
+  await run(cwd, gh);
+  const old = readLines(cwd).map((line) => change({ ...line }));
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), old.map((line) => JSON.stringify(line) + '\n').join(''));
+  const second = await run(cwd, gh);
+  const notes = second.stderr.split('\n').filter((text) => text.includes('reads every merged PR again'));
+  assert.equal(notes.length, 1, second.stderr);
+  return notes[0];
+}
+
+test('the older-file note leaves out the "/" when a field is missing at the top of the line', async () => {
+  const note = await noteForOlderFile((line) => {
+    delete line.base_ref;
+    return line;
+  });
+  assert.match(note, /\(PR 4 misses the field base_ref\)\.$/);
+});
+
+test('the older-file note keeps the path when the problem is deeper in the line', async () => {
+  const note = await noteForOlderFile((line) => ({ ...line, reviews: { change_request_rounds: 0 } }));
+  assert.match(note, /\(PR 4 \/reviews: misses the field list\)\.$/);
+});
+
 test('a file from another repo forces a full run', async () => {
   const cwd = newFolder();
   const gh = repo();
