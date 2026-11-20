@@ -53,6 +53,14 @@ test('a change to the docs needs the link probe, and the tests too when it also 
   assert.deepEqual(needs(policy, ['README.md', 'test/check.test.js']).needs, ['probe:links', 'tests-before-after']);
 });
 
+test('a change to an example README needs the link probe, and the probe reads the examples folder', async () => {
+  const policy = await ownPolicy();
+  for (const file of ['examples/building58/README.md', 'examples/edd-platform/README.md']) {
+    assert.deepEqual(needs(policy, [file]), { kinds: ['docs', 'tooling'], risk: 'medium', needs: ['probe:links', 'tests-before-after'] }, file);
+  }
+  assert.match(policy.kinds.docs.needs[0].probe.run, /^node scripts\/check-links\.js( \S+)* examples( |$)/);
+});
+
 test('any other file uses the default, which needs the tests', async () => {
   const policy = await ownPolicy();
   assert.deepEqual(needs(policy, ['.gitignore']), { kinds: [], risk: 'medium', needs: ['tests-before-after'] });

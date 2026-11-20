@@ -255,7 +255,7 @@ for (const path of WORKFLOWS) {
   });
 }
 
-test('the example pins the same Exhibit as Exhibit\'s own workflow, so a copy gets a commit that runs here', () => {
+test('the example pins the same Exhibit as Exhibit\'s own workflow, so a copy gets the release that runs here', () => {
   const [example, own] = WORKFLOWS.map(readWorkflow);
   assert.equal(exhibitStep(example.jobs.check).uses, exhibitStep(own.jobs.check).uses);
 });
