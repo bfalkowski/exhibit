@@ -52,7 +52,8 @@ export const COLLECTORS = Object.freeze({
 // commits.
 export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, runBaseWithPrTests = runTestsOnBaseWithPrTests, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
   const files = [...new Set(change.files)].sort();
-  const { classification, requirements } = classifyChange(change.policy, files, change.pr);
+  const { classification, requirements } = classifyChange(change.policy, files, change.pr, change.policyFile.path);
+  const policyName = change.policyFile.path;
   const { has_default: hasDefault, ...shown } = classification;
 
   let testRuns;
@@ -107,14 +108,14 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     gaps.push({
       type: 'policy-change',
       status: 'missing',
-      how_to_fix: 'This change edits evidence.yml, the policy that Exhibit checks changes against. A change to the policy always needs a person, so that a builder cannot change the rules to pass its own PR. Ask a maintainer to review the policy change.'
+      how_to_fix: `This change edits ${policyName}, the policy that Exhibit checks changes against. A change to the policy always needs a person, so that a builder cannot change the rules to pass its own PR. Ask a maintainer to review the policy change.`
     });
   }
   if (classification.used_default && !hasDefault) {
     gaps.push({
       type: 'no-rule',
       status: 'missing',
-      how_to_fix: 'No kind in evidence.yml matches the changed files, and evidence.yml has no default, so the policy says nothing about this change. Add a default, or a kind that matches these files, or ask a person to review it.'
+      how_to_fix: `No kind in ${policyName} matches the changed files, and ${policyName} has no default, so the policy says nothing about this change. Add a default, or a kind that matches these files, or ask a person to review it.`
     });
   }
 
@@ -182,11 +183,12 @@ export const VERDICT_WORDS = {
 
 // The summary.md for an exhibit: the verdict, the change, each requirement, and each gap with how
 // to fix it, in plain words. It holds no time, so two runs on the same commits give the same file.
-export function renderSummary(exhibit) {
+// With `shadow`, it says that the check exits 0 whatever the verdict (spec 10).
+export function renderSummary(exhibit, { shadow = false } = {}) {
   const c = exhibit.classification;
   const lines = [];
   lines.push(`# Exhibit check: ${VERDICT_WORDS[exhibit.verdict]}`, '');
-  lines.push(`Verdict: **${exhibit.verdict}** (exit code ${EXIT_CODES[exhibit.verdict]}).`, '');
+  lines.push(...verdictLines(exhibit.verdict, shadow));
   const pr = exhibit.pr === null ? '' : ` PR ${exhibit.pr}${exhibit.repo ? ` in ${exhibit.repo}` : ''}.`;
   lines.push(`Base ${exhibit.base.slice(0, 7)}, head ${exhibit.head.slice(0, 7)}.${pr}`, '');
 
@@ -240,4 +242,23 @@ function probeFiles(item) {
   const artifacts = item.details.artifacts ?? [];
   if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => link(artifact.path, artifact.copy)).join(', ')}.`);
   return parts.join('');
+}
+
+// The summary.md for a check that failed before it had a verdict, such as a bad argument, a bad
+// policy or a commit that is not in the clone. The verdict is error, and `message` says why. In
+// CI, this is the job summary, so a broken setup shows there, in shadow mode too.
+export function renderErrorSummary(message, { shadow = false } = {}) {
+  const lines = [`# Exhibit check: ${VERDICT_WORDS.error}`, ''];
+  lines.push(...verdictLines('error', shadow));
+  lines.push('Exhibit could not finish the check, so it wrote no evidence.json. The reason:', '');
+  lines.push(...message.split('\n').map((line) => (line === '' ? '' : `    ${line}`)));
+  return lines.join('\n') + '\n';
+}
+
+// The verdict line, with the exit code that exhibit check gives, and in shadow mode a line that
+// says why that code is 0.
+function verdictLines(verdict, shadow) {
+  const lines = [`Verdict: **${verdict}** (exit code ${shadow ? 0 : EXIT_CODES[verdict]}).`, ''];
+  if (shadow) lines.push('Shadow mode: nothing waits on this verdict, so the check exits 0 whatever it is.', '');
+  return lines;
 }

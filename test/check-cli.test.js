@@ -195,7 +195,7 @@ test('check --pr passes the body and the repo to the revert signal', async (t) =
   assert.deepEqual(await signalFor('Reverts lodash/lodash#5000'), [false, null]);
 });
 
-test('a bad argument removes the old evidence.json too, so no old verdict is left', (t) => {
+test('a bad argument removes the old evidence.json too, and summary.md says error and why', (t) => {
   const fixture = buildRepo(t);
   mkdirSync(join(fixture.repo, '.exhibit'));
   writeFileSync(join(fixture.repo, '.exhibit', 'evidence.json'), '{"verdict":"meets_policy"}\n');
@@ -203,7 +203,78 @@ test('a bad argument removes the old evidence.json too, so no old verdict is lef
   const run = exhibitCheck(fixture, ['--pr', 'abc']);
   assert.equal(run.status, 2);
   assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
-  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'summary.md')), false);
+  const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+  assert.match(summary, /^# Exhibit check: Exhibit failed\n\nVerdict: \*\*error\*\* \(exit code 2\)\./);
+  assert.match(summary, /wrote no evidence\.json/);
+  assert.match(summary, /\n {4}--pr must be a PR number, such as 12, not "abc"\.\n/);
+  assert.doesNotMatch(summary, /Shadow mode/);
+});
+
+// Shadow mode (spec 10): the same run and the same files, but exit 0 for every verdict.
+test('--shadow gives exit 0 for needs_person, and the files still say needs_person', (t) => {
+  const fixture = buildRepo(t);
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src', '--shadow']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Verdict: needs_person\..*\n.*\nShadow mode: nothing waits on this verdict, so the exit code is 0\.\n$/);
+  assert.equal(readEvidence(fixture.repo).verdict, 'needs_person');
+  const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+  assert.match(summary, /^# Exhibit check: needs a person\n\nVerdict: \*\*needs_person\*\* \(exit code 0\)\.\n\nShadow mode: nothing waits on this verdict, so the check exits 0 whatever it is\.\n/);
+});
+
+test('--shadow gives exit 0 for verdict error, and so does a failure before a verdict', async (t) => {
+  const fixture = buildRepo(t);
+  const collectors = { 'tests-before-after': async () => { throw new Error('the test runner broke'); }, mutation: async () => ({ status: 'met' }) };
+  const code = await check(['--base', 'start', '--head', 'fix/src', '--shadow'], { env: {}, cwd: fixture.repo, stdout: { write() {} }, collectors });
+  assert.equal(code, 0);
+  assert.equal(readEvidence(fixture.repo).verdict, 'error');
+  assert.match(readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8'), /Verdict: \*\*error\*\* \(exit code 0\)\.\n\nShadow mode/);
+
+  // A commit that is not in the clone: no verdict, but the step must not fail in shadow mode,
+  // and the summary must show the error, so a broken setup is not hidden.
+  const run = exhibitCheck(fixture, ['--shadow', '--base', 'no-such-ref']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stderr, /no-such-ref is not a commit/);
+  assert.match(run.stderr, /verdict: error\nexhibit: shadow mode, so the exit code is 0\./);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+  const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+  assert.match(summary, /^# Exhibit check: Exhibit failed\n\nVerdict: \*\*error\*\* \(exit code 0\)\.\n\nShadow mode/);
+  assert.match(summary, /no-such-ref is not a commit/);
+});
+
+test('--shadow gives exit 0 for a bad argument too, and summary.md says why', (t) => {
+  const fixture = buildRepo(t);
+  const run = exhibitCheck(fixture, ['--shadow', '--pr', 'abc']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8'), /--pr must be a PR number/);
+});
+
+test('--policy reads the policy from another path, and a change to that file is a policy change', (t) => {
+  const fixture = buildRepo(t);
+  // The notes kind lives only in the other file. With evidence.yml, notes match the default.
+  mkdirSync(join(fixture.repo, 'ci'));
+  writeFileSync(join(fixture.repo, 'ci', 'policy.yml'), POLICY);
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\n');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', './ci//policy.yml']);
+  assert.equal(run.status, 0, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.equal(evidence.policy.path, 'ci/policy.yml');
+  assert.match(evidence.policy.sha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(evidence.classification.kinds, ['notes']);
+  // The policy branch changes evidence.yml, which is not the policy now.
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'policy', '--policy', 'ci/policy.yml']).status, 1);
+  assert.equal(readEvidence(fixture.repo).classification.policy_changed, false);
+  // A bad policy names the file it came from.
+  writeFileSync(join(fixture.repo, 'ci', 'policy.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+  assert.match(exhibitCheck(fixture, ['--base', 'start', '--policy', 'ci/policy.yml']).stderr, /ci\/policy\.yml kinds\.x/);
+});
+
+test('--policy must be a file in the repo', (t) => {
+  const fixture = buildRepo(t);
+  for (const value of ['../evidence.yml', '/etc/evidence.yml', '', '.', 'ci/']) {
+    const run = exhibitCheck(fixture, ['--base', 'start', `--policy=${value}`]);
+    assert.equal(run.status, 2, value);
+    assert.match(run.stderr, /--policy must be the path of a file in the repo/, value);
+  }
 });
 
 // A policy in the working tree whose notes kind needs the given probes. The notes branch has

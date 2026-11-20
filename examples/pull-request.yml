@@ -1,0 +1,95 @@
+# Exhibit on every pull request, in two jobs split by trust (docs/spec.md section 10).
+#
+# - The check job runs the PR's code, so its token can only read.
+# - The publish job has write access, so it never checks out or runs the PR's code. It runs only
+#   the released Exhibit, on the exhibit that the check job uploaded.
+#
+# Copy this file to .github/workflows/exhibit.yml, and add evidence.yml at the top of the repo
+# (docs/spec.md section 8.1). The README lists the steps.
+#
+# Both jobs pin Exhibit to one commit SHA on Exhibit's main branch, because Exhibit has no release
+# tag yet. Keep the same SHA, or a release tag, in both jobs. Never use a branch such as main: it
+# moves, so in one run the check job and the publish job could run different Exhibit code, and the
+# job with the write token would run whatever main is at that time. Never use ./ either: that is
+# the PR's own copy of the code.
+#
+# The check job runs your tests with the node on its PATH. If your tests need a certain Node, set
+# it up with actions/setup-node before the Exhibit step.
+#
+# Set enforce to the same value in both jobs. If only the check job has enforce: true, the check
+# fails, but the PR comment still says shadow mode.
+name: Exhibit
+
+# Never pull_request_target: that runs with a write token and the base repo's secrets, on a run
+# that can be made to execute code from the PR.
+on:
+  pull_request:
+
+# No job gets a permission that it does not name below.
+permissions: {}
+
+jobs:
+  check:
+    name: Exhibit check
+    runs-on: ubuntu-24.04
+    permissions:
+      # Read the code and the PR. The check runs the PR's code, so it gets nothing more. Real runs
+      # showed that this reads a PR in a public repo. In a private repo, add pull-requests: read
+      # if the check cannot read the PR.
+      contents: read
+    steps:
+      # The whole history, so the PR's base and head commits are both in the clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # GitHub gives a PR from a fork a token that cannot write, so the publish job is skipped.
+      - name: Say why the publish job is skipped
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          {
+            echo '> [!NOTE]'
+            echo '> This PR comes from a fork. GitHub gives it a token that cannot write, so the publish job is skipped: the exhibit is not stored on the data branch, and no comment is posted. The exhibit is in the workflow artifact named exhibit.'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # enforce: false is shadow mode. The step succeeds whatever the verdict, and the job summary
+      # shows the verdict. Set it to true to fail the step on needs_person and on error, and set
+      # it to the same value in the publish job.
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+        with:
+          command: check
+          enforce: false
+
+  publish:
+    name: Exhibit publish
+    needs: check
+    # After the check, even when the check step failed in enforce mode, so the comment shows why.
+    # Never for a PR from a fork.
+    if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    permissions:
+      # Push the exhibit to the data branch, exhibit-data by default. With settings.storage: local
+      # in evidence.yml, contents: read is enough.
+      contents: write
+      # Post the summary comment on the PR, or update it. Without comment: true, leave this out.
+      pull-requests: write
+    steps:
+      # The base commit, never the PR's head. Publish reads only the policy's storage settings and
+      # pushes to the data branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exhibit
+          path: .exhibit
+
+      # enforce must be the same as in the check job, so the comment says the right mode.
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+        with:
+          command: publish
+          comment: true
+          enforce: false

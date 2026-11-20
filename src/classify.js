@@ -1,7 +1,6 @@
 import { classifyFix } from './fix-signals.js';
 
 const RISKS = ['low', 'medium', 'high'];
-const POLICY_FILE = 'evidence.yml';
 
 // Works out what a change needs (spec 8.1 rules and 9.1). `policy` is what readPolicy returns.
 // `files` holds the paths the change touches. `pr` holds what is known about the PR: its title,
@@ -16,12 +15,13 @@ const POLICY_FILE = 'evidence.yml';
 // - classification.used_default: no kind matched, so default's rules apply. has_default says
 //   whether the policy has a default at all. Without one, the risk is high and nothing is needed,
 //   and the verdict code must not let that pass on its own.
-// - classification.policy_changed: the change touches evidence.yml at the top of the repo.
+// - classification.policy_changed: the change touches the policy file, `policyPath` in the repo,
+//   which is evidence.yml at the top of the repo unless --policy names another file.
 // - requirements: the union of the needs, in order: the kinds by name, then each kind's own order.
 //   A need that two kinds share is one requirement, and `kinds` names both. A failing-before
 //   whose `when` does not fit this change stays in the list with `not_needed`, the reason in
 //   words, so the exhibit can show it as skipped (spec 8.1).
-export function classifyChange(policy, files, pr) {
+export function classifyChange(policy, files, pr, policyPath = 'evidence.yml') {
   const { fix, fix_signal: fixSignal } = classifyFix(pr, policy.settings.fix_signals);
   const feature = pr.labels.some((label) => label.toLowerCase() === 'feature');
 
@@ -62,7 +62,7 @@ export function classifyChange(policy, files, pr) {
       merge_without_reading: allowed ? 'allowed' : 'never',
       used_default: usedDefault,
       has_default: policy.default !== undefined,
-      policy_changed: files.includes(POLICY_FILE)
+      policy_changed: files.includes(policyPath)
     },
     requirements
   };

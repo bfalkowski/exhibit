@@ -5,18 +5,18 @@ import { parseArgs } from 'node:util';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { COMMENT_MARKER, renderComment } from '../pr-comment.js';
-import { readPolicy } from '../policy.js';
+import { DEFAULT_POLICY, policyPath, readPolicy } from '../policy.js';
 import { DEFAULT_DATA_BRANCH, DEFAULT_LOCAL_PATH, exhibitPath, STORAGE_TARGETS, store } from '../storage.js';
 import { ToolError } from '../tool-error.js';
 
-const USAGE = 'Usage: exhibit publish --evidence FILE [--storage data-branch|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment [--enforce]] [--json]';
+const USAGE = 'Usage: exhibit publish --evidence FILE [--policy FILE] [--storage data-branch|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment] [--enforce] [--json]';
 
 // `exhibit publish --evidence FILE`
 // Stores one exhibit, the evidence.json that exhibit check wrote (spec 7 and 9.12). exhibit check
 // runs the PR's code, so it runs with a read-only token. Storing needs write access, so it is this
 // separate step, which never runs code from the PR.
 //
-// The place comes from settings.storage in evidence.yml, or from --storage: data-branch (the
+// The place comes from settings.storage in evidence.yml (or the file --policy names), or from --storage: data-branch (the
 // default) commits the file to the data branch on the remote, and local writes it to a folder.
 // Either way the file goes to prs/<number>/<head-sha>.json.
 //
@@ -26,13 +26,14 @@ const USAGE = 'Usage: exhibit publish --evidence FILE [--storage data-branch|loc
 //
 // With --comment, it then posts a short summary of the exhibit as one comment on the PR, or
 // updates the comment it posted on an earlier run (see src/pr-comment.js). Without --enforce, the
-// comment says shadow mode: nothing waits on the verdict. The exhibit is stored before the
+// comment says shadow mode: nothing waits on the verdict. Without --comment, --enforce changes
+// nothing, so the GitHub Action can pass each of its inputs on its own. The exhibit is stored before the
 // comment is posted, so a failure to post exits 2 but keeps the stored exhibit.
 export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
   const options = parseOptions(argv);
-  const { settings } = await readPolicy(cwd);
+  const { settings } = await readPolicy(cwd, options.policy);
   const storage = options.storage ?? settings.storage ?? 'data-branch';
 
   const text = await readFile(resolve(cwd, options.evidence), 'utf8').catch((error) => {
@@ -111,6 +112,7 @@ function parseOptions(argv) {
       args: argv,
       options: {
         evidence: { type: 'string' },
+        policy: { type: 'string' },
         storage: { type: 'string' },
         'data-branch': { type: 'string' },
         remote: { type: 'string' },
@@ -131,9 +133,9 @@ function parseOptions(argv) {
     if (values[name] !== undefined && (values[name] === '' || values[name].startsWith('-'))) throw new ToolError(`--${name} must be a name that does not start with "-", not "${values[name]}".`);
   }
   if (values['local-path'] === '') throw new ToolError('--local-path must not be empty.');
-  if (values.enforce && !values.comment) throw new ToolError(`--enforce only changes what the PR comment says, so give it with --comment. ${USAGE}`);
   return {
     evidence: values.evidence,
+    policy: policyPath(values.policy ?? DEFAULT_POLICY),
     storage: values.storage,
     dataBranch: values['data-branch'],
     remote: values.remote ?? 'origin',

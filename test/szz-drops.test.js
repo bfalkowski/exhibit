@@ -521,6 +521,24 @@ test('comments: a * row before a line that opens and closes its own comment coun
   assert.deepEqual(counted(result), [['a.js', [5]]]);
 });
 
+test('comments: a * row counts when the later "*/" closes a block that opened inside the hunk', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', '/* a', ' * b */'], added: [' * qty * rate;'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5]]]);
+  assert.deepEqual(dropped(result), [['a.js', 6, 'comment'], ['a.js', 7, 'comment']]);
+});
+
+test('comments: a * row before a "*/" that comes before a new "/*" is still a comment', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' */', '/* a', ' * b */'] }] }));
+  assert.deepEqual(counted(result), []);
+});
+
+test('comments: a later comment row that only names "/*" does not stop the look for the block end', () => {
+  for (const named of [" * Use '/*' to open.", '// Use /* to open.']) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', named, ' */'] }] }));
+    assert.deepEqual(counted(result), [], named);
+  }
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);

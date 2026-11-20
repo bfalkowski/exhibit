@@ -3,3 +3,10 @@
 export class ToolError extends Error {
   name = 'ToolError';
 }
+
+// The text the CLI prints for a failure, after "exhibit: ". A ToolError gives its message. Any
+// other error is a bug in Exhibit, and the text says so and gives the stack.
+export function describeError(error) {
+  if (error instanceof ToolError) return error.message;
+  return `an unexpected error, which is a bug in Exhibit:\n${error?.stack ?? error}`;
+}
