@@ -345,6 +345,14 @@ How `exhibit label` works:
 
 `exhibit backtest` writes its own report, to `.exhibit/backtest.md` and `.exhibit/backtest.html`. It never writes to `.exhibit/report.md` or `.exhibit/report.html`, so a backtest run does not change the history report. Backtest writes all its files together in the same way as history: to temporary files first, renamed only when every write worked (`writeTogether` in src/write-together.js). So a backtest run that fails on a write changes none of its files. As for history, a rename that fails after an earlier rename worked can change some of its files but not all. Section 9.9 says what the backtest report holds.
 
+The first screen of the backtest report shows the funnel (section 9.9): how many defects are left at each step, and why the others were lost.
+
+1. Fix PRs found.
+2. Fix PRs with an SZZ link.
+3. Defects with a link that a person kept.
+4. Defects named in a rule's `source`.
+5. Defects that the policy would have flagged.
+
 The history report has these parts, in this order:
 
 1. **The counts.** The number of merged PRs read, the number of fix PRs, and how many of the fix PRs SZZ linked to an introducing PR. Each fix PR with at least one link is an escaped defect. When SZZ skipped a fix PR (section 9.2), the count says so. With no fix PRs, the report says so in one sentence and has no list of defects. Outside a clone, SZZ did not run, and the report says it cannot show escaped defects.
@@ -511,13 +519,53 @@ A probe runs its command in the head worktree with a time limit. Its status come
 - False demand: a PR with no escaped defect would have been `needs_person`.
 - The report gives these counts for each kind of change, with 95% intervals. It goes to `.exhibit/backtest.md` and `.exhibit/backtest.html` (section 8.5).
 
+The report also gives four measures. Each one comes from "How the Claude Code team thinks about verification" (section 17.2).
+
+**1. False demands on size-matched clean PRs.** Here an introducing PR is a PR in the test set with a link that a person kept in `exhibit label` (section 8.4). A clean PR is a PR in the test set with no SZZ link to any fix, or whose every link a person rejected. A PR with no kept link and at least one SZZ link that nobody has labeled yet is neither: it is in no rate and starts no match, and the report gives how many such PRs there are for each kind of change. A kept link wins, so a PR with one kept link and one unlabeled link is an introducing PR. Small PRs are easy to pass, and most clean PRs are small. So a false-demand rate over all clean PRs looks better than it is. Exhibit also counts false demands on a size-matched set: the clean PRs whose size is close to the size of the introducing PRs.
+
+- The size of a PR is its changed lines: the sum of `additions` and `deletions` over its `files` in `history.jsonl` (section 8.3).
+- Exhibit makes the match inside each kind of change, because the report gives its counts for each kind. For each introducing PR in the test set that matches the kind, it takes the 3 clean PRs of that kind whose size is closest. A clean PR is taken at most once. The introducing PRs pick in order of PR number, lowest first. On a tie, it takes the PR with fewer changed files first, then the PR merged nearer in time to the introducing PR, then the lower PR number. So the same history gives the same set.
+- When a kind has fewer clean PRs than 3 for each introducing PR, the set holds all of them, and the report says so.
+- When a kind has no introducing PR in the test set, it has no size-matched set. The report shows only its rate over all clean PRs, and says why.
+- The report gives both rates for each kind, each with its n and its 95% interval: false demands over all clean PRs, and false demands over the size-matched set.
+
+Example. One kind of change has 2 introducing PRs, with 40 and 300 changed lines, and 11 clean PRs, with 2, 3, 5, 8, 35, 45, 60, 250, 280, 320 and 900 changed lines. The policy would have made a false demand on the PRs with 250 and 320 lines.
+
+| Introducing PR | Size-matched clean PRs | Distance |
+|---|---|---|
+| 40 lines | 35, 45, 60 | 5, 5, 20 |
+| 300 lines | 280, 320, 250 | 20, 20, 50 |
+
+Over all clean PRs, the false-demand rate is 2 of 11, or 18%. Over the size-matched set, it is 2 of 6, or 33%. The four PRs with fewer than 10 lines made the first rate look better.
+
+**2. Each defect, replayed.** The report lists each labeled escaped defect (section 8.4) that has a kept introducing PR in the test set. A defect with more than one kept introducing PR gets one line for each. Each line gives the defect's `id`, its `category`, the introducing PR, and the verdict that the current policy would have given that PR. When the verdict is `needs_person`, the line names each requirement that would have been missing, and says whether it is a strong catch. When the verdict is `meets_policy`, the line says "missed". When a rule leaks (the leak check above), the line gives the verdict with and without that rule.
+
+**3. The funnel.** One number from start to end hides where defects get lost. So the first screen of the backtest report shows how many defects are left at each step. Each step counts a part of the step before it, over all the history that the run read:
+
+1. Fix PRs found (section 9.1).
+2. Fix PRs with an SZZ link to an introducing PR (section 9.2).
+3. Defects with a link that a person kept in `exhibit label` (section 8.4).
+4. Defects named in a rule's `source` (section 8.1).
+5. Defects that the policy would have flagged: the policy gives `needs_person` to at least one of the defect's kept introducing PRs.
+
+Beside each step, the report gives how many were lost since the step before, and why, in plain words. For example: "4 fix PRs had no SZZ link", "2 defects are not labeled yet, and 1 had every link rejected", "3 defects are in no rule". Step 5 shows whether a rule still flags the bug it came from. It is not a test of the policy, because the rule learned from those defects. The test is the caught and missed counts on the test set, above.
+
+Example: 30 fix PRs, 22 with an SZZ link, 15 with a kept link, 9 in a rule's `source`, 8 flagged.
+
+**4. Rules that do not pay.** Rules only grow if nobody removes them. So for each kind of change, the report gives two counts on the test set:
+
+- Caught: the defects whose kept introducing PR matches the kind, and would have been `needs_person` because a requirement of this kind was missing. A defect in the kind's own `source` does not count, because that is a leak.
+- False demands: the clean PRs that match the kind, and would have been `needs_person` because a requirement of this kind was missing.
+
+A kind with 0 caught and at least 1 false demand is marked "does not pay", with both counts and the number of test-set defects that matched the kind. With 0 matching defects, the kind had no chance to catch one, and the report says so. `default` gets the same counts. A person reads the mark and decides whether to remove the kind from `evidence.yml`, or to change its `needs`. Exhibit never removes or changes a rule itself.
+
 ### 9.10 Numbers for the trust ladder
 
 For each kind of change, Exhibit reports:
 - The number of PRs.
 - Policy misses.
 - The upper bound of the miss rate: 3/n when there are zero misses, and a Clopper-Pearson bound otherwise.
-- The false-demand rate.
+- The false-demand rate over the size-matched set of clean PRs (section 9.9), with its n. Small PRs are easy to pass, so this is the rate that a rung uses. Next to it, the rate over all clean PRs, with its n. When a kind has no size-matched set, only the second rate is shown, and the report says why.
 - Results from the blind sample, when the person has recorded them.
 
 Exhibit only reports these numbers. It never changes a rung.
@@ -626,7 +674,7 @@ On GitHub, the history methods (`mergedPulls`, `pullFiles`, `pullReviews`, `pull
 Exhibit is built by an office room (Room C), and two other rooms use it on their own repos: the Building58 room on Building58, and Room B on edd-platform.
 
 - **Users install published releases only.** They never run Exhibit from its source. A setup note for each repo gives the workflow to add, a first `evidence.yml` and the token permissions: [Building58](../examples/building58/README.md) and [edd-platform](../examples/edd-platform/README.md). Each note's workflow pins a release, and `test/action.test.js` checks it the same way as `examples/pull-request.yml`. The rooms that own the repos open their own PRs from the notes.
-- **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that.
+- **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that. The first runs and their numbers are in [field/phase-a-history.md](field/phase-a-history.md).
 - **Phase B: shadow mode.** The Action runs on every PR in both repos with `enforce: false`. The session briefs add one step: run `exhibit check` before you open a PR.
 - **Phase C: compare.** Room B sets `enforce: true` while Building58 stays in shadow mode. Compare tokens per merged PR, review rounds and stuck runs between the two rooms.
 - **Planted faults.** A hidden job opens PRs on a sandbox branch. Each one has a planted bug that the tests miss. They are labeled `exhibit-canary`, closed automatically, and never merged. Exhibit must give `needs_person` on each one.
@@ -708,6 +756,7 @@ No work found so far does the whole loop: learn a policy from one repo's escaped
 |---|---|---|
 | [Reading evidence instead of code](https://developertoolkit.ai/en/ladder/evidence-not-diffs/), Autonomy Ladder guide, 2026 | Read four things in place of the diff: the spec delta, the acceptance results, oracle strength and runtime signals. Run mutation testing on changed files with Stryker or mutmut. Ask whether the decisive check existed before the change. Keep a trust log that moves classes of change up or down. | The ideas are very close to Exhibit's. The guide gives them as prompts and a log kept by hand. Exhibit makes them a CLI with a policy file, a backtest and numbers. |
 | [Make Every PR Prove Itself](https://builders.abnormal.ai/p/make-every-pr-prove-itself), Abnormal, 2026 | Each agent PR shows evidence from a near-production test environment, such as real API responses and screenshots. Misses that become incidents are written back into the checks. | Reviewers still review each PR. The checks are not measured. |
+| [How the Claude Code team thinks about verification](https://claude.dev/blog/how-the-claude-code-team-thinks-about-verification/), Anthropic, 2026 | Measures bug finders on real changes. When the team reviews its reviewers, it tracks how they do on "a size-matched subset of changes that have stayed clean". It replays bug finders on PRs tied to known incidents. It measures "the recall rate for raw findings, post-verification, and final review separately", so a bug that is found and then lost shows up. It tidies checks on a routine, because they "only grow if you let them". | Backtest takes four measures from it (section 9.9): false demands on size-matched clean PRs, each defect replayed at its introducing PR, the funnel, and rules that do not pay. Exhibit learns its rules from SZZ-traced defects, and a person removes a rule, never Exhibit. |
 | Lauren Tan's trust ladder, in [a talk with Matt Pocock](https://www.youtube.com/watch?v=MN9dGgmLyso) | Give agents more as verification earns trust. Near the top, agents merge their own PRs and a person samples them after they land. | Exhibit gives the numbers for each step, for one kind of change at a time. |
 
 ### 17.3 Prior work for each part
