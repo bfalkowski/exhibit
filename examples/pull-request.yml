@@ -9,8 +9,8 @@
 #
 # Both jobs pin Exhibit to the release v0.1.0. Keep the same release in both jobs. Never use a
 # branch such as main, or the major tag v0: they move, so in one run the check job and the publish
-# job could run different Exhibit code, and the job with the write token would run whatever main
-# is at that time. Never use ./ either: that is the PR's own copy of the code.
+# job could run different Exhibit code, and the job with the write token would run whatever that
+# branch or tag points to at that time. Never use ./ either: that is the PR's own copy of the code.
 #
 # The check job runs your tests with the node on its PATH. If your tests need a certain Node, set
 # it up with actions/setup-node before the Exhibit step.
