@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { REVERT_SIGNAL } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
-import { cacheFolder, createReplyCache } from '../github-cache.js';
+import { cacheFolder, createReplyCache, removeOldEntries } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { JIRA_TRACKER } from '../jira.js';
 import { checkHistoryLine } from '../history-schema.js';
@@ -33,6 +33,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
 // REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
 // many points they used. A run that fails says it too, on stderr.
+// At the end, also after a run that fails, it removes the cache entries that no run has used for
+// 30 days (spec 8.6).
 // With tracker:jira in the fix signals, it asks Jira about each PR's ticket (spec 9.1), with the
 // token in JIRA_API_TOKEN, and says how many Jira requests it made. With no token, the signal
 // matches no PR, the run still succeeds, and it says so in one line on stderr.
@@ -67,6 +69,9 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     }
     if (tracker && tracker.counts().requests > 0) stderr.write(`exhibit: note: this run made ${plural(tracker.counts().requests, 'Jira request')}.\n`);
     throw error;
+  } finally {
+    // After the run, so the entries this run read have a new file time and stay (spec 8.6).
+    if (folder) await removeOldEntries(folder);
   }
 }
 
