@@ -3,14 +3,18 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
-import { buildExhibit, EXIT_CODES, renderSummary } from '../check.js';
+import { buildExhibit, COLLECTORS, EXIT_CODES, renderSummary } from '../check.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { readPolicy } from '../policy.js';
+import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
 import { ToolError } from '../tool-error.js';
+import { worktreeOnDemand } from '../worktree.js';
 
 const run = promisify(execFile);
 const OUTPUT = { evidence: '.exhibit/evidence.json', summary: '.exhibit/summary.md' };
+// The folder for each probe's output and artifacts (spec 9.6).
+const PROBES = '.exhibit/probes';
 const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] [--json], or exhibit check --pr N --repo owner/name [--json]';
 
 // `exhibit check --base REF [--head REF]`, or `exhibit check --pr N --repo owner/name`
@@ -22,12 +26,12 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, labels
 // and branch for the fix signals. Without it, only the local branch name is known.
 //
-// It removes the old evidence.json and summary.md first. So when the run fails before it can
-// write them, no old file is left to be read as this run's verdict.
+// It removes the old evidence.json, summary.md and probe files first. So when the run fails before
+// it can write them, no old file is left to be read as this run's verdict.
 // Any failure that is not a verdict throws. The CLI then prints it and exits 2.
 export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   // Remove the old files before anything can fail, a bad argument too.
-  await Promise.all(Object.values(OUTPUT).map((file) => rm(join(cwd, file), { force: true })));
+  await Promise.all([...Object.values(OUTPUT), PROBES].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
   const options = parseOptions(argv, forgeModule);
@@ -56,7 +60,16 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   const head = await commitSha(cwd, refs.head, refs.hint);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
 
-  const exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors });
+  // The head worktree for probes is made only when a probe asks for it, and removed at the end.
+  const headWorktree = worktreeOnDemand(cwd, head);
+  let exhibit;
+  try {
+    const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
+    const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
+  } finally {
+    await headWorktree.remove();
+  }
   const problems = checkExhibit(exhibit);
   if (problems.length > 0) throw new ToolError(`the exhibit does not fit its schema, so ${OUTPUT.evidence} was not written:\n  ${problems.join('\n  ')}\nReport this as an Exhibit issue.`);
 
@@ -73,6 +86,33 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
     stdout.write(`Verdict: ${exhibit.verdict}. ${gaps}\nWrote ${OUTPUT.evidence} and ${OUTPUT.summary}.\n`);
   }
   return code;
+}
+
+// The collector for probe requirements. Each probe runs in the head worktree, made clean again
+// before each probe, so no probe sees the files of the one before it. Each keeps its files in its
+// own folder under .exhibit/probes, named after the probe.
+function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
+  const used = new Set();
+  return async (requirement) => {
+    const folder = folderName(requirement.params.name, used);
+    const outPath = `${PROBES}/${folder}`;
+    return runProbe(
+      { ...requirement.params, hidden: requirement.author === 'hidden' },
+      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds }
+    );
+  };
+}
+
+// A folder name from a probe name: letters, digits, dot, dash and underscore only, never "." or
+// "..", and not one that an earlier probe in this run took. Case does not count, because on
+// macOS a folder named A is the same folder as a.
+function folderName(name, used) {
+  let base = name.replace(/[^A-Za-z0-9._-]/g, '-');
+  if (/^\.*$/.test(base)) base = `probe${base}`;
+  let folder = base;
+  for (let i = 2; used.has(folder.toLowerCase()); i += 1) folder = `${base}-${i}`;
+  used.add(folder.toLowerCase());
+  return folder;
 }
 
 // The branch name for the fix signals, when only git is known: the --head ref when it names a

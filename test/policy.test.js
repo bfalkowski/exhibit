@@ -162,6 +162,8 @@ test('readPolicy accepts title_after_key: like the other types', async (t) => {
 test('readPolicy now checks the rest of the file too, not only fix_signals', async (t) => {
   await refuses(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n', /^evidence\.yml version must be 3, not "banana"\.$/);
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\n  mutation_budget_seconds: soon\n', /^evidence\.yml settings\.mutation_budget_seconds must be integer, not string\.$/);
+  // setTimeout cannot wait longer than about 24.8 days, so the limit is one day.
+  await refuses(t, 'settings:\n  probe_timeout_seconds: 86401\n', /^evidence\.yml settings\.probe_timeout_seconds must be at most 86400\.$/);
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\nkinds: 7\n', /^evidence\.yml kinds must be object or null, not integer\.$/);
 });
 
