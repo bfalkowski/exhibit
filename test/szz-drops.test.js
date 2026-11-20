@@ -423,6 +423,38 @@ test('comments: a trailing comment pairs only with a line in the same hunk', () 
   assert.deepEqual(counted(result), [['a.js', [1]]]);
 });
 
+test('comments: a // in JSX text before a closing tag is text, not a comment', () => {
+  // "// 10 USD</p>" ends with a closing tag, so it is the text of the element.
+  const result = countedLines(diff(
+    { path: 'a.jsx', hunks: [{ at: 3, deleted: ['  <p>Price // 10 USD</p>'], added: ['  <p>Price // 20 USD</p>'] }] },
+    { path: 'b.tsx', hunks: [{ at: 8, deleted: ['  <b>a // b</b> // old note'], added: ['  <b>a // b</b> // new note'] }] }
+  ));
+  assert.deepEqual(counted(result), [['a.jsx', [3]]]);
+  assert.deepEqual(dropped(result), [['b.tsx', 8, 'comment']]);
+});
+
+test('comments: a quote inside a regex literal does not hide the comment after it', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{
+    at: 1,
+    deleted: ["r = /'/; // n", 's = x.split(/"/) // why', 'q = a / b; // c', "t = /'/;"],
+    added: ["r = /'/;", 's = x.split(/"/)', 'q = a / b;', 't = /"/;']
+  }] }));
+  assert.deepEqual(dropped(result), [['a.js', 1, 'comment'], ['a.js', 2, 'comment'], ['a.js', 3, 'comment']]);
+  assert.deepEqual(counted(result), [['a.js', [4]]]);
+});
+
+test('comments: a rename that changes the language reads each side with its own comments', () => {
+  // The old line is Python and the new line is JavaScript, so "// why" is a comment only on
+  // the new side, and "# old" only on the old side, so "# new" is code.
+  const result = countedLines(diff({ path: 'new.js', from: 'old.py', hunks: [{
+    at: 1,
+    deleted: ['x = 1', 'y = 2  # old'],
+    added: ['x = 1  // why', 'y = 2  # new']
+  }] }));
+  assert.deepEqual(dropped(result), [['old.py', 1, 'comment']]);
+  assert.deepEqual(counted(result), [['old.py', [2]]]);
+});
+
 // The whole files before and after the fix, as SZZ reads them at blamed_commit and merge_sha.
 const files = (before, after) => ({ before: new Map(Object.entries(before)), after: new Map(Object.entries(after)) });
 
