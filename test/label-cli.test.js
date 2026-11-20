@@ -32,7 +32,13 @@ function withHistory(t, text) {
 }
 
 // Runs `exhibit label ...args` in `cwd`, with `input` as the typed answers.
-const label = (cwd, args = [], input = '') => spawnSync(process.execPath, [bin, 'label', ...args], { cwd, input, encoding: 'utf8' });
+// The environment has no ANTHROPIC_API_KEY unless `env` gives one.
+const label = (cwd, args = [], input = '', env = {}) => {
+  const base = { ...process.env };
+  delete base.ANTHROPIC_API_KEY;
+  delete base.EXHIBIT_CLAUDE_MODEL;
+  return spawnSync(process.execPath, [bin, 'label', ...args], { cwd, input, encoding: 'utf8', env: { ...base, ...env } });
+};
 const readLabels = (cwd) => readFileSync(join(cwd, '.exhibit', 'labels.jsonl'), 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('label with no history file exits 2 and says to run exhibit history first', (t) => {
@@ -146,7 +152,59 @@ test('after exhibit history runs again on the fixture repo, a labeled defect kee
 });
 
 test('label refuses an unknown option with exit 2', (t) => {
-  const run = label(newFolder(t), ['--claude']);
+  const run = label(newFolder(t), ['--nope']);
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /Usage: exhibit label \[--json\]/);
+  assert.match(run.stderr, /Usage: exhibit label \[--json\] \[--claude\]/);
+});
+
+test('--claude with no ANTHROPIC_API_KEY exits 2 before it shows anything', (t) => {
+  const cwd = withHistory(t, shopText());
+  const run = label(cwd, ['--claude'], 'k\n');
+  assert.equal(run.status, 2);
+  assert.equal(run.stdout, '');
+  assert.equal(run.stderr, 'exhibit: exhibit label --claude needs ANTHROPIC_API_KEY. Set it, or run exhibit label without --claude.\n');
+  assert.equal(existsSync(join(cwd, '.exhibit', 'labels.jsonl')), false);
+});
+
+test('without --claude, label needs no ANTHROPIC_API_KEY', (t) => {
+  const cwd = withHistory(t, shopText());
+  const run = label(cwd, [], 'k\nk\nA code\na category\nA test\nq\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by]), [['D-012', 'person']]);
+});
+
+// Runs exhibit label --claude with the recorded Anthropic reply in test/fixtures/anthropic/draft.json.
+const anthropicFixture = fileURLToPath(new URL('./fixtures/anthropic/draft.json', import.meta.url));
+const labelWithClaude = (cwd, input) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude'], {
+  cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: anthropicFixture }
+});
+
+test('--claude shows a marked draft: the person confirms one and edits another', (t) => {
+  const cwd = withHistory(t, shopText());
+  // D-012: keep both links, confirm the draft. D-007: keep both links, edit the draft's code and
+  // keep its category with an empty answer. Then quit at D-006 with its draft on screen.
+  const typed = ['k', 'k', 'c', 'A test that buys 3 of one item', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', 'k', 'q'].join('\n') + '\n';
+  const run = labelWithClaude(cwd, typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /^exhibit label --claude sends each defect's fix PR title and body, its changed lines, and what git blame says about them \(commit, author and message, and the titles of the linked PRs\) to Anthropic's API\./);
+  assert.match(run.stdout, /Claude's draft, not saved yet:\n {2}Code: Count ignored the quantity\n {2}Category: arithmetic\n/);
+  const lines = readLabels(cwd);
+  assert.deepEqual(lines.map((l) => [l.id, l.labeled_by, l.code, l.category, l.claude_draft.code]), [
+    ['D-012', 'claude_draft_confirmed', 'Count ignored the quantity', 'arithmetic', 'Count ignored the quantity'],
+    ['D-007', 'claude_draft_edited', 'Discount and tax used the wrong base', 'arithmetic', 'Count ignored the quantity']
+  ]);
+  for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
+
+  // The note about what is sent shows only the first time in a repo.
+  const again = labelWithClaude(cwd, 'q\n');
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /sends each defect/);
+});
+
+test('--claude: t throws the draft away and the person types their own', (t) => {
+  const cwd = withHistory(t, shopText());
+  const run = labelWithClaude(cwd, ['k', 'k', 't', 'Stock check ran before the count', 'state', 'A test that sells the last item', 'q'].join('\n') + '\n');
+  assert.equal(run.status, 0, run.stderr);
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.labeled_by, line.code, line.category, line.claude_draft.code], ['person', 'Stock check ran before the count', 'state', 'Count ignored the quantity']);
 });

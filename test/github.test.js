@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGitHub, createGitHubForge } from '../src/github.js';
+import { fileURLToPath } from 'node:url';
+import { createGitHub, createGitHubForge, GITHUB_FORGE } from '../src/github.js';
 import { ToolError } from '../src/tool-error.js';
+import { replayFetch } from '../test-support/replay-fetch.js';
 
 // A fetch that gives the replies in order, and a sleep that records how long it was asked to wait.
 function scripted(replies) {
@@ -181,14 +183,23 @@ test('only secondary-limit waits count toward the longer wait', async () => {
   assert.deepEqual(s.waits, [5_000, 60_000]);
 });
 
-const widgets = async () => {
-  const { fileURLToPath } = await import('node:url');
-  const { replayFetch } = await import('../test-support/replay-fetch.js');
-  return replayFetch(fileURLToPath(new URL('./fixtures/github/acme-widgets.json', import.meta.url)));
-};
+const widgets = () => replayFetch(fileURLToPath(new URL('./fixtures/github/acme-widgets.json', import.meta.url)));
+
+test('the GitHub forge module holds its static rules: the repo name check, the token and how to connect', () => {
+  assert.equal(GITHUB_FORGE.name, 'github');
+  assert.equal(GITHUB_FORGE.displayName, 'GitHub');
+  assert.equal(GITHUB_FORGE.tokenEnv, 'GITHUB_TOKEN');
+  assert.equal(GITHUB_FORGE.tokenExample, 'GITHUB_TOKEN=$(gh auth token)');
+  assert.equal(GITHUB_FORGE.isRepoName('bfalkowski/Building58'), true);
+  assert.equal(GITHUB_FORGE.isRepoName('not a repo'), false);
+  const forge = GITHUB_FORGE.connect({ repo: 'acme/widgets', token: 't', fetch: widgets() });
+  assert.equal(forge.name, 'github');
+  assert.equal(forge.displayName, 'GitHub');
+  assert.equal(forge.repo, 'acme/widgets');
+});
 
 test('the GitHub forge gives CI results in one shape: check runs first, then commit statuses, each with a URL', async () => {
-  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: await widgets() });
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: widgets() });
   await forge.mergedPulls();
   assert.deepEqual(await forge.ciResults('c'.repeat(39) + '4'), [
     { name: 'test', conclusion: 'success', url: 'https://github.com/acme/widgets/runs/41' },
@@ -256,7 +267,7 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
 });
 
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {
-  const fetch = await widgets();
+  const fetch = widgets();
   const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
   await forge.mergedPulls();
   // The fixture has 2 items on a page. PR 7 has 3 files, 4 reviews, 4 comments and 3 check runs.
