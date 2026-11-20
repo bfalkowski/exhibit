@@ -1,0 +1,63 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "f69c1b452930c5cc6454f99a03c8a0c226b763ecb3f0aca13d692286e8c1f5bc"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 252,
+  "base": "79c8e7b6a4773a1b1b8705bedbd2ff0af7d220bd",
+  "head": "4ba84331c0d841ea0a35156956c9584306a8205c",
+  "classification": {
+    "kinds": [
+      "tooling"
+    ],
+    "risk": "medium",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "tooling"
+      ],
+      "status": "met",
+      "details": {
+        "base": {
+          "passed": 601,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 605,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": []
+      },
+      "author": "builder",
+      "duration_ms": 83190
+    }
+  ],
+  "verdict": "meets_policy",
+  "gaps": [],
+  "checks_by_author": {
+    "builder": 1,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-20T21:37:59.961Z"
+}
