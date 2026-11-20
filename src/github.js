@@ -185,7 +185,7 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
     const url = API + path;
     const init = { method, headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify(body) };
     const { response, limited } = await withWaits(() => send(url, init, 'requests'));
-    if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
+    if (!response.ok) throw await apiError(response, url, permission, limited);
     const reply = await jsonOf(response);
     if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) throw notShaped(url, 'a JSON object');
     return reply;
