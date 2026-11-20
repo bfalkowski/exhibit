@@ -1,0 +1,41 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": null
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 210,
+  "base": "ce127666603d5936a08b4b753f9e6b0adeff7153",
+  "head": "e21bbb682e9caeff06b945cfad9e81d3ed158e1a",
+  "classification": {
+    "kinds": [],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": true,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "no-rule",
+      "status": "missing",
+      "how_to_fix": "No kind in evidence.yml matches the changed files, and evidence.yml has no default, so the policy says nothing about this change. Add a default, or a kind that matches these files, or ask a person to review it."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 0,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "26.x",
+    "os": "darwin"
+  },
+  "created_at": "2026-11-20T16:20:02.655Z"
+}
