@@ -180,7 +180,8 @@ test('the test fetches throw on a request to the fork, and only to the fork', as
     });
     await t.test(`${name}: a repo whose name only starts with the fork's name gets no fork error`, async () => {
       const outcome = await fetch('https://api.github.com/repos/dee/shopping').then((reply) => `answered ${reply.status}`, String);
-      assert.doesNotMatch(outcome, forkError);
+      // Look for the fork message alone, without the path, so any fork error fails this check.
+      assert.doesNotMatch(outcome, /asked a fork's repo/);
     });
   }
 });
