@@ -44,8 +44,8 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // request for a URL that has an entry sends If-None-Match, and a 304 reply gives the saved body.
 // A 200 reply with an ETag replaces the entry. GitHub's ETag covers the body only, not the Link
 // header, so after a full page from the cache with no next page, the client asks for the next page
-// number too (see `get`). GraphQL
-// queries are POST requests, which have no ETag, so they never use the cache.
+// number too (see `get`).
+// GraphQL queries are POST requests, which have no ETag, so they never use the cache.
 // `counts()` returns how many REST requests went to GitHub, how many of them got a 304, how many
 // GraphQL queries went, and how many GraphQL points they used.
 export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {

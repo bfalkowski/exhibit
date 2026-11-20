@@ -236,6 +236,20 @@ test('a run that only reads, where every request gets a 304, still narrows the f
   assert.equal(statSync(dir).mode & 0o777, 0o700);
 });
 
+test('a folder that cannot be made does not stop a run, and the next read makes it again', { skip: process.platform === 'win32' }, async () => {
+  const dir = join(newFolder(), 'github');
+  writeFileSync(dir, 'a plain file where the folder should be');
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  const one = client(github.fetch, dir);
+  assert.deepEqual(await one.getOne('/repos/o/r'), { default_branch: 'main' });
+  assert.ok(statSync(dir).isFile(), 'the folder could not be made');
+
+  rmSync(dir);
+  assert.deepEqual(await one.getOne('/repos/o/r'), { default_branch: 'main' });
+  assert.ok(statSync(dir).isDirectory());
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+});
+
 test('a request that never reached GitHub is not counted', async () => {
   const github = createGitHub({ token: TOKEN, fetch: async () => { throw new Error('offline'); } });
   await assert.rejects(github.getOne('/repos/o/r'), /could not reach GitHub/);
