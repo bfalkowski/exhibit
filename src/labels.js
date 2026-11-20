@@ -40,8 +40,8 @@ export function checkLabelLine(line) {
  *
  * `ask(defect, { categories, text, position, open })` is the answer source: a person at a
  * keyboard, or a script in a test. `defect` has `id`, `fix_pr`, `introducing_prs` and `links`,
- * which holds `pr` and `confidence` for each SZZ link. `text` shows the defect with its SZZ
- * evidence. `categories` are the categories used so far. It returns
+ * which holds `pr` and `confidence` for each SZZ link, and `found_by: 'revert'` for a link that
+ * SZZ found from a revert with no blame. `text` shows the defect with its SZZ evidence. `categories` are the categories used so far. It returns
  * { code, category, would_have_caught, rejected_prs }, or 'skip', or 'quit'. `rejected_prs` names
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
@@ -61,7 +61,7 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
   const categories = [...new Set(labels.map((label) => label.category))];
-  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence }) => ({ pr, confidence })), fix }));
+  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence, found_by: foundBy }) => ({ pr, confidence, ...(foundBy ? { found_by: foundBy } : {}) })), fix }));
   const open = defects.filter((defect) => !done.has(defect.id));
 
   let shown = 0;

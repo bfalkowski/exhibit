@@ -168,6 +168,14 @@ test('readPolicy accepts title_after_key: like the other types', async (t) => {
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
 });
 
+test('readPolicy accepts revert, a signal with no value, and refuses it with a value', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, revert]\n');
+  assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'revert']);
+  for (const text of ['settings:\n  fix_signals: ["revert:pr"]\n', 'settings:\n  fix_signals: [Revert]\n']) {
+    await assert.rejects(readPolicy(folderWith(t, text)), (error) => error instanceof ToolError && /or be the word revert\./.test(error.message), text);
+  }
+});
+
 test('readPolicy now checks the rest of the file too, not only fix_signals', async (t) => {
   await refuses(t, 'version: banana\nsettings:\n  fix_signals:\n    - branch:bugfix/\n', /^evidence\.yml version must be 3, not "banana"\.$/);
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\n  mutation_budget_seconds: soon\n', /^evidence\.yml settings\.mutation_budget_seconds must be integer, not string\.$/);

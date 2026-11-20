@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isRevert, REVERT_SIGNAL, revertedWork } from './fix-signals.js';
 import { GitHubReplyError } from './github.js';
 
 const run = promisify(execFile);
@@ -99,7 +100,8 @@ async function askForge(forge, sha, defaultBranch) {
   return (merged.find((pr) => pr.baseRef === main) ?? merged[0]).number;
 }
 
-// Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A PR that is
+// Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A fix that the
+// revert signal marked links the PRs it reverts, with no blame (revertLinks). A PR that is
 // not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
 // the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
 // warning first, because blame there can give old lines to the shallow boundary commit.
@@ -108,6 +110,7 @@ async function askForge(forge, sha, defaultBranch) {
 // incremental run passes the whole file there, and only the lines SZZ must run on as `lines`.
 export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines }) {
   const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
+  const knownPrs = new Map(known.map((line) => [line.number, line]));
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -117,14 +120,17 @@ export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines
       out.push({ ...line, szz: null });
       continue;
     }
-    if (!(await hasCommit(dir, line.merge_sha))) {
+    const revert = line.classification.fix_signal === REVERT_SIGNAL;
+    if (!revert && !(await hasCommit(dir, line.merge_sha))) {
       warn(`PR ${line.number}: SZZ skipped, because its merge commit ${line.merge_sha} is not in this clone. Run git fetch, then run history again.`);
       out.push({ ...line, szz: null });
       continue;
     }
     try {
-      const reportedAt = await bugReportDate(line, forge);
-      out.push({ ...line, szz: await szzForFix(dir, line, findPr, reportedAt) });
+      const szz = revert
+        ? await revertLinks(dir, line, { findPr, forge, knownPrs })
+        : await szzForFix(dir, line, findPr, await bugReportDate(line, forge));
+      out.push({ ...line, szz });
     } catch (error) {
       if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
@@ -214,6 +220,55 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
     dropped_lines: droppedLines,
     no_link_reason: kept.length === 0 ? noLinkReason(droppedLines) : null
   };
+}
+
+// The no_link_reason of a revert for which SZZ found no PR in this repo: the body named none,
+// named only PRs in other repos, or named work that neither the history nor the forge knows.
+export const REVERT_NOT_FOUND = 'reverted change not found';
+// The no_link_reason of a revert whose every found PR is itself a revert. It puts work back (a
+// re-land), so the PR it takes back did not bring a bug.
+export const REVERTS_A_REVERT = 'reverts a revert';
+
+// A revert names the work it reverts, so SZZ blames no line: it links each reverted PR straight
+// away, marked as found by revert. The PRs share the confidence evenly. A PR the body names is
+// linked when the history holds it, or when the forge says it is a PR. A commit maps to its PR as
+// a blamed commit does (createPrFinder). A revert of a PR in another repo links nothing here.
+// A found PR whose history line is itself a revert is not linked: a re-land with an edited
+// title, such as "Reland: add cache", still takes back a revert, not a bug.
+async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
+  const { prs, commits } = revertedWork(fix.body, forge.repo);
+  const found = new Set();
+  for (const number of prs) {
+    if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
+  }
+  for (const sha of commits) {
+    const full = await fullSha(dir, sha);
+    const pr = full === null ? null : await findPr(full);
+    if (pr !== null) found.add(pr);
+  }
+  found.delete(fix.number);
+  const reverts = [...found].filter((number) => knownPrs.has(number) && isRevert({ ...knownPrs.get(number), repo: forge.repo }));
+  for (const number of reverts) found.delete(number);
+  const linked = [...found].sort((a, b) => a - b);
+  return {
+    blamed_commit: null,
+    links: linked.map((pr) => ({ pr, confidence: 1 / linked.length, found_by: 'revert', lines: [] })),
+    unlinked_lines: [],
+    dropped_lines: [],
+    no_link_reason: linked.length > 0 ? null : reverts.length > 0 ? REVERTS_A_REVERT : REVERT_NOT_FOUND
+  };
+}
+
+// git revert writes the whole SHA, but a person can shorten it. A short SHA is looked up in the
+// clone. null when the clone does not hold it.
+async function fullSha(dir, sha) {
+  if (sha.length === 40) return sha;
+  try {
+    return (await git(dir, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`])).trim();
+  } catch (error) {
+    if (error instanceof GitError) return null;
+    throw error;
+  }
 }
 
 // Reads the whole text of each JavaScript, TypeScript and Python file that the diff changes, at

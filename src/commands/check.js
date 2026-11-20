@@ -23,8 +23,8 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // It returns the exit code: 0 for meets_policy, 1 for needs_person, 2 for error.
 //
 // The changed paths come from git, from the merge base of base and head to head, so both commits
-// must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, labels
-// and branch for the fix signals. Without it, only the local branch name is known.
+// must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, body,
+// labels and branch for the fix signals. Without it, only the local branch name is known.
 //
 // It removes the old evidence.json, summary.md and probe files first. So when the run fails before
 // it can write them, no old file is left to be read as this run's verdict.
@@ -48,7 +48,7 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
     refs = {
       base: pull.baseSha,
       head: pull.headSha,
-      pr: { title: pull.title ?? '', labels: pull.labels, branch: pull.headRef ?? '' },
+      pr: { title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
       hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
     };

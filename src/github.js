@@ -4,7 +4,7 @@ const API = 'https://api.github.com';
 const GRAPHQL = `${API}/graphql`;
 
 // The token permissions that Exhibit's requests need (spec 8.3). Pass one as `permission`.
-const PERMISSIONS = {
+export const PERMISSIONS = {
   pullRequests: 'Pull requests: read',
   pullRequestsWrite: 'Pull requests: write',
   checks: 'Checks: read',
@@ -114,11 +114,12 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
 
   // Sends one GET, waits and asks again when GitHub says to, and returns the parsed JSON reply
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
-  // A reply that is still a rate limit when the waits end does not blame a missing permission.
+  // A reply that is still a rate limit when the waits end says so, and does not blame a missing
+  // permission.
   async function getJson(url, emptyOn = [], permission, useSaved = true) {
     const { response, limited } = await withWaits(() => request(url, useSaved));
     if (emptyOn.includes(response.status)) return { reply: [], response };
-    if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
+    if (!response.ok) throw await apiError(response, url, permission, limited);
     try {
       return { reply: await response.json(), response };
     } catch {
@@ -168,7 +169,7 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
   async function graphql(query, variables, { permission } = {}) {
     const init = { method: 'POST', headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) };
     const { response, limited } = await withWaits(() => send(GRAPHQL, init, 'queries'), async (reply) => reply.ok && graphqlRateLimited(await jsonOf(reply.clone())));
-    if (!response.ok) throw await apiError(response, GRAPHQL, limited ? undefined : permission);
+    if (!response.ok) throw await apiError(response, GRAPHQL, permission, limited);
     const reply = await jsonOf(response);
     const cost = reply?.data?.rateLimit?.cost;
     if (Number.isInteger(cost)) counts.points += cost;
@@ -223,7 +224,8 @@ function notShaped(url, shape) {
 }
 
 // Returns how long GitHub asks us to wait before we ask again, or null when the reply is not a
-// rate limit. `ms` is the wait in milliseconds, and `secondary` is true for a secondary limit. GitHub says to wait in one of three ways:
+// rate limit. `ms` is the wait in milliseconds, and `secondary` is true for a secondary limit.
+// GitHub says to wait in one of three ways:
 // - a retry-after header, in whole seconds or as an HTTP date. Any other value counts as no
 //   retry-after: Date.parse reads "1.5" as a date in 2001, which would mean no wait at all;
 // - no requests left until the x-ratelimit-reset time (in Unix seconds);
@@ -286,18 +288,20 @@ export class GitHubReplyError extends ToolError {
   }
 }
 
-async function apiError(response, url, permission) {
+// `limited` is true when the reply is still a rate limit after the waits.
+async function apiError(response, url, permission, limited = false) {
   const detail = await messageOf(response);
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
-  return new GitHubReplyError(`${what}.${advice(response.status, permission)}`, response.status);
+  return new GitHubReplyError(`${what}.${advice(response.status, permission, limited)}`, response.status);
 }
 
-// `permission` is one permission, or a list of them.
-function advice(status, permission) {
+// `permission` is one permission, or a list of them. `limited` is true for a known rate limit.
+function advice(status, permission, limited = false) {
   if (status === 401) return ' GITHUB_TOKEN was refused: make a new token and set it.';
-  if (status === 403 || status === 429) {
-    // A 429 is always a rate limit, so only a 403 can mean a missing permission.
-    const needs = permission && status === 403 ? ` A fine-grained GITHUB_TOKEN needs ${permissionWords(permission)} for this request.` : '';
+  // A 429 is always a rate limit. A 403 is one only when the waits said so.
+  if (status === 429 || (status === 403 && limited)) return " GitHub's rate limit is used up: wait and try again.";
+  if (status === 403) {
+    const needs = permission ? ` A fine-grained GITHUB_TOKEN needs ${permissionWords(permission)} for this request.` : '';
     return ` The token may lack access, or the rate limit is used up: check the token, or wait and try again.${needs}`;
   }
   if (status === 404) return ' Check the repo name, and that GITHUB_TOKEN can read that repo.';
