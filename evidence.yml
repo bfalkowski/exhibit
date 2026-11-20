@@ -29,12 +29,13 @@ kinds:
     needs:
       - tests-before-after
 
-  # The docs a person reads. The probe finds links to files that are not there.
+  # The docs a person reads, with the setup notes in examples. The probe finds links to files
+  # that are not there. An example README is also tooling, because it is in examples.
   docs:
-    match: ["README.md", "CLAUDE.md", "docs/**"]
+    match: ["README.md", "CLAUDE.md", "docs/**", "examples/**/*.md"]
     risk: low
     needs:
-      - probe: { name: links, run: "node scripts/check-links.js README.md CLAUDE.md docs" }
+      - probe: { name: links, run: "node scripts/check-links.js README.md CLAUDE.md docs examples" }
 
 # Any other file, such as .gitignore or LICENSE.
 default:
