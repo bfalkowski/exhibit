@@ -146,6 +146,20 @@ test('moved: when lines with words move inside one file, a moved "}" next to the
   assert.deepEqual(dropped(result), [['a.js', 11, 'moved']]);
 });
 
+test('moved: a comment line that moves inside its hunk stays dropped, because a comment carries no bug', () => {
+  // The case from the review of PR 99: "// note" moves, and "x=1;" only changes whitespace.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 1, deleted: ['// note', 'x=1;'], added: ['x = 1;', '// note'] }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 1, 'moved'], ['a.js', 2, 'whitespace']]);
+  // A comment line in a moved block stays dropped too, and the code lines with it count.
+  const block = countedLines(diff({ path: 'a.js', hunks: [
+    { at: 1, added: ['// set up', 'run(a);', 'run(b);'] },
+    { at: 9, deleted: ['// set up', 'run(a);', 'run(b);'] }
+  ] }));
+  assert.deepEqual(counted(block), [['a.js', [10, 11]]]);
+  assert.deepEqual(dropped(block), [['a.js', 9, 'moved']]);
+});
+
 test('moved: a move inside one file is still dropped when the fix changes other lines too', () => {
   const block = ['const tax = total * rate;', 'return total + tax;'];
   const result = countedLines(diff({ path: 'a.js', hunks: [
@@ -199,6 +213,36 @@ test('whitespace: whitespace inside ${ } in a template literal is code, not stri
   // The text around ${ } is still string text.
   const text = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  t = `x ${a}y`;'], added: ['  t = `x ${a} y`;'] }] }));
   assert.deepEqual(counted(text), [['a.js', [3]]]);
+});
+
+test('whitespace: a quote mark in a regex opens no string, so the whitespace in a later string is code', () => {
+  // The cases from the review of PR 99. The quote in /'/ and the { in /{/ are regex text.
+  for (const [before, after] of [
+    ["  x = /'/.test(s) ? 'a b' : c;", "  x = /'/.test(s) ? 'ab' : c;"],
+    ['  s = `${ a.replace(/{/, \'\') } y z`;', '  s = `${ a.replace(/{/, \'\') } yz`;']
+  ]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(result), [['a.js', [3]]], before);
+  }
+  // Whitespace outside the strings is still whitespace.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  x = /'/.test(s) ? 'a b' : c;"], added: ["  x=/'/.test(s)?'a b':c;"] }] }));
+  assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']]);
+  // A space inside a regex is part of the regex, so it counts.
+  const regex = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  r = / a/;'], added: ['  r = /a/;'] }] }));
+  assert.deepEqual(counted(regex), [['a.js', [3]]]);
+});
+
+test('whitespace: a division that reads as a regex can drop a change in a later string that has a "/" in it', () => {
+  // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
+  // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round.
+  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';"]) {
+    const after = before.replace("'c d'", "'cd'");
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']], before);
+  }
+  // A plain division reads right, so the change counts.
+  const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  y = a / 2 + 'c d';"], added: ["  y = a / 2 + 'cd';"] }] }));
+  assert.deepEqual(counted(plain), [['a.js', [3]]]);
 });
 
 test('whitespace: in a file of another kind, a space inside quotes is whitespace, as before', () => {
