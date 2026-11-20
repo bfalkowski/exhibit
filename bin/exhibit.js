@@ -14,7 +14,7 @@ try {
   } else if (command === 'history') {
     await history(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout, stderr: process.stderr });
   } else if (command === 'label') {
-    await label(rest, { cwd: process.cwd(), stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
+    await label(rest, { cwd: process.cwd(), env: process.env, fetch: globalThis.fetch, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
   } else if (command === 'check') {
     process.exitCode = await check(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout });
   } else {

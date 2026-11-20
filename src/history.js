@@ -16,8 +16,8 @@ export async function readHistory(options) {
 }
 
 // Returns { lines, read }: one history line for each merged PR, newest merge first, and how
-// many of them it read from the forge. `forge` is the forge module for the repo, such as
-// createGitHubForge in src/github.js.
+// many of them it read from the forge. `forge` is the forge for the repo, as a forge module's
+// connect function makes it, such as GITHUB_FORGE.connect in src/github.js.
 // `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N. The forge gets
 // both, so it can stop its list of merged PRs early. It may list more PRs than these two options
 // keep, and they pick from the list.
@@ -85,10 +85,10 @@ async function checkFilesComplete(forge, number, listed) {
     changed = await forge.pullFileCount(number);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
-    return `PR ${number} has ${listed} files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
+    return `PR ${number} has ${listed} files listed, the most ${forge.displayName} lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
   }
   if (!(changed > listed)) return null;
-  return `PR ${number} changed ${changed} files, but GitHub listed only the first ${listed}, so its files field is cut short.`;
+  return `PR ${number} changed ${changed} files, but ${forge.displayName} listed only the first ${listed}, so its files field is cut short.`;
 }
 
 function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) {

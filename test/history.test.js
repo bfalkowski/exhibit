@@ -222,6 +222,17 @@ test('readHistory warns that the count is unknown, and goes on, when the forge c
   ]);
 });
 
+test('the files warning names the forge by its display name', async (t) => {
+  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
+  const big = writeBigFixture();
+  t.after(big.cleanup);
+  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch: replayFetch(big.path) });
+  const other = { ...forge, displayName: 'Elsewhere' };
+  const warnings = [];
+  await readHistory({ forge: other, warn: (text) => warnings.push(text) });
+  assert.deepEqual(warnings, ['PR 9 changed 3412 files, but Elsewhere listed only the first 3000, so its files field is cut short.']);
+});
+
 test('getOne turns a reply that is not a JSON object into a tool error', async () => {
   const { createGitHub } = await import('../src/github.js');
   const { ToolError } = await import('../src/tool-error.js');

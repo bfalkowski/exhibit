@@ -147,6 +147,15 @@ test('check --pr needs --repo, and leaves out --base', (t) => {
   assert.equal(exhibitCheck(fixture, []).status, 2);
 });
 
+test('check --pr with no GITHUB_TOKEN says to set it, and asks the forge nothing', async (t) => {
+  const fixture = buildRepo(t);
+  const fetch = async () => assert.fail('check asked the forge without a token');
+  await assert.rejects(
+    check(['--pr', '7', '--repo', 'owner/name'], { env: {}, cwd: fixture.repo, fetch, stdout: { write() {} } }),
+    { message: 'GITHUB_TOKEN is not set. --pr reads the PR from GitHub, so set it to a token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).' }
+  );
+});
+
 test('check --pr reads the base, the head, the title and the labels from the forge', async (t) => {
   const fixture = buildRepo(t);
   const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
