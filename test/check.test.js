@@ -100,6 +100,15 @@ test('the tests run once, however many collectors ask, and flaky tests from coll
   assert.deepEqual(exhibit.flaky_tests, ['t > b', 't > z']);
 });
 
+test('a head where no test passes, only skipped or flaky ones, gives missing', async () => {
+  const runTests = async () => ({ base: new Map([['t > a', 'passed']]), head: new Map([['t > a', 'skipped'], ['t > b', 'flaky']]) });
+  const exhibit = await buildExhibit(input(policyWith(['tests-before-after'])), { ...options({ ...ALL_MET, 'tests-before-after': testsBeforeAfter }), runTests });
+  assert.equal(exhibit.requirements[0].status, 'missing');
+  assert.deepEqual(exhibit.requirements[0].details.head, { passed: 0, failed: 0, skipped: 1, flaky: 1 });
+  assert.match(exhibit.gaps[0].how_to_fix, /no test passed there/);
+  assert.equal(exhibit.verdict, 'needs_person');
+});
+
 test('no matching kind and no default gives needs_person', async () => {
   const exhibit = await buildExhibit(input({ settings: SETTINGS, kinds: {} }), options(ALL_MET));
   assert.equal(exhibit.verdict, 'needs_person');

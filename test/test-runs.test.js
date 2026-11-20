@@ -160,6 +160,22 @@ test('a policy with no test command gives missing, so a person must check the te
   assert.equal(requirement.status, 'missing');
   assert.match(gap.how_to_fix, /settings\.test_command/);
   assert.equal(evidence.verdict, 'needs_person');
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a results path outside the worktree gives error, and Exhibit touches no file there', async (t) => {
+  const fixture = buildRepo(t);
+  const outside = join(dirname(fixture.repo), 'keep.xml');
+  writeFileSync(outside, 'keep');
+  for (const results of ['../keep.xml', outside]) {
+    writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, results));
+    const { code, requirement, gap } = await runCheck(fixture.repo, 'good');
+    assert.equal(requirement.status, 'error');
+    assert.match(gap.how_to_fix, /not a file inside the repo/);
+    assert.equal(code, 2);
+    assert.equal(readFileSync(outside, 'utf8'), 'keep');
+  }
+  assertNoWorktreeLeft(fixture);
 });
 
 test('the base run does not see the head, or changes in the checkout', async (t) => {

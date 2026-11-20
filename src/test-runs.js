@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parseJUnit } from './junit.js';
 
@@ -37,6 +37,12 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
   if (!command || !results) {
     throw new TestRunError('missing', 'the policy has no settings.test_command or no settings.test_results',
       'The policy needs tests-before-after, but evidence.yml does not say how to run the tests. Set settings.test_command to a command that runs the tests and writes JUnit XML, and settings.test_results to the path of that file.');
+  }
+  // Exhibit removes the results file before each run, so it must be a file in the worktree.
+  const inside = normalize(results);
+  if (isAbsolute(results) || inside === '.' || inside === '..' || inside.startsWith('..' + sep)) {
+    throw new TestRunError('error', `settings.test_results is not a path in the worktree: ${results}`,
+      `settings.test_results in evidence.yml is "${results}", which is not a file inside the repo. Exhibit removes that file before each run, so it must be a path in the repo, such as .exhibit/junit.xml. Change it, and run exhibit check again.`);
   }
   return {
     base: await runSide({ cwd, sha: base, side: 'base', command, results, env }),
@@ -163,9 +169,6 @@ export async function testsBeforeAfter(requirement, context) {
   const failing = namesWith(runs.head, 'failed').sort();
   const details = { base: counts(runs.base), head: counts(runs.head), failed_on_head: failing };
 
-  if (runs.head.size === 0) {
-    return { status: 'missing', details, flaky_tests: flaky, how_to_fix: 'The test command ran on the head, but its JUnit file lists no tests. Check that settings.test_command finds the tests.' };
-  }
   if (failing.length > 0) {
     const shown = failing.slice(0, LISTED).join('; ');
     const more = failing.length > LISTED ? `; and ${failing.length - LISTED} more` : '';
@@ -175,6 +178,11 @@ export async function testsBeforeAfter(requirement, context) {
       flaky_tests: flaky,
       how_to_fix: `${failing.length} ${failing.length === 1 ? 'test fails' : 'tests fail'} on the head, also when run again: ${shown}${more}. Fix the change so that ${failing.length === 1 ? 'it passes' : 'they pass'}, and run exhibit check again.`
     };
+  }
+  // No test passed on the head, only skipped or flaky ones, or none at all: the run shows
+  // nothing, so a person must check the tests.
+  if (details.head.passed === 0) {
+    return { status: 'missing', details, flaky_tests: flaky, how_to_fix: 'The test command ran on the head, but no test passed there: its JUnit file lists no tests, or only skipped or flaky ones. Check that settings.test_command finds the tests.' };
   }
   return { status: 'met', details, flaky_tests: flaky };
 }
