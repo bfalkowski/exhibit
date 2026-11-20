@@ -65,7 +65,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files and takes no `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -75,6 +75,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
+| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -90,6 +91,8 @@ settings:
   fix_signals: [label:bug, title:fix, branch:fix/]
   mutation_budget_seconds: 300
   probe_timeout_seconds: 600
+  storage: data-branch
+  data_branch: exhibit-data
 kinds:
   relay-core:
     match: ["relay/supervisor.js", "relay/session-host.js"]
@@ -123,7 +126,7 @@ Rules:
 - Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
   - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
   - `version` must be 3, the only format this Exhibit reads.
-  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) `mutation_budget_seconds` (a whole number, 1 or more) and `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6).
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) `mutation_budget_seconds` (a whole number, 1 or more), `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6), `storage` (`data-branch` or `local`), `data_branch` (a branch name that does not start with `-`) and `local_path` (text). The last three say where `exhibit publish` stores an exhibit (section 9.12).
   - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
   - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
@@ -497,9 +500,22 @@ Exhibit only reports these numbers. It never changes a rung.
 
 ### 9.12 Storage
 
-- Output goes to `.exhibit/out/` on the local machine.
+`exhibit check` runs the PR's code, so in CI it runs with a read-only token. Storing its result needs write access. So `exhibit publish` is a separate step that never runs code from the PR. It stores one exhibit at `prs/<number>/<head-sha>.json`, where the number is the exhibit's `pr` and the SHA is its `head`.
+
+The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wins over it. Some repos refuse pushes from CI, which is why it is a setting. Every write goes through one function, `store` in `src/storage.js`, with one entry for each place, so a CI artifact or a bucket can come later as one more entry.
+
+- `data-branch`, the default, commits the file to the data branch on the remote (`--remote`, by default `origin`). The branch is `settings.data_branch` or `--data-branch`, by default `exhibit-data`.
+  - It uses only git's plumbing: a blob, a tree made in a temporary index, and a commit, which it pushes. It never touches the working tree, the index or the checked-out branch, and it never pushes with force. Git updates the remote-tracking ref, such as `origin/exhibit-data`, as it does for any push.
+  - When the remote has no data branch, it makes one with no shared history: its first commit has no parent.
+  - When two runs publish at the same time, the push of the later one is refused. That run fetches the branch again, puts its commit on the new tip, and pushes again, up to 5 tries, and then exits 2. A push that is refused while the branch did not move is not a race, such as a remote that refuses pushes from CI, so it exits 2 after one more fetch, with git's reason.
+  - When the branch already holds the same bytes at the path, it makes no commit and exits 0. A new exhibit for the same PR and head, such as one with a later `created_at`, replaces the old file in a new commit.
+  - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`. An identity variable that is set but empty, such as `GIT_AUTHOR_NAME=`, counts as not set. When git still cannot make the commit, publish exits 2 with git's reason.
+- `local` writes the file to a folder, `settings.local_path` or `--local-path`, by default `.exhibit/out`, relative to the repo. It makes no git change. When the file already holds the same bytes, it writes nothing.
+
+Later tickets add the rest of storage:
+
 - In CI, the exhibit is uploaded as a workflow artifact. A short summary is posted as one PR comment, which is updated on each run.
-- The JSON is also committed to a data branch, by default `exhibit-data`, at `prs/<number>/<head-sha>.json`. The history cache and reports live there too.
+- The history cache and reports live on the data branch too.
 
 ## 10. GitHub Action
 
