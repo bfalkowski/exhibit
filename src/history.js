@@ -38,13 +38,13 @@ export async function readHistory(options) {
 // whose only verdict is in a quoted line, in the order of the lines.
 export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
   let merged = await forge.mergedPulls({ since, limit });
-  if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
-  merged.sort((a, b) => b.merged_at.localeCompare(a.merged_at) || b.number - a.number);
+  if (since) merged = merged.filter((pr) => new Date(pr.mergedAt) >= since);
+  merged.sort((a, b) => b.mergedAt.localeCompare(a.mergedAt) || b.number - a.number);
   if (limit !== undefined) merged = merged.slice(0, limit);
 
   const old = new Map(previous.map((line) => [line.number, line]));
   const windowStart = previous.length === 0 ? null : Math.max(...previous.map((line) => Date.parse(line.merged_at))) - LOOK_BACK_MS;
-  const toRead = merged.filter((pr) => !old.has(pr.number) || Date.parse(pr.merged_at) >= windowStart);
+  const toRead = merged.filter((pr) => !old.has(pr.number) || Date.parse(pr.mergedAt) >= windowStart);
 
   const read = await mapInBatches(toRead, PRS_AT_ONCE, async (pr) => {
     const [files, reviews, comments, ci] = await Promise.all([
@@ -53,7 +53,7 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
       // The PR's comments, where some rooms post their reviews (spec 8.3).
       forge.pullComments(pr.number),
       // The CI results on the PR's last head commit: the CI result the PR was merged with.
-      forge.ciResults(pr.head.sha)
+      forge.ciResults(pr.headSha)
     ]);
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
@@ -63,7 +63,7 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
   });
   for (const { warnings } of read) for (const warning of warnings) warn(warning);
   const fresh = new Map(read.map(({ line }) => [line.number, line]));
-  const lines = merged.map((pr) => fresh.get(pr.number) ?? classifyAgain(old.get(pr.number), pr.head.ref, fixSignals));
+  const lines = merged.map((pr) => fresh.get(pr.number) ?? classifyAgain(old.get(pr.number), pr.headRef, fixSignals));
   return { lines, read: read.length };
 }
 
@@ -92,27 +92,26 @@ async function checkFilesComplete(forge, number, listed) {
 }
 
 function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) {
-  const labels = pr.labels.map((label) => label.name);
   const list = inTimeOrder(
-    reviews.map((review) => ({ state: review.state, author: review.user?.login ?? null, source: 'review', at: review.submitted_at })),
+    reviews.map((review) => ({ state: review.state, author: review.author, source: 'review', at: review.at })),
     commentReviews(comments)
   ).map(({ state, author, source }) => ({ state, author, source }));
   return {
     number: pr.number,
     title: pr.title,
     body: pr.body,
-    author: pr.user?.login ?? null,
-    labels,
-    merged_at: pr.merged_at,
-    base_ref: pr.base.ref,
-    base_sha: pr.base.sha,
+    author: pr.author,
+    labels: pr.labels,
+    merged_at: pr.mergedAt,
+    base_ref: pr.baseRef,
+    base_sha: pr.baseSha,
     // The PR's last head commit, not the merge commit. With it, git merge-base can find where the
     // PR's branch left the base branch from this line alone (spec 16, question 8).
-    head_sha: pr.head.sha,
-    merge_sha: pr.merge_commit_sha,
+    head_sha: pr.headSha,
+    merge_sha: pr.mergeSha,
     forge: forgeName,
-    url: pr.html_url,
-    files: files.map((file) => ({ path: file.filename, additions: file.additions, deletions: file.deletions })),
+    url: pr.url,
+    files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
     reviews: {
       // A change request that was later dismissed has the state DISMISSED, so it is not a round.
       // A comment review with the verdict fix has the state CHANGES_REQUESTED, so it is a round.
@@ -121,7 +120,7 @@ function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) 
     },
     // The history line keeps the name and conclusion of each CI result (spec 8.3).
     ci: ci.map(({ name, conclusion }) => ({ name, conclusion })),
-    classification: classifyFix({ number: pr.number, title: pr.title, labels, branch: pr.head.ref }, fixSignals)
+    classification: classifyFix({ number: pr.number, title: pr.title, labels: pr.labels, branch: pr.headRef }, fixSignals)
   };
 }
 

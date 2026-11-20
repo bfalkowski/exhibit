@@ -42,11 +42,11 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
     const forge = forgeModule.connect({ repo: options.repo, token, fetch });
     const pull = await forge.pull(options.pr);
     refs = {
-      base: pull.base.sha,
-      head: pull.head.sha,
-      pr: { title: pull.title ?? '', labels: (pull.labels ?? []).map((label) => label.name), branch: pull.head.ref ?? '' },
+      base: pull.baseSha,
+      head: pull.headSha,
+      pr: { title: pull.title ?? '', labels: pull.labels, branch: pull.headRef ?? '' },
       signalsFrom: 'pr',
-      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.base.ref ?? ''}`.trimEnd() + '.'
+      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
     };
   } else {
     refs = { base: options.base, head: options.head, pr: { title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };

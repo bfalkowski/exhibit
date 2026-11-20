@@ -410,15 +410,18 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // pullComments, pullFileCount and ciResults read from it, and send a query only for a list with
 // more than one page, or for a PR or commit that mergedPulls did not read.
 // SZZ's methods (defaultBranch, pullsForCommit and issue) use the REST API, with the reply cache.
-// The methods return objects with the field names of GitHub's REST API, so a caller does not
-// depend on which API gave them:
-// - mergedPulls: { number, title, body, user, labels, merged_at, base, head, merge_commit_sha,
-//   html_url }, where user is { login } or null, and each label is { name }.
-// - pullFiles: { filename, additions, deletions }.
-// - pullReviews: { state, user, submitted_at }.
-// - pullComments: { body, user, created_at }.
+// The methods return small forge-neutral shapes, not GitHub's own objects, so history and SZZ
+// read the same fields from any forge, and a caller does not depend on which API gave them:
+// - mergedPulls, pullsForCommit and pull give PRs: { number, title, body, author, labels,
+//   mergedAt, baseRef, baseSha, headRef, headSha, mergeSha, url }. body is null when empty,
+//   author is a login or null for a deleted account, labels are names, and mergedAt and mergeSha
+//   are null for a PR that was not merged.
+// - pullFiles: { path, additions, deletions }.
+// - pullReviews: { state, author, at }, where at is null for a review that is still pending.
+// - pullComments: { body, author, at }.
 // - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
-// - defaultBranch, pullsForCommit and issue return GitHub's REST objects.
+// - issue: { createdAt, isPull }, or null.
+// - defaultBranch: the branch name.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
   const base = `/repos/${repo}`;
@@ -501,7 +504,7 @@ export function createGitHubForge({ repo, ...client }) {
           if (seen.has(found.number)) continue;
           seen.add(found.number);
           keep(found);
-          merged.push(fromPull(found, await pullList(found.number, 'labels')));
+          merged.push(fromGraphqlPull(found, await pullList(found.number, 'labels')));
         }
         return page;
       }
@@ -530,10 +533,10 @@ export function createGitHubForge({ repo, ...client }) {
       return merged;
     },
 
-    pullFiles: async (number) => (await pullList(number, 'files')).map((file) => ({ filename: file.path, additions: file.additions, deletions: file.deletions })),
-    pullReviews: async (number) => (await pullList(number, 'reviews')).map((review) => ({ state: review.state, user: fromAuthor(review.author), submitted_at: review.submittedAt })),
+    pullFiles: async (number) => (await pullList(number, 'files')).map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
+    pullReviews: async (number) => (await pullList(number, 'reviews')).map((review) => ({ state: review.state, author: fromAuthor(review.author), at: review.submittedAt })),
     // A PR's comments are the comments of the issue with the same number.
-    pullComments: async (number) => (await pullList(number, 'comments')).map((comment) => ({ body: comment.body, user: fromAuthor(comment.author), created_at: comment.createdAt })),
+    pullComments: async (number) => (await pullList(number, 'comments')).map((comment) => ({ body: comment.body, author: fromAuthor(comment.author), at: comment.createdAt })),
 
     // How many files the PR changed. GraphQL gives it with the PR, so it costs no request.
     pullFileCount: async (number) => (await pull(number)).changedFiles,
@@ -555,8 +558,8 @@ export function createGitHubForge({ repo, ...client }) {
       return [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     },
 
-    // One PR, for exhibit check --pr: GitHub's PR object, with title, labels, base and head.
-    pull: (number) => github.getOne(`${base}/pulls/${number}`, pullRequests),
+    // One PR, for exhibit check --pr.
+    pull: async (number) => fromRestPull(await github.getOne(`${base}/pulls/${number}`, pullRequests)),
 
     async defaultBranch() {
       return (await github.getOne(base)).default_branch;
@@ -565,11 +568,15 @@ export function createGitHubForge({ repo, ...client }) {
     // The PRs that hold the commit `sha`. GitHub answers 422 for a commit it does not know, such
     // as one that was never pushed. A 404 means the same here: the repo itself was read before.
     // Both give an empty list.
-    pullsForCommit: (sha) => github.getAll(`${base}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], ...pullRequests }),
+    pullsForCommit: async (sha) => (await github.getAll(`${base}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], ...pullRequests })).map(fromRestPull),
 
     // The issue (or PR) with the number `number`, or null when GitHub does not know it or it was
-    // deleted.
-    issue: (number) => github.getOne(`${base}/issues/${number}`, { emptyOn: [404, 410] })
+    // deleted. GitHub lists a PR as an issue too, and marks it with a pull_request field.
+    async issue(number) {
+      const found = await github.getOne(`${base}/issues/${number}`, { emptyOn: [404, 410] });
+      if (found === null) return null;
+      return { createdAt: typeof found.created_at === 'string' ? found.created_at : null, isPull: Boolean(found.pull_request) };
+    }
   };
 }
 
@@ -595,7 +602,7 @@ function noneLeftToKeep(merged, oldest, since, limit) {
   if (since && latest < since.getTime()) return true;
   if (limit === undefined) return false;
   const newer = merged.filter((pr) => {
-    const at = Date.parse(pr.merged_at);
+    const at = Date.parse(pr.mergedAt);
     return at > latest && (!since || at >= since.getTime());
   });
   return newer.length >= limit;
@@ -613,28 +620,50 @@ async function allItems(page, nextPage) {
   }
 }
 
-// A PR from GraphQL, with the REST API's field names. GraphQL gives an empty body as "", and the
-// REST API as null.
-function fromPull(found, labels) {
+// A PR from GraphQL, in the forge-neutral shape. GraphQL gives an empty body as "", and the REST
+// API as null: both give null.
+function fromGraphqlPull(found, labels) {
   return {
     number: found.number,
     title: found.title,
     body: found.body === '' ? null : found.body,
-    user: fromAuthor(found.author),
-    labels: labels.map((label) => ({ name: label.name })),
-    merged_at: found.mergedAt,
-    base: { ref: found.baseRefName, sha: found.baseRefOid },
-    head: { ref: found.headRefName, sha: found.headRefOid },
-    merge_commit_sha: found.mergeCommit?.oid ?? null,
-    html_url: found.url
+    author: fromAuthor(found.author),
+    labels: labels.map((label) => label.name),
+    mergedAt: found.mergedAt,
+    baseRef: found.baseRefName,
+    baseSha: found.baseRefOid,
+    headRef: found.headRefName,
+    headSha: found.headRefOid,
+    mergeSha: found.mergeCommit?.oid ?? null,
+    url: found.url
   };
 }
 
-// An author from GraphQL as a REST user. GraphQL gives a bot's login without the "[bot]" that
-// the REST API adds, as in "dependabot" for "dependabot[bot]".
+// A PR from the REST API, in the same shape.
+function fromRestPull(found) {
+  return {
+    number: found.number,
+    title: found.title ?? null,
+    body: found.body === '' ? null : found.body ?? null,
+    author: found.user?.login ?? null,
+    labels: (found.labels ?? []).map((label) => label.name),
+    mergedAt: found.merged_at ?? null,
+    baseRef: found.base?.ref ?? null,
+    baseSha: found.base?.sha ?? null,
+    headRef: found.head?.ref ?? null,
+    headSha: found.head?.sha ?? null,
+    // GitHub gives an open PR a merge_commit_sha of a test merge, so only a merged PR keeps it.
+    mergeSha: found.merged_at ? found.merge_commit_sha ?? null : null,
+    url: found.html_url ?? null
+  };
+}
+
+// An author's login from GraphQL, or null for a deleted account. GraphQL gives a bot's login
+// without the "[bot]" that the REST API adds, as in "dependabot" for "dependabot[bot]". The login
+// keeps the "[bot]", as the history file always had it.
 function fromAuthor(author) {
   if (!author) return null;
-  return { login: author.__typename === 'Bot' ? `${author.login}[bot]` : author.login };
+  return author.__typename === 'Bot' ? `${author.login}[bot]` : author.login;
 }
 
 // GraphQL gives a check run's conclusion and a status's state in capitals, as in SUCCESS. The

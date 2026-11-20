@@ -118,9 +118,9 @@ export function commentReviews(comments) {
     if (verdict === null) continue;
     reviews.push({
       state: verdict === 'fix' ? 'CHANGES_REQUESTED' : 'APPROVED',
-      author: comment.user?.login ?? null,
+      author: comment.author,
       source: 'comment',
-      at: comment.created_at
+      at: comment.at
     });
   }
   return reviews;
@@ -132,8 +132,8 @@ export function quotedVerdictWarnings(number, comments) {
   for (const comment of comments) {
     const verdict = quotedVerdict(comment.body);
     if (verdict === null) continue;
-    const author = comment.user?.login ?? 'a deleted account';
-    warnings.push(`PR ${number}: the comment by ${author} at ${comment.created_at} gives the verdict ${verdict} only in a quoted line, so it does not count as a review.`);
+    const author = comment.author ?? 'a deleted account';
+    warnings.push(`PR ${number}: the comment by ${author} at ${comment.at} gives the verdict ${verdict} only in a quoted line, so it does not count as a review.`);
   }
   return warnings;
 }
