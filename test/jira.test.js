@@ -133,3 +133,24 @@ test('ticketKey finds the key at the start of the title, else at the start of th
   assert.equal(key('Crash', 'fix/PAY-482'), null);
   assert.equal(key('PAY-1: Crash', 'PAY-2-crash'), 'PAY-1');
 });
+
+test('revert and tracker:jira in one list: the first signal that matches wins, and a revert first asks Jira nothing', async () => {
+  // A revert PR whose branch names a Jira key. GitHub's Revert button writes the title.
+  const revertPr = (branch) => ({ number: 9, title: 'Revert "Add a coupon field"', body: 'Reverts acme/shop#8', labels: [], branch, repo: 'acme/shop' });
+
+  const first = jira();
+  const revertFirst = await classifyWithTracker(revertPr('PAY-482-revert'), ['revert', 'tracker:jira'], first.tracker);
+  assert.deepEqual(revertFirst.classification, { fix: true, fix_signal: 'revert' });
+  assert.equal(first.fetch.calls.length, 0);
+
+  const bug = jira();
+  const jiraFirst = await classifyWithTracker(revertPr('PAY-482-revert'), ['tracker:jira', 'revert'], bug.tracker);
+  assert.deepEqual(jiraFirst.classification, { fix: true, fix_signal: 'jira:PAY-482' });
+  assert.equal(bug.fetch.calls.length, 1);
+
+  // PAY-483 is a Story, so tracker:jira does not match, and revert after it does.
+  const story = jira();
+  const storyFirst = await classifyWithTracker(revertPr('PAY-483-revert'), ['tracker:jira', 'revert'], story.tracker);
+  assert.deepEqual(storyFirst.classification, { fix: true, fix_signal: 'revert' });
+  assert.equal(story.fetch.calls.length, 1);
+});
