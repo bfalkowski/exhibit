@@ -6,13 +6,14 @@
 // know gets a 422.
 //
 // A PR from a fork has its head in the fork's repo. GitHub keeps its commits in the repo the PR
-// merged into, at refs/pull/N/head, so that repo is the one to ask. The fetch fails the test when
-// it is asked about a fork's repo.
+// merged into, at refs/pull/N/head, so that repo is the one to ask. Both fetches here fail the test
+// when they are asked about a fork's repo. They share forkGuard from test-support/replay-fetch.js.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { FORK_REPOS_KEY, forkGuard } from '../../../test-support/replay-fetch.js';
 import { gitEnv } from '../git-env.js';
 import { graphqlReplies } from './graphql-replies.js';
 
@@ -47,6 +48,9 @@ function commitPullsReplies({ dir, history, onMain, forks }, repo) {
   return replies;
 }
 
+// The fork repos of the built fixture repo, and the repo to ask in their place, for forkGuard.
+const forkRepos = (built, repo) => ({ forks: [...new Set(built.forks.values())], repo });
+
 /**
  * A fetch that answers "pull requests for a commit" for the built fixture repo. It throws on a
  * request to a fork's repo, and keeps that request in `fetch.forkCalls`, so a test can check that
@@ -54,15 +58,17 @@ function commitPullsReplies({ dir, history, onMain, forks }, repo) {
  */
 export function commitPullsFetch(built, repo) {
   const replies = commitPullsReplies(built, repo);
-  const forkPaths = [...new Set(built.forks.values())].map((fork) => `/repos/${fork}/`.toLowerCase());
+  const guard = forkGuard(forkRepos(built, repo));
   const calls = [];
   const forkCalls = [];
   async function fetch(url) {
     const { pathname, search } = new URL(url);
     const key = pathname + search;
-    if (forkPaths.some((path) => pathname.toLowerCase().startsWith(path))) {
+    try {
+      guard(pathname, key);
+    } catch (error) {
       forkCalls.push({ key });
-      throw new Error(`The test asked a fork's repo: ${key}. Ask ${repo}, the repo the PR merged into.`);
+      throw error;
     }
     calls.push({ key });
     const reply = replies[key] ?? { status: 422, body: { message: `No commit found for SHA: ${pathname.split('/')[5]}` } };
@@ -76,12 +82,14 @@ export function commitPullsFetch(built, repo) {
 /**
  * Writes a replay file (the format of test-support/replay-fetch.js) that serves the whole
  * fixture repo as GitHub would: the GraphQL replies for the merged PRs, with their files,
- * reviews, comments and CI results, and the REST replies for "pull requests for a commit".
+ * reviews, comments and CI results, and the REST replies for "pull requests for a commit". It
+ * also names the fork repos under FORK_REPOS_KEY, so the replay throws the same fork error as
+ * commitPullsFetch.
  * Returns the path of the file, and `cleanup`, which removes its folder: call it when the test
  * ends, for example with t.after(cleanup).
  */
 export function writeHistoryReplay(built, repo) {
-  const replies = commitPullsReplies(built, repo);
+  const replies = { [FORK_REPOS_KEY]: forkRepos(built, repo), ...commitPullsReplies(built, repo) };
   const newestFirst = [...built.history].reverse();
   Object.assign(replies, graphqlReplies(repo, newestFirst.map((pr) => ({
     number: pr.number,

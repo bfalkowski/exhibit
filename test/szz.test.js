@@ -13,7 +13,7 @@ import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo, readAnswerKey } from './fixtures/szz-repo.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
-import { commitPullsFetch } from './fixtures/github/szz-replies.js';
+import { commitPullsFetch, writeHistoryReplay } from './fixtures/github/szz-replies.js';
 
 const REPO = 'fixture/shop';
 // cloneRoot asks only the forge's remote rule, so this forge never fetches.
@@ -160,6 +160,29 @@ test('SZZ on the fixture repo', async (t) => {
   await t.test('every line passes the schema', () => {
     for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   });
+});
+
+// Both test fetches for the fixture repo, the one SZZ tests use and the replay file the CLI tests
+// use, throw on any request to the fork's repo dee/shop. A repo whose name only starts with the
+// fork's name, such as dee/shopping, is not the fork.
+test('the test fetches throw on a request to the fork, and only to the fork', async (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  const replay = writeHistoryReplay(repo, REPO);
+  t.after(replay.cleanup);
+  const fetches = { commitPullsFetch: commitPullsFetch(repo, REPO), replayFetch: replayFetch(replay.path) };
+  const forkError = /^Error: The test asked a fork's repo: \/repos\/dee\/shop\b.*\. Ask fixture\/shop, the repo the PR merged into\.$/i;
+  for (const [name, fetch] of Object.entries(fetches)) {
+    await t.test(`${name}: the repo itself, a path under it, and the name in capitals`, async () => {
+      for (const path of ['/repos/dee/shop', '/repos/dee/shop/commits/abc/pulls?per_page=100', '/repos/Dee/Shop']) {
+        await assert.rejects(fetch(`https://api.github.com${path}`), (error) => forkError.test(String(error)), `${name} ${path}`);
+      }
+    });
+    await t.test(`${name}: a repo whose name only starts with the fork's name gets no fork error`, async () => {
+      const outcome = await fetch('https://api.github.com/repos/dee/shopping').then((reply) => `answered ${reply.status}`, String);
+      assert.doesNotMatch(outcome, forkError);
+    });
+  }
 });
 
 // The commits SZZ asked GitHub about, by the "pull requests for a commit" requests.
