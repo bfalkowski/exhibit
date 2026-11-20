@@ -52,6 +52,21 @@
           "minimum": 1,
           "maximum": 86400,
           "description": "The time limit for each probe (spec 9.6), at most 86400 (one day). A probe that runs longer is stopped and fails. Absent means 600."
+        },
+        "storage": {
+          "enum": ["data-branch", "local"],
+          "description": "Where exhibit publish stores an exhibit (spec 9.12). data-branch commits it to the data branch. local writes it to a folder. Absent means data-branch."
+        },
+        "data_branch": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^-]",
+          "description": "The name of the data branch (spec 9.12). Absent means exhibit-data."
+        },
+        "local_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The folder that storage: local writes to, relative to the repo (spec 9.12). Absent means .exhibit/out."
         }
       }
     },

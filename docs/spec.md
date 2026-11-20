@@ -66,7 +66,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files and takes no `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -76,6 +76,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, body, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
+| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -91,6 +92,8 @@ settings:
   fix_signals: [label:bug, title:fix, branch:fix/]
   mutation_budget_seconds: 300
   probe_timeout_seconds: 600
+  storage: data-branch
+  data_branch: exhibit-data
 kinds:
   relay-core:
     match: ["relay/supervisor.js", "relay/session-host.js"]
@@ -124,7 +127,7 @@ Rules:
 - Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
   - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
   - `version` must be 3, the only format this Exhibit reads.
-  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) `mutation_budget_seconds` (a whole number, 1 or more) and `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6).
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) `mutation_budget_seconds` (a whole number, 1 or more), `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6), `storage` (`data-branch` or `local`), `data_branch` (a branch name that does not start with `-`) and `local_path` (text). The last three say where `exhibit publish` stores an exhibit (section 9.12).
   - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
   - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
@@ -140,7 +143,7 @@ Evidence item types in version 1:
 | Type | Met when |
 |---|---|
 | `tests-before-after` | The test command ran on the base and on the head, and every test passes on the head, except tests marked flaky (section 9.3). |
-| `failing-before` | At least one test that the PR added or changed fails on the base and passes on the head. `when` limits it to PRs classified as fix or feature. |
+| `failing-before` | At least one test that the PR added or changed fails on the base and passes on the head (section 9.4). `when` limits it to PRs classified as fix or feature. For any other PR it is `skipped` with the reason, and this skip does not stop `meets_policy` (section 9.8). |
 | `mutation` | The catch rate on the changed lines is at least `min`. |
 | `probe` | A named command exits 0 on the head and writes its declared artifacts. Screenshots, restart runs, link checks, contract tests and hidden suites are all probes. |
 
@@ -194,7 +197,9 @@ The fields:
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
 
-Until the evidence collectors are built, `exhibit check` gives every `failing-before` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. A later S4 ticket builds it. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then. The `tests-before-after` collector is built (section 9.3), and a `probe` requirement runs its command (section 9.6).
+A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then. The `tests-before-after` collector is built (section 9.3), the `failing-before` collector is built (section 9.4), and a `probe` requirement runs its command (section 9.6).
+
+A `failing-before` whose `when` does not fit the change is `skipped` too, but it is not a gap. Its `details.reason` says that the policy asks for it only on a fix or a feature, and that this change is neither. It does not stop `meets_policy`, and it does not count in `checks_by_author`.
 
 `flaky_tests` lists each test that failed and then passed on its second run, on the base or the head (section 9.3). A test's name is its file, relative to the repo, its classname and its name, joined by ` > `, for example `test/math.test.js > test > add sums two numbers`. A part that the JUnit file leaves out is left out of the name too. Node 20's reporter gives no file, for example.
 
@@ -424,11 +429,23 @@ Every link is shown with its lines and blame output. In `exhibit label`, the per
 - The requirement is `met` when every test passes on the head, apart from flaky and skipped ones. It is `failed` when any test fails on the head on both runs, and the gap names those tests. It is `missing` when the policy has no `test_command` or no `test_results`, or when no test passes on the head: the JUnit file lists no tests, or only skipped or flaky ones. It is `error`, and so is the verdict, when `test_results` is not a path inside the repo (an absolute path, or one that starts with `..`), when the command cannot run (the shell exits 127), when it writes no JUnit file, when the file is not JUnit XML, or when the command fails but the file names no failing test.
 - `details` gives the count of passed, failed, skipped and flaky tests on the base and on the head, and `failed_on_head`, the names of the tests that fail on the head.
 - Exhibit removes both worktrees after the run, also when the run fails.
-- Exhibit keeps the per-test results of the base and the head for the rest of the run. The tests run only once, and the failing-before check (section 9.4) uses the same results.
+- Exhibit keeps the per-test results of the base and the head for the rest of the run. The tests run only once, and the failing-before check (section 9.4) uses the same results. That check adds one more run of its own: the base code with the PR's test files.
 
 ### 9.4 A test that failed before
 
-A test qualifies when it is added or changed in the PR, fails on the base (or does not exist there), and passes on the head. A test that does not exist on the base counts only when it fails against the base code. Exhibit copies the new test file into the base worktree to check this.
+The `failing-before` requirement proves that a test in the PR would have caught the problem: the test fails on the old code and passes on the new.
+
+- The PR's test files are the changed files that look like tests: a name such as `*.test.*`, `*.spec.*`, `test_*.py` or `*_test.*`, or a file in a folder named `test`, `tests`, `__tests__` or `spec`. Helpers and fixtures in those folders count too, because a new test can need them. A changed file that the head's JUnit file names as the file of a test counts as well.
+- When the PR changes no test file, the requirement is `missing`, and Exhibit runs no more tests for it.
+- Otherwise Exhibit makes one more clean worktree of the base. It puts in each of the PR's test files as it is on the head, removes the ones the head deleted, and runs the test command there, as in section 9.3, with a second run when a test fails. This is the run "on the base with the PR's test files". So a new test file, and a test that the PR changed, run against the old code.
+- A test qualifies when all of these hold:
+  - The PR added or changed it. Its file is one of the PR's test files, or it is not in the plain base run, or its result there differs from its result on the base with the PR's test files. Only the PR's test files differ between those two runs, so a test whose result changed is the PR's. Exhibit works per file: it does not tell a test the PR changed from a test beside it in the same changed file.
+  - It fails on the base with the PR's test files, or its file could not load there.
+  - It passes on the head.
+  - It is not flaky in any of the three runs (section 9.3).
+- A file can fail to load on the base, for example when it imports a module that the base lacks. Its tests then do not run. node:test writes one failed test case named after the file instead. Exhibit counts each test of that file that passes on the head as failing on the base, and says that it did not load. When the JUnit file gives no file for a test, as Node 20's reporter does, Exhibit cannot tell which file a test is in, so it names every PR test file that did not load.
+- The requirement is `met` when at least one test qualifies. `details.tests` lists each one, with `on_base`: `failed`, or `did_not_load` and the `files` that did not load. `summary.md` names each test and which kind of failure it had on the base. The requirement is `missing` when no test qualifies. Its gap says to add a test that fails without the change and passes with it, and names the PR's tests that pass on the base too, in `details.passed_on_base`. `details` also gives `test_files` and `did_not_load_on_base`.
+- When a test run cannot give results, the requirement gets the status and the gap of section 9.3: `missing` with no `test_command`, and `error` when the command cannot run or writes no JUnit file.
 
 ### 9.5 Mutation on changed lines
 
@@ -453,7 +470,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 
 ### 9.7 Who wrote each check
 
-- Tests that the PR added or changed count as written by the builder.
+- Tests that the PR added or changed count as written by the builder. The `failing-before` requirement checks only those tests, so it always counts as `builder` in `checks_by_author`. A `failing-before` that is not needed (section 9.8) checks nothing, so it does not count.
 - Probes with `author: hidden` count as hidden in `checks_by_author`. Exhibit keeps only the status and the counts of a hidden probe. It does not save the command's output, and it does not copy its artifacts, so `details` has no `output` and no `artifacts`, and `summary.md` has no links for it.
 - A hidden suite lives outside the PR's repo. CI fetches it with a secret that a PR from a fork never gets. Exhibit only reads the counts. It never copies hidden tests into the exhibit.
 
@@ -461,6 +478,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 
 - `meets_policy` when every requirement is `met`, and there is no other gap. Exit code 0.
 - `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches `evidence.yml` (section 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
+- One `skipped` does not count: a `failing-before` whose `when` limits it to a fix or a feature, on a change that is neither. The policy does not need it for that change, so it is no gap, and the change can still get `meets_policy`. Its line in `summary.md` gives the reason.
 - `error` when Exhibit itself failed: a collector threw, or gave back no valid status, so its requirement is `error`. Exit code 2. An error never becomes `meets_policy`, and it wins over `needs_person`.
 - A failure before Exhibit can build the exhibit, such as a bad policy, a ref that is not in the clone, or any unexpected throw, also exits 2. `exhibit check` removes the old `evidence.json` and `summary.md` when it starts, so no old verdict is left behind, and it prints `verdict: error` on stderr.
 - `summary.md` gives the verdict and the exit code, the kinds, the risk, fix and feature, each requirement with its status, and each gap with how to fix it, in plain words. It holds no time, so two runs on the same commits give the same file.
@@ -499,9 +517,22 @@ Exhibit only reports these numbers. It never changes a rung.
 
 ### 9.12 Storage
 
-- Output goes to `.exhibit/out/` on the local machine.
+`exhibit check` runs the PR's code, so in CI it runs with a read-only token. Storing its result needs write access. So `exhibit publish` is a separate step that never runs code from the PR. It stores one exhibit at `prs/<number>/<head-sha>.json`, where the number is the exhibit's `pr` and the SHA is its `head`.
+
+The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wins over it. Some repos refuse pushes from CI, which is why it is a setting. Every write goes through one function, `store` in `src/storage.js`, with one entry for each place, so a CI artifact or a bucket can come later as one more entry.
+
+- `data-branch`, the default, commits the file to the data branch on the remote (`--remote`, by default `origin`). The branch is `settings.data_branch` or `--data-branch`, by default `exhibit-data`.
+  - It uses only git's plumbing: a blob, a tree made in a temporary index, and a commit, which it pushes. It never touches the working tree, the index or the checked-out branch, and it never pushes with force. Git updates the remote-tracking ref, such as `origin/exhibit-data`, as it does for any push.
+  - When the remote has no data branch, it makes one with no shared history: its first commit has no parent.
+  - When two runs publish at the same time, the push of the later one is refused. That run fetches the branch again, puts its commit on the new tip, and pushes again, up to 5 tries, and then exits 2. A push that is refused while the branch did not move is not a race, such as a remote that refuses pushes from CI, so it exits 2 after one more fetch, with git's reason.
+  - When the branch already holds the same bytes at the path, it makes no commit and exits 0. A new exhibit for the same PR and head, such as one with a later `created_at`, replaces the old file in a new commit.
+  - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`. An identity variable that is set but empty, such as `GIT_AUTHOR_NAME=`, counts as not set. When git still cannot make the commit, publish exits 2 with git's reason.
+- `local` writes the file to a folder, `settings.local_path` or `--local-path`, by default `.exhibit/out`, relative to the repo. It makes no git change. When the file already holds the same bytes, it writes nothing.
+
+Later tickets add the rest of storage:
+
 - In CI, the exhibit is uploaded as a workflow artifact. A short summary is posted as one PR comment, which is updated on each run.
-- The JSON is also committed to a data branch, by default `exhibit-data`, at `prs/<number>/<head-sha>.json`. The history cache and reports live there too.
+- The history cache and reports live on the data branch too.
 
 ## 10. GitHub Action
 

@@ -18,7 +18,9 @@ const POLICY_FILE = 'evidence.yml';
 //   and the verdict code must not let that pass on its own.
 // - classification.policy_changed: the change touches evidence.yml at the top of the repo.
 // - requirements: the union of the needs, in order: the kinds by name, then each kind's own order.
-//   A need that two kinds share is one requirement, and `kinds` names both.
+//   A need that two kinds share is one requirement, and `kinds` names both. A failing-before
+//   whose `when` does not fit this change stays in the list with `not_needed`, the reason in
+//   words, so the exhibit can show it as skipped (spec 8.1).
 export function classifyChange(policy, files, pr) {
   const { fix, fix_signal: fixSignal } = classifyFix(pr, policy.settings.fix_signals);
   const feature = pr.labels.some((label) => label.toLowerCase() === 'feature');
@@ -36,7 +38,8 @@ export function classifyChange(policy, files, pr) {
   for (const [name, rule] of rules) {
     for (const need of rule.needs) {
       const requirement = toRequirement(need);
-      if (!applies(requirement, { fix, feature })) continue;
+      const reason = notNeeded(requirement, { fix, feature });
+      if (reason) requirement.not_needed = reason;
       const key = JSON.stringify([requirement.type, sortKeys(requirement.params)]);
       const same = byKey.get(key);
       if (same) {
@@ -76,10 +79,14 @@ function toRequirement(need) {
   return { type, params, author };
 }
 
-// failing-before with `when` is needed only for a change of a kind it names (spec 8.1).
-function applies(requirement, { fix, feature }) {
-  if (requirement.type !== 'failing-before' || requirement.params.when === undefined) return true;
-  return (fix && requirement.params.when.includes('fix')) || (feature && requirement.params.when.includes('feature'));
+// failing-before with `when` is needed only for a change of a kind it names (spec 8.1). For any
+// other change this gives the reason in words. Otherwise it gives null.
+function notNeeded(requirement, { fix, feature }) {
+  if (requirement.type !== 'failing-before' || requirement.params.when === undefined) return null;
+  const when = requirement.params.when;
+  if ((fix && when.includes('fix')) || (feature && when.includes('feature'))) return null;
+  const named = when.length === 0 ? 'no kind of change' : when.map((word) => `a ${word}`).join(' or ');
+  return `The policy asks for it only on ${named}, and this change is not classified as one, so it is not needed. This does not stop meets_policy.`;
 }
 
 function sortKeys(value) {

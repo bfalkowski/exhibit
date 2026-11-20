@@ -32,11 +32,29 @@ export class TestRunError extends Error {
 // that the JUnit file leaves out is left out.
 // It throws a TestRunError when a side cannot give results.
 export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, env = process.env }) {
+  const { command, results } = checkSettings(settings);
+  return {
+    base: await runSide({ cwd, sha: base, side: 'base', command, results, env }),
+    head: await runSide({ cwd, sha: head, side: 'head', command, results, env })
+  };
+}
+
+// Runs the test command on the base code with the PR's test files (spec 9.4). It makes a clean
+// worktree of the base, puts in each path of `paths` as it is on the head, removes each one that
+// the head does not have, and then runs the tests as runTestsOnBaseAndHead does. So a test that
+// the PR added or changed runs against the old code. It gives back one Map, like one side of
+// runTestsOnBaseAndHead, and throws a TestRunError when the run cannot give results.
+export async function runTestsOnBaseWithPrTests({ cwd, base, head, paths, settings = {}, env = process.env }) {
+  const { command, results } = checkSettings(settings);
+  return runSide({ cwd, sha: base, side: 'base with the PR\'s test files', tag: 'base-pr-tests', command, results, env, overlay: { sha: head, paths } });
+}
+
+function checkSettings(settings) {
   const command = settings.test_command;
   const results = settings.test_results;
   if (!command || !results) {
     throw new TestRunError('missing', 'the policy has no settings.test_command or no settings.test_results',
-      'The policy needs tests-before-after, but evidence.yml does not say how to run the tests. Set settings.test_command to a command that runs the tests and writes JUnit XML, and settings.test_results to the path of that file.');
+      'The policy needs evidence from the tests, but evidence.yml does not say how to run them. Set settings.test_command to a command that runs the tests and writes JUnit XML, and settings.test_results to the path of that file.');
   }
   // Exhibit removes the results file before each run, so it must be a file in the worktree. The
   // path is resolved against a stand-in root, so "./" and "a/..//" count as the root itself.
@@ -46,14 +64,11 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
     throw new TestRunError('error', `settings.test_results is not a path in the worktree: ${results}`,
       `settings.test_results in evidence.yml is "${results}", which is not a file inside the repo. Exhibit removes that file before each run, so it must be a path in the repo, such as .exhibit/junit.xml. Change it, and run exhibit check again.`);
   }
-  return {
-    base: await runSide({ cwd, sha: base, side: 'base', command, results, env }),
-    head: await runSide({ cwd, sha: head, side: 'head', command, results, env })
-  };
+  return { command, results };
 }
 
-async function runSide({ cwd, sha, side, command, results, env }) {
-  const folder = await mkdtemp(join(tmpdir(), `exhibit-${side}-`));
+async function runSide({ cwd, sha, side, tag = side, command, results, env, overlay }) {
+  const folder = await mkdtemp(join(tmpdir(), `exhibit-${tag}-`));
   try {
     try {
       await run('git', ['worktree', 'add', '--detach', '--quiet', folder, sha], { cwd, encoding: 'utf8' });
@@ -61,6 +76,7 @@ async function runSide({ cwd, sha, side, command, results, env }) {
       const reason = String(error.stderr ?? '').trim().split('\n')[0] || error.message;
       throw new TestRunError('error', `could not make a worktree for the ${side}: ${reason}`, `Exhibit could not make a clean git worktree for the ${side} commit ${sha.slice(0, 7)}: ${reason}. Check that the commit is in the clone, and run exhibit check again.`);
     }
+    if (overlay) await putFiles(folder, overlay);
     const roots = [folder, await realpath(folder)];
     const first = await runOnce({ folder, roots, side, command, results, env });
     if (![...first.values()].includes('failed')) return first;
@@ -69,6 +85,17 @@ async function runSide({ cwd, sha, side, command, results, env }) {
   } finally {
     await removeWorktree(cwd, folder);
   }
+}
+
+// Makes each path in the worktree `folder` what it is at the commit `sha`: git checks out the
+// paths that the commit has, and Exhibit removes the others.
+async function putFiles(folder, { sha, paths }) {
+  if (paths.length === 0) return;
+  const { stdout } = await run('git', ['ls-tree', '-r', '-z', '--name-only', sha, '--', ...paths], { cwd: folder, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const there = new Set(stdout.split('\0').filter((path) => path !== ''));
+  const kept = paths.filter((path) => there.has(path));
+  if (kept.length > 0) await run('git', ['checkout', sha, '--', ...kept], { cwd: folder });
+  await Promise.all(paths.filter((path) => !there.has(path)).map((path) => rm(join(folder, path), { force: true })));
 }
 
 // One run of the test command, read from its JUnit file.
