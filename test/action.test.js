@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { readPolicy } from '../src/policy.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 // The GitHub Action (spec 10) must stay a thin wrapper: action.yml maps inputs to CLI flags, and
@@ -15,8 +16,10 @@ import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 dropGitEnv();
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const action = parse(readFileSync(join(root, 'action.yml'), 'utf8'));
-// The example that another repo copies, and Exhibit's own workflow, which runs on Exhibit's PRs.
-const WORKFLOWS = ['examples/pull-request.yml', '.github/workflows/exhibit.yml'];
+// The example that another repo copies, Exhibit's own workflow, which runs on Exhibit's PRs, and
+// the workflow in each field repo's setup note (spec 12). The same checks hold for each one.
+const FIELD_REPOS = ['building58', 'edd-platform'];
+const WORKFLOWS = ['examples/pull-request.yml', '.github/workflows/exhibit.yml', ...FIELD_REPOS.map((repo) => `examples/${repo}/exhibit.yml`)];
 const readWorkflow = (path) => parse(readFileSync(join(root, path), 'utf8'));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
 const runStep = action.runs.steps.find((step) => step.name.startsWith('Run exhibit'));
@@ -256,6 +259,23 @@ test('the example pins the same Exhibit as Exhibit\'s own workflow, so a copy ge
   const [example, own] = WORKFLOWS.map(readWorkflow);
   assert.equal(exhibitStep(example.jobs.check).uses, exhibitStep(own.jobs.check).uses);
 });
+
+// The field repos install published releases only (spec 12), so their setup notes pin a release
+// tag that names one version. Never v0: it moves, so the check job and the publish job of one
+// run could get different code.
+for (const repo of FIELD_REPOS) {
+  test(`examples/${repo}: the setup note's workflow pins an exact release, and its policy is valid`, async () => {
+    const workflow = readWorkflow(`examples/${repo}/exhibit.yml`);
+    for (const job of Object.values(workflow.jobs)) assert.match(exhibitStep(job).uses, /^bfalkowski\/exhibit@v\d+\.\d+\.\d+$/);
+    const policy = await readPolicy(join(root, 'examples', repo));
+    assert.equal(policy.version, 3);
+    assert.equal(policy.settings.test_results, '.exhibit/junit.xml');
+    assert.ok(Object.keys(policy.kinds).length > 0);
+    const note = readFileSync(join(root, 'examples', repo, 'README.md'), 'utf8');
+    assert.match(note, /\(exhibit\.yml\)/);
+    assert.match(note, /\(evidence\.yml\)/);
+  });
+}
 
 function exhibitStep(job) {
   const steps = job.steps.filter((step) => step.uses?.startsWith('bfalkowski/exhibit@'));

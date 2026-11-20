@@ -588,6 +588,12 @@ The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo,
 - `examples/` holds the workflows that another repo copies. `examples/pull-request.yml` is the one above, with a comment on each permission that says why the job needs it. The README gives the steps to add Exhibit to a repo.
 - Exhibit checks its own PRs with `.github/workflows/exhibit.yml`, in shadow mode. It is `examples/pull-request.yml` with three changes: a step that sets up Node 20 for Exhibit's own tests, and a time limit on each job, 30 minutes for the check job and 10 for the publish job. The example has no time limits, because each repo's tests take their own time. It runs the Action from a fixed commit on `main`, the same one the example names, so a PR cannot change the code that the publish job runs with its write token. Exhibit's own `evidence.yml` is the policy for its PRs. `test/action.test.js` reads both workflows, and `test/own-policy.test.js` reads the policy.
 - The hidden suite runs only on trusted events.
+- **Releases.** `.github/workflows/release.yml` makes a GitHub release when a person pushes a version tag such as `v0.1.0`. Only the person pushes a release tag.
+  - It runs on a pushed tag of the form `v1.2.3` only, never on a branch or a PR. Its one job has the permission `contents: write`, to make the release and move the major tag, and nothing more.
+  - It fails, and makes no release, when the tagged commit is not on the default branch, or when the tag, the `version` in `package.json` and `exhibit --version` do not all name the same version. `scripts/check-version.js` checks the versions.
+  - Then it runs lint and the tests, and installs Exhibit in a clean copy of the tagged commit the way `action.yml` does (`npm ci --omit=dev`), and runs it.
+  - It makes the release, with notes that say how to pin it and the list of merged PRs. Then it moves the major tag, such as `v0`, to the release, but only when the release is the newest release of its major version. It counts releases, not tags, so a tag whose run failed does not hold the major tag back. So a repo can pin an exact version or the major tag. The setup notes pin the exact version: the major tag moves, so the check job and the publish job of one run could get different code.
+  - `test/release.test.js` reads the workflow and runs the version check.
 - Later example workflows in `examples/`:
   - On push to the main branch: run `trace`.
   - Weekly on a schedule: run `history` and `backtest`, then publish the report.
@@ -619,7 +625,7 @@ On GitHub, the history methods (`mergedPulls`, `pullFiles`, `pullReviews`, `pull
 
 Exhibit is built by an office room (Room C), and two other rooms use it on their own repos: the Building58 room on Building58, and Room B on edd-platform.
 
-- **Users install published releases only.** They never run Exhibit from its source.
+- **Users install published releases only.** They never run Exhibit from its source. A setup note for each repo gives the workflow to add, a first `evidence.yml` and the token permissions: [Building58](../examples/building58/README.md) and [edd-platform](../examples/edd-platform/README.md). Each note's workflow pins a release, and `test/action.test.js` checks it the same way as `examples/pull-request.yml`. The rooms that own the repos open their own PRs from the notes.
 - **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that. The first runs and their numbers are in [field/phase-a-history.md](field/phase-a-history.md).
 - **Phase B: shadow mode.** The Action runs on every PR in both repos with `enforce: false`. The session briefs add one step: run `exhibit check` before you open a PR.
 - **Phase C: compare.** Room B sets `enforce: true` while Building58 stays in shadow mode. Compare tokens per merged PR, review rounds and stuck runs between the two rooms.

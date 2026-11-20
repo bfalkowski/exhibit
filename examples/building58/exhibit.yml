@@ -1,0 +1,88 @@
+# Exhibit on every pull request in Building58, in shadow mode (Exhibit's docs/spec.md section 12).
+# Copy this file to .github/workflows/exhibit.yml in Building58. examples/building58/README.md in the
+# Exhibit repo says why each part is here.
+#
+# This is Exhibit's examples/pull-request.yml with three changes:
+# - The check job sets up Node, as Building58's CI does, because evidence.yml runs Building58's tests.
+# - Each job has a time limit. A check of a fix runs the tests three times, which took 24 minutes on
+#   a GitHub runner, so the check job gets 60 minutes.
+# - Both jobs pin the release v0.1.0. Keep the same release in both jobs. Never use v0 or main: they
+#   move, so the check job and the publish job of one run could get different Exhibit code.
+name: Exhibit
+
+# Never pull_request_target: that runs with a write token and the repo's secrets, on a run that can
+# be made to execute code from the PR.
+on:
+  pull_request:
+
+# No job gets a permission that it does not name below.
+permissions: {}
+
+jobs:
+  check:
+    name: Exhibit check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      # Read the code and the PR. The check runs the PR's code, so it gets nothing more. Building58
+      # is a public repo, so this reads the PR too.
+      contents: read
+    steps:
+      # The whole history, so the PR's base and head commits are both in the clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The Node that Building58's CI tests with. Exhibit needs Node 20 or later.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # GitHub gives a PR from a fork a token that cannot write, so the publish job is skipped.
+      - name: Say why the publish job is skipped
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          {
+            echo '> [!NOTE]'
+            echo '> This PR comes from a fork. GitHub gives it a token that cannot write, so the publish job is skipped: the exhibit is not stored on the data branch, and no comment is posted. The exhibit is in the workflow artifact named exhibit.'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # enforce: false is shadow mode. The step succeeds whatever the verdict, and the job summary
+      # shows the verdict. Only the person sets it to true, in both jobs.
+      - uses: bfalkowski/exhibit@v0.1.0
+        with:
+          command: check
+          enforce: false
+
+  publish:
+    name: Exhibit publish
+    needs: check
+    # After the check, even when the check step failed, so the comment shows why. Never for a PR
+    # from a fork.
+    if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # Push the exhibit to the exhibit-data branch.
+      contents: write
+      # Post the summary comment on the PR, or update it.
+      pull-requests: write
+    steps:
+      # The base commit, never the PR's head.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exhibit
+          path: .exhibit
+
+      # The same release of Exhibit as the check job, and the same enforce.
+      - uses: bfalkowski/exhibit@v0.1.0
+        with:
+          command: publish
+          comment: true
+          enforce: false

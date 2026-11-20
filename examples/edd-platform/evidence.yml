@@ -1,0 +1,50 @@
+# A first policy for edd-platform (Exhibit's docs/spec.md section 8.1). Copy it to evidence.yml at
+# the top of edd-platform. It is a start: phase A of the field test (spec 12) finds the escaped
+# defects, and the kinds and their needs come from them later. A change to this file always needs
+# a person (spec 9.8).
+version: 3
+
+settings:
+  # The API tests as JUnit, as CI's "API tests" job runs them. Exhibit runs this from the top of
+  # the repo, so the JUnit path goes back up two folders.
+  test_command: "cd apps/api && uv run --extra dev pytest --junitxml=../../.exhibit/junit.xml"
+  test_results: .exhibit/junit.xml
+  # Titles start with a ticket key, such as "T-121: ...", so title_after_key skips it (spec 9.1).
+  fix_signals: [label:bug, title_after_key:fix, branch:fix/]
+
+kinds:
+  # The API, its OpenAPI file, and the scripts that check it.
+  api:
+    match: ["apps/api/**", "docs/openapi.json", "scripts/**"]
+    risk: medium
+    needs:
+      - tests-before-after
+      - failing-before: { when: [fix] }
+
+  # The Langfuse adapter has its own tests, as CI's "Langfuse adapter tests" job runs them.
+  adapter:
+    match: ["packages/langfuse-adapter/**"]
+    risk: medium
+    needs:
+      - probe: { name: adapter-tests, run: "cd packages/langfuse-adapter && uv run --extra dev pytest" }
+
+  # The web app: the build and the unit tests, as CI's "Web build" job runs them. The end-to-end
+  # suite is not in it yet: it needs a browser and the API.
+  web:
+    match: ["apps/web/**"]
+    risk: medium
+    needs:
+      - probe: { name: web-build, run: "cd apps/web && npm ci --no-audit --no-fund && npm run build && npm run test:unit" }
+
+  # The docs. Nothing checks them yet, so a docs-only PR meets the policy with no evidence. With no
+  # merge_without_reading: allowed, its summary still says a person reads it before it merges.
+  docs:
+    match: ["docs/**", "**/*.md"]
+    risk: low
+    needs: []
+
+# Any other file, such as CI, the compose files or .claude.
+default:
+  risk: medium
+  needs:
+    - tests-before-after

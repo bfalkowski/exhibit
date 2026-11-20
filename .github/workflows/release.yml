@@ -1,0 +1,117 @@
+# Makes a GitHub release when a person pushes a version tag (docs/spec.md section 10, "Releases").
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The field repos install releases only, never Exhibit's source (spec 12). They pin the exact tag,
+# such as bfalkowski/exhibit@v0.1.0, or the major tag, v0, which this workflow moves to the newest
+# release of that major version.
+#
+# Before it makes the release, the job checks that the tag, package.json and exhibit --version name
+# the same version, runs lint and the tests, and installs Exhibit in a clean copy of the tagged
+# commit the way action.yml does, then runs it. test/release.test.js reads this file.
+name: Release
+
+# Only a tag of the form v1.2.3. Not v0, the major tag that this workflow moves itself, and not a
+# branch or a PR.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+# No job gets a permission that it does not name below.
+permissions: {}
+
+# Two tags pushed together each get their release, one after the other, so the major tag ends on
+# the newer one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # Make the release, and move the major tag. Nothing else.
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The whole history, to check that the tag is on the default branch. No saved token: the job
+      # pushes nothing with git.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # A release is made from code that was reviewed and merged, never from a branch of its own.
+      - name: Check that the tag is on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::The tag $TAG points at $GITHUB_SHA, which is not on $DEFAULT_BRANCH. Tag a commit on $DEFAULT_BRANCH."
+            exit 1
+          fi
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Check that package.json and exhibit --version match the tag
+        run: node scripts/check-version.js "$TAG"
+
+      - run: npm run lint
+
+      - run: npm test
+
+      # The Action installs Exhibit with npm ci --omit=dev in its own folder (action.yml). Do the
+      # same in a clean copy of the tagged commit, with no dev packages, and run it, so a release
+      # always installs and starts.
+      - name: Build Exhibit the way the Action installs it
+        run: |
+          mkdir "$RUNNER_TEMP/exhibit"
+          git archive "$GITHUB_SHA" | tar -x -C "$RUNNER_TEMP/exhibit"
+          (cd "$RUNNER_TEMP/exhibit" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
+          node scripts/check-version.js "$TAG" "$RUNNER_TEMP/exhibit"
+
+      # The notes say how to pin this release. GitHub adds the list of merged PRs after them.
+      - name: Make the release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "The release $TAG is already there, so this run does not make it again."
+            exit 0
+          fi
+          {
+            echo "Pin this release in a workflow, in both the check job and the publish job:"
+            echo
+            echo '```yaml'
+            echo "- uses: $GITHUB_REPOSITORY@$TAG"
+            echo '```'
+            echo
+            echo "The setup notes in examples/ give the whole workflow for each field repo."
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+
+      # v0 for v0.1.0. It moves only to the newest release of its major version, so a late release
+      # of an old version, such as v0.1.1 after v0.2.0, does not move it back. It counts releases,
+      # not tags: a tag whose release run failed has no release, so it never holds v0 back.
+      - name: Move the major tag to this release
+        run: |
+          major="${TAG%%.*}"
+          newest=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName' | grep -E "^$major\.[0-9]+\.[0-9]+\$" | sort -V | tail -n 1)
+          if [ "$newest" != "$TAG" ]; then
+            echo "The newest release of $major is $newest, not $TAG, so $major stays where it is."
+            exit 0
+          fi
+          commit=$(git rev-parse "$GITHUB_SHA^{commit}")
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" -f sha="$commit" -F force=true > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha="$commit" > /dev/null
+          fi
+          echo "$major now points at $commit, the commit of $TAG."
