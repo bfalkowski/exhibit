@@ -59,6 +59,13 @@ test('a refused Jira token stops the run, and the message holds no token', async
   });
 });
 
+test('a 200 reply with no issue type or created date stops the run, as a wrong site or a login page gives it for every key', async () => {
+  const fetch = async () => new Response('<html>Log in</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+  const tracker = createJiraTracker({ settings: { site: SITE }, token: 't', fetch });
+  await assert.rejects(classifyWithTracker(pr('PAY-1: x'), SIGNALS, tracker), (error) => error instanceof ToolError && !(error instanceof JiraReplyError) &&
+    error.message === 'Jira sent a reply with no issue type or created date for /rest/api/2/issue/PAY-1. Check settings.jira.site in evidence.yml.');
+});
+
 test('a Jira site that cannot be reached stops the run with a ToolError', async () => {
   const tracker = createJiraTracker({ settings: { site: SITE }, token: 't', fetch: async () => { throw new Error('getaddrinfo ENOTFOUND'); } });
   await assert.rejects(classifyWithTracker(pr('PAY-1: x'), SIGNALS, tracker), (error) => error instanceof ToolError && /could not reach Jira at https:\/\/acme\.atlassian\.net/.test(error.message));

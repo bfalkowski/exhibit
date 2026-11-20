@@ -496,6 +496,12 @@ test('with tracker:jira and no JIRA_API_TOKEN, the signal matches nothing, the r
   assert.equal(run.stderr.split(notice).length - 1, 1, run.stderr);
   assert.deepEqual(readLines(run.historyPath).filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[5, 'label:bug']]);
   assert.doesNotMatch(run.stdout, /Jira request/);
+
+  // --json gives jira: null with tracker:jira and no token. Without tracker:jira it has no jira
+  // field at all: the test "--json prints a short machine summary" checks the whole object.
+  const json = exhibit(t, ['history', '--repo', 'acme/widgets', '--json', '--full'], { cwd, fixturePath: jiraFixture(t) });
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).jira, null);
 });
 
 test('tracker:jira with no settings.jira gives exit 2 with a message, and writes no file', (t) => {
