@@ -65,7 +65,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`, and with `--comment` it reads the repo from the exhibit. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`. Neither takes `--repo`. `exhibit publish` needs no repo name, because it pushes to `--remote`. With `--comment`, it reads the repo from the exhibit. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|

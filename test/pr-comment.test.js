@@ -24,9 +24,14 @@ test('the comment for needs_person in shadow mode shows the first 10 of 12 gaps,
 
 // A GitHub that keeps the comments of PR 7 in acme/widgets, and answers the requests that
 // upsertComment sends, in the shapes of GitHub's recorded replies. The token's account is
-// `viewer`. `calls` lists each request as "METHOD path".
-function fakeGitHub({ viewer = 'github-actions[bot]', comments = [] } = {}) {
+// `viewer`. `calls` lists each request as "METHOD path". The comments list comes in pages of
+// `pageSize`, and the cursor of a page is the index of the comment after it. A client that drops
+// the cursor would ask for the first page forever, so a fake that is asked for more than
+// MOST_PAGES_ASKED pages fails, and the test does not hang.
+const MOST_PAGES_ASKED = 20;
+function fakeGitHub({ viewer = 'github-actions[bot]', comments = [], pageSize = 100 } = {}) {
   let nextId = 9000000001;
+  let pagesAsked = 0;
   const calls = [];
   const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const rest = (comment) => ({ ...RECORDED_COMMENT, id: comment.id, url: `https://api.github.com/repos/acme/widgets/issues/comments/${comment.id}`, html_url: `https://github.com/acme/widgets/pull/7#issuecomment-${comment.id}`, user: { ...RECORDED_COMMENT.user, login: comment.author }, body: comment.body });
@@ -36,9 +41,15 @@ function fakeGitHub({ viewer = 'github-actions[bot]', comments = [] } = {}) {
     calls.push(`${method} ${pathname}`);
     if (method === 'POST' && pathname === '/graphql') {
       const { variables } = JSON.parse(init.body);
-      assert.deepEqual(variables, { owner: 'acme', name: 'widgets', number: 7, after: null });
-      const nodes = comments.map((comment) => ({ fullDatabaseId: String(comment.id), url: rest(comment).html_url, body: comment.body, viewerDidAuthor: comment.author === viewer }));
-      return reply(200, { data: { rateLimit: { cost: 1 }, repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } });
+      const { after, ...pr } = variables;
+      pagesAsked += 1;
+      if (pagesAsked > MOST_PAGES_ASKED) throw new Error('fake GitHub: asked for too many pages of comments');
+      assert.deepEqual(pr, { owner: 'acme', name: 'widgets', number: 7 });
+      const start = after === null ? 0 : Number(after);
+      const end = start + pageSize;
+      const pageInfo = { hasNextPage: end < comments.length, endCursor: String(end) };
+      const nodes = comments.slice(start, end).map((comment) => ({ fullDatabaseId: String(comment.id), url: rest(comment).html_url, body: comment.body, viewerDidAuthor: comment.author === viewer }));
+      return reply(200, { data: { rateLimit: { cost: 1 }, repository: { pullRequest: { comments: { pageInfo, nodes } } } } });
     }
     if (method === 'POST' && pathname === '/repos/acme/widgets/issues/7/comments') {
       const comment = { id: nextId++, author: viewer, body: JSON.parse(init.body).body };
@@ -125,6 +136,21 @@ test('a comment by someone else that starts with the marker is left alone, and s
   assert.equal(github.comments[0].body, copy);
   assert.equal(github.comments[1].body, review);
   assert.ok(github.comments[2].body.startsWith(COMMENT_MARKER));
+});
+
+test('our comment on the second page of comments is found and updated, not posted again', async (t) => {
+  const { write, run } = setup(t);
+  const others = [1, 2, 3].map((id) => ({ id, author: 'someone', body: `Comment ${id}.\n` }));
+  const ours = { id: 4, author: 'github-actions[bot]', body: `${COMMENT_MARKER}\nAn older summary.\n` };
+  const github = fakeGitHub({ comments: [...others, ours], pageSize: 2 });
+  write(forPr7(NEEDS_PERSON));
+
+  const { code } = await run(github);
+
+  assert.equal(code, 0);
+  assert.deepEqual(github.calls, ['POST /graphql', 'POST /graphql', 'PATCH /repos/acme/widgets/issues/comments/4']);
+  assert.equal(github.comments.length, 4);
+  assert.match(github.comments[3].body, /^<!-- exhibit:pr-summary -->\n### Exhibit: needs a person\n/);
 });
 
 test('without --comment, publish sends nothing to GitHub', async (t) => {
