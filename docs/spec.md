@@ -478,7 +478,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 ### 9.8 Verdict
 
 - `meets_policy` when every requirement is `met`, and there is no other gap. Exit code 0.
-- `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches `evidence.yml` (section 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
+- `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches the policy file (sections 8.2 and 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
 - One `skipped` does not count: a `failing-before` whose `when` limits it to a fix or a feature, on a change that is neither. The policy does not need it for that change, so it is no gap, and the change can still get `meets_policy`. Its line in `summary.md` gives the reason.
 - `error` when Exhibit itself failed: a collector threw, or gave back no valid status, so its requirement is `error`. Exit code 2. An error never becomes `meets_policy`, and it wins over `needs_person`.
 - A failure before Exhibit can build the exhibit, such as a bad policy, a ref that is not in the clone, or any unexpected throw, also exits 2. `exhibit check` removes the old `evidence.json` and `summary.md` when it starts, so no old verdict is left behind, and it prints `verdict: error` on stderr.
@@ -650,7 +650,7 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 | Mutation testing is slow. | It runs on the changed lines only, under a time budget. |
 | A policy learned in one repo may not fit another. | There is one policy per repo, and two field-test repos from the start. |
 | One model writes the code and the fixes. | Hidden checks and the blind sample are the defense. |
-| The builder edits the policy to pass its own PR. | A change to `evidence.yml` always gives `needs_person`, and the maintainer reviews it. |
+| The builder edits the policy to pass its own PR. | A change to the policy file always gives `needs_person`, and the maintainer reviews it. |
 
 ## 16. Open questions
 
