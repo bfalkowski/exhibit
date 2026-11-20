@@ -23,8 +23,8 @@ const VERDICT = new RegExp(
 // And a lazy line goes on a quote only when the quote's last line is text: after a blank quote
 // line (">"), a heading, a code fence, a line of code, a thematic break or an empty list item in
 // the quote, the next line is not in it. A heading may be a line of "=" or "-" under a line of
-// text with the same count of ">" (a setext heading). With fewer ">", that line is lazy text. A
-// line of code is in a fence, or is indented by four spaces, not a tab, after a line that is not
+// text, with the same count of ">" as the quote that holds the paragraph (a setext heading).
+// With fewer ">", that line is lazy text. A lazy line does not change that count. A line of code is in a fence, or is indented by four spaces, not a tab, after a line that is not
 // text.
 // A backtick fence has no backtick after its marks, so "```x``` said" is text with inline code.
 const QUOTE = /^\s*>/;
@@ -61,7 +61,8 @@ function splitQuotes(body) {
   let fence = null;
   let quote = null;
   let text = false;
-  let depth = 0;
+  // The count of ">" of the quote that holds the open paragraph.
+  let paragraphDepth = 0;
   // A code fence in the quote: its marks and the count of ">" before them.
   let quoteFence = null;
   for (const line of body.split('\n')) {
@@ -72,8 +73,7 @@ function splitQuotes(body) {
     }
     if (QUOTE.test(line)) {
       quote ??= ALERT.test(line) ? 'alert' : 'quote';
-      const lastDepth = depth;
-      depth = quoteDepth(line);
+      const depth = quoteDepth(line);
       if (quoteFence && depth < quoteFence.depth) quoteFence = null;
       if (quoteFence) {
         // A line of code. It may start with ">", but it does not start a nested quote.
@@ -86,14 +86,18 @@ function splitQuotes(body) {
         const marks = content.match(FENCE)?.[1];
         if (marks) quoteFence = { marks, depth };
         // A deeper quote starts a new block, so it has no open paragraph yet. A line with fewer
-        // ">" after text is lazy: it goes on the paragraph unless it starts a block.
-        if (!text || depth > lastDepth) text = isText(content, 'none');
-        else text = isText(content, depth === lastDepth ? 'same' : 'lazy');
+        // ">" after text is lazy: it goes on the paragraph unless it starts a block, and the
+        // paragraph stays in its quote.
+        let after = 'none';
+        if (text && depth === paragraphDepth) after = 'same';
+        else if (text && depth < paragraphDepth) after = 'lazy';
+        text = isText(content, after);
+        if (after !== 'lazy') paragraphDepth = depth;
       }
     } else if (quote && (!text || endsQuote(line))) {
       quote = null;
       quoteFence = null;
-      depth = 0;
+      paragraphDepth = 0;
     }
     if (quote === 'quote' || quote === 'nested') {
       quoted.push(line);
@@ -106,8 +110,8 @@ function splitQuotes(body) {
 }
 
 // Says whether a quoted line, without its ">" marks, is text that a lazy line can go on.
-// after says what comes before it: 'same' is text with the same count of ">", 'lazy' is text
-// with more ">", and 'none' is no text.
+// after says what comes before it: 'same' is a paragraph in a quote with the same count of ">",
+// 'lazy' is a paragraph in a quote with more ">", and 'none' is no paragraph.
 function isText(content, after) {
   if (ENDS_TEXT.test(content)) return false;
   if (after === 'same') return !SETEXT_UNDERLINE.test(content);

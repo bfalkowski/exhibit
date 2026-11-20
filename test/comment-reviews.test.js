@@ -177,6 +177,15 @@ test('a lazy line does not go on a quote that ends in code, a setext heading or 
   assert.equal(commentVerdict('> > quoted\n> *\nVerdict: fix'), 'fix');
   assert.equal(commentVerdict('> > quoted\n> 1.\nVerdict: fix'), 'fix');
   assert.equal(commentVerdict('> - item\n> -\nVerdict: fix'), 'fix');
+  // A lazy line stays in the nested quote, so a "=" or "-" line after it is lazy text too.
+  assert.equal(commentVerdict('> > quoted\n> more\n> ===\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> > quoted\n> more\n> --\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> more\n> ===\n> Verdict: fix'), null);
+  assert.equal(commentVerdict('> > quoted\n> more\n> -\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> > > quoted\n> > ===\nVerdict: fix'), null);
+  // Back at the paragraph's own count of ">", a "=" line is a setext underline again.
+  assert.equal(commentVerdict('> > quoted\n> more\n> > ===\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> > quoted\n> more\n>     code\nVerdict: fix'), null);
   // One tab after ">" does not reach four columns, so the line is text, not code.
   assert.equal(commentVerdict('>\tquoted\nVerdict: fix'), null);
   assert.equal(commentVerdict('> \tquoted\nVerdict: fix'), null);
