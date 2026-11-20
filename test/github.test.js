@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createGitHub, createGitHubForge, GITHUB_FORGE } from '../src/github.js';
+import { createGitHub, createGitHubForge, GITHUB_FORGE, PERMISSIONS } from '../src/github.js';
 import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 
@@ -155,7 +155,7 @@ test('a rate limit that is still there after three waits does not blame a missin
   const s = scripted([limited, limited, limited, limited]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
   await assert.rejects(
-    github.getAll('/x', { permission: 'Pull requests: read' }),
+    github.getAll('/x', { permission: PERMISSIONS.pullRequests }),
     (error) => error instanceof ToolError && /secondary rate limit/.test(error.message) && !/permission/.test(error.message)
   );
 });
@@ -163,13 +163,41 @@ test('a rate limit that is still there after three waits does not blame a missin
 test('a 403 rate limit that asks for too long a wait does not blame a missing permission', async () => {
   const s = scripted([{ status: 403, headers: { 'retry-after': '3600' }, body: { message: 'API rate limit exceeded' } }]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
-  await assert.rejects(github.getAll('/x', { permission: 'Pull requests: read' }), (error) => error instanceof ToolError && !/permission/.test(error.message));
+  await assert.rejects(github.getAll('/x', { permission: PERMISSIONS.pullRequests }), (error) => error instanceof ToolError && !/permission/.test(error.message));
+});
+
+test('a rate limit that is still there after the waits says so, and does not tell you to check the token', async () => {
+  const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
+  const s = scripted([limited, limited, limited, limited]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
+  await assert.rejects(
+    github.getAll('/x', { permission: PERMISSIONS.pullRequests }),
+    (error) => error instanceof ToolError && error.message === "GitHub answered 403 (You have exceeded a secondary rate limit.) for /x. GitHub's rate limit is used up: wait and try again."
+  );
+});
+
+test('a 429 says the rate limit is used up, even when it names no wait', async () => {
+  const s = scripted([{ status: 429, body: { message: 'slow down' } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(
+    github.getAll('/x'),
+    (error) => error instanceof ToolError && error.message === "GitHub answered 429 (slow down) for /x. GitHub's rate limit is used up: wait and try again."
+  );
+});
+
+test('a 403 that is not a rate limit keeps the text that names both causes', async () => {
+  const s = scripted([{ status: 403, body: { message: 'Resource not accessible' } }]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
+  await assert.rejects(
+    github.getAll('/x', { permission: PERMISSIONS.pullRequests }),
+    (error) => error instanceof ToolError && error.message === 'GitHub answered 403 (Resource not accessible) for /x. The token may lack access, or the rate limit is used up: check the token, or wait and try again. A fine-grained GITHUB_TOKEN needs the permission "Pull requests: read" for this request.'
+  );
 });
 
 test('a 429 never blames a missing permission', async () => {
   const s = scripted([{ status: 429, headers: { 'retry-after': '1.5' }, body: { message: 'slow down' } }]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
-  await assert.rejects(github.getAll('/x', { permission: 'Pull requests: read' }), (error) => error instanceof ToolError && !/permission/.test(error.message));
+  await assert.rejects(github.getAll('/x', { permission: PERMISSIONS.pullRequests }), (error) => error instanceof ToolError && !/permission/.test(error.message));
 });
 
 test('only secondary-limit waits count toward the longer wait', async () => {
@@ -303,8 +331,8 @@ test('a GraphQL rate limit that asks for too long a wait fails with a plain mess
   const s = scripted([graphqlLimited(5000)]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => 0 });
   await assert.rejects(
-    github.graphql('query Me { rateLimit { cost } }', {}, { permission: ['Pull requests: read'] }),
-    (error) => error instanceof ToolError && error.message === "GitHub's GraphQL API answered with an error (API rate limit exceeded for user ID 1.). The token may lack access, or the rate limit is used up: check the token, or wait and try again." && error.stopsRun
+    github.graphql('query Me { rateLimit { cost } }', {}, { permission: [PERMISSIONS.pullRequests] }),
+    (error) => error instanceof ToolError && error.message === "GitHub's GraphQL API answered with an error (API rate limit exceeded for user ID 1.). GitHub's rate limit is used up: wait and try again." && error.stopsRun
   );
   assert.deepEqual(s.waits, []);
 });
@@ -313,7 +341,7 @@ test('a GraphQL reply with an error fails with its message, and a FORBIDDEN erro
   const s = scripted([{ status: 200, body: { data: { rateLimit: { cost: 1 }, repository: null }, errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible by personal access token' }] } }]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
   await assert.rejects(
-    github.graphql('query Q { rateLimit { cost } }', {}, { permission: ['Pull requests: read', 'Checks: read', 'Commit statuses: read'] }),
+    github.graphql('query Q { rateLimit { cost } }', {}, { permission: [PERMISSIONS.pullRequests, PERMISSIONS.checks, PERMISSIONS.commitStatuses] }),
     (error) => error instanceof ToolError && /Resource not accessible by personal access token/.test(error.message) && /the permissions "Pull requests: read", "Checks: read" and "Commit statuses: read"/.test(error.message)
   );
   assert.equal(github.counts().points, 1, 'a reply with errors still counts its points');
