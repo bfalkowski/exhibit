@@ -1,0 +1,43 @@
+# Exhibit's own policy (docs/spec.md section 8.1). The Exhibit workflow checks every PR here
+# against it, in shadow mode, so nothing waits on it yet. A change to this file always needs a
+# person (spec 9.8): a person approves the policy by merging the PR.
+version: 3
+
+settings:
+  # The whole test suite, as JUnit. Each worktree is clean, so it installs the packages first.
+  test_command: "npm ci --no-audit --no-fund && node --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml test/*.test.js"
+  test_results: .exhibit/junit.xml
+  # Titles here start with a ticket number, such as "192: ...". A number alone is not a key
+  # (spec 9.1), so a fix title is seen only when it has no number. The bug label always works.
+  fix_signals: [label:bug, title_after_key:fix, branch:fix/]
+
+kinds:
+  # The code that ships: the CLI, the Action, the schemas and the packages it installs.
+  source:
+    match: ["src/**", "bin/**", "schema/**", "action.yml", "package.json", "package-lock.json"]
+    risk: high
+    needs:
+      - tests-before-after
+      - failing-before: { when: [fix] }
+
+  # The tests, the scripts, the workflows and the examples. Tests read the workflows and the
+  # examples, so the tests must pass. This is a kind, not the default: the default applies only
+  # when no kind matches, so a PR that changes the docs and a test would skip the tests.
+  tooling:
+    match: ["test/**", "test-support/**", "scripts/**", ".github/**", "examples/**", "eslint.config.js"]
+    risk: medium
+    needs:
+      - tests-before-after
+
+  # The docs a person reads. The probe finds links to files that are not there.
+  docs:
+    match: ["README.md", "CLAUDE.md", "docs/**"]
+    risk: low
+    needs:
+      - probe: { name: links, run: "node scripts/check-links.js README.md CLAUDE.md docs" }
+
+# Any other file, such as .gitignore or LICENSE.
+default:
+  risk: medium
+  needs:
+    - tests-before-after

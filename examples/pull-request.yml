@@ -4,11 +4,17 @@
 # - The publish job has write access, so it never checks out or runs the PR's code. It runs only
 #   the released Exhibit, on the exhibit that the check job uploaded.
 #
-# Copy this file to .github/workflows/exhibit.yml. Then replace bfalkowski/exhibit@main in both
-# jobs with a release tag or a commit SHA, the same one in both. This example says main only
-# because Exhibit has no release yet. Do not keep main: it moves, so in one run the check job and
-# the publish job could run different Exhibit code, and the job with the write token would run
-# whatever main is at that time.
+# Copy this file to .github/workflows/exhibit.yml, and add evidence.yml at the top of the repo
+# (docs/spec.md section 8.1). The README lists the steps.
+#
+# Both jobs pin Exhibit to one commit SHA on Exhibit's main branch, because Exhibit has no release
+# tag yet. Keep the same SHA, or a release tag, in both jobs. Never use a branch such as main: it
+# moves, so in one run the check job and the publish job could run different Exhibit code, and the
+# job with the write token would run whatever main is at that time. Never use ./ either: that is
+# the PR's own copy of the code.
+#
+# The check job runs your tests with the node on its PATH. If your tests need a certain Node, set
+# it up with actions/setup-node before the Exhibit step.
 #
 # Set enforce to the same value in both jobs. If only the check job has enforce: true, the check
 # fails, but the PR comment still says shadow mode.
@@ -27,6 +33,9 @@ jobs:
     name: Exhibit check
     runs-on: ubuntu-24.04
     permissions:
+      # Read the code and the PR. The check runs the PR's code, so it gets nothing more. Real runs
+      # showed that this reads a PR in a public repo. In a private repo, add pull-requests: read
+      # if the check cannot read the PR.
       contents: read
     steps:
       # The whole history, so the PR's base and head commits are both in the clone.
@@ -48,7 +57,7 @@ jobs:
       # enforce: false is shadow mode. The step succeeds whatever the verdict, and the job summary
       # shows the verdict. Set it to true to fail the step on needs_person and on error, and set
       # it to the same value in the publish job.
-      - uses: bfalkowski/exhibit@main
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
         with:
           command: check
           enforce: false
@@ -61,7 +70,10 @@ jobs:
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04
     permissions:
+      # Push the exhibit to the data branch, exhibit-data by default. With settings.storage: local
+      # in evidence.yml, contents: read is enough.
       contents: write
+      # Post the summary comment on the PR, or update it. Without comment: true, leave this out.
       pull-requests: write
     steps:
       # The base commit, never the PR's head. Publish reads only the policy's storage settings and
@@ -76,7 +88,7 @@ jobs:
           path: .exhibit
 
       # enforce must be the same as in the check job, so the comment says the right mode.
-      - uses: bfalkowski/exhibit@main
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
         with:
           command: publish
           comment: true
