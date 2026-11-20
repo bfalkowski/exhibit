@@ -25,8 +25,7 @@ export function classifyChange(policy, files, pr, policyPath = 'evidence.yml') {
   const { fix, fix_signal: fixSignal } = classifyFix(pr, policy.settings.fix_signals);
   const feature = pr.labels.some((label) => label.toLowerCase() === 'feature');
 
-  const names = Object.keys(policy.kinds).sort();
-  const matched = names.filter((name) => files.some((path) => policy.kinds[name].match.some((glob) => matchesGlob(path, glob))));
+  const matched = matchKinds(policy.kinds, files);
   const usedDefault = matched.length === 0;
   const rules = usedDefault ? (policy.default ? [['default', policy.default]] : []) : matched.map((name) => [name, policy.kinds[name]]);
 
@@ -66,6 +65,13 @@ export function classifyChange(policy, files, pr, policyPath = 'evidence.yml') {
     },
     requirements
   };
+}
+
+// Returns the names of the kinds in `kinds` (the policy's kinds) that a path in `paths` matches,
+// sorted by name. An empty list means no kind matched, so default's rules apply. `exhibit check`
+// and `exhibit history` both use it, so a PR gets the same kinds from each (spec 8.3).
+export function matchKinds(kinds, paths) {
+  return Object.keys(kinds).sort().filter((name) => paths.some((path) => kinds[name].match.some((glob) => matchesGlob(path, glob))));
 }
 
 // A need is a bare name, or { type: fields }. A probe with `author: hidden` is a check that the

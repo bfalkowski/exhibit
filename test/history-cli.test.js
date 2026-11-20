@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cacheFolder } from '../src/github-cache.js';
+import { cacheFolder, UNUSED_DAYS } from '../src/github-cache.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
@@ -40,6 +40,8 @@ function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(
 }
 
 const notAClone = (repo) => `exhibit: note: SZZ did not run, because this folder is not a clone of ${repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`;
+// With no evidence.yml, every PR's kinds is empty, and history says so in this one line.
+const NO_POLICY = 'exhibit: note: there is no evidence.yml, so the kinds of every PR in .exhibit/history.jsonl are empty, which means default.\n';
 const QUOTED_VERDICT_WARNING = 'exhibit: warning: PR 5: the comment by dev5 at 2026-02-20T10:00:00Z gives the verdict fix only in a quoted line, so it does not count as a review.\n';
 const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const WROTE_REPORT = 'Wrote the report to .exhibit/report.md and .exhibit/report.html.\n';
@@ -132,7 +134,7 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   t.after(big.cleanup);
   const run = exhibit(t, ['history', '--repo', 'acme/big', '--json'], { fixturePath: big.path });
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(run.stderr, 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
+  assert.equal(run.stderr, NO_POLICY + 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
   // 1 query for the PRs, and 29 more pages of 100 files for each of PRs 9 and 8.
   assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
@@ -142,7 +144,7 @@ test('outside a clone, history writes szz: null on every line and says so in one
   const run = exhibit(t, ['history', '--repo', 'acme/widgets']);
   assert.equal(run.status, 0, run.stderr);
   // The fixture's PR 5 has a reply that quotes a verdict, so a warning comes first.
-  assert.equal(run.stderr, QUOTED_VERDICT_WARNING + notAClone('acme/widgets'));
+  assert.equal(run.stderr, NO_POLICY + QUOTED_VERDICT_WARNING + notAClone('acme/widgets'));
   for (const line of readLines(run.historyPath)) assert.equal(line.szz, null, `PR ${line.number}`);
 });
 
@@ -154,7 +156,7 @@ test('inside a clone of the repo, history links each fix PR to the PRs that adde
   t.after(replay.cleanup);
   const run = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(run.stderr, '');
+  assert.equal(run.stderr, NO_POLICY);
   // The fixture repo holds a history file whose lines are all in the look-back window, so the
   // run reads every PR again, and SZZ runs on the fixes, whose szz is null there.
   assert.equal(run.stdout, 'Wrote 14 merged PRs from fixture/shop to .exhibit/history.jsonl. SZZ found links for 4 of 7 fix PRs.\nRead 14 of 14 merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the 7 days before its newest PR. Kept the other 0 lines as they were.\n' + WROTE_REPORT + madeRequests(repo.dir, 6, 1));
@@ -387,6 +389,43 @@ test('a second run gets a 304 for every REST request, writes the same history, a
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 6, 1, 6));
   assert.equal(readFileSync(second.historyPath, 'utf8'), history);
+});
+
+test('a run removes the cache entries that no run has used for 30 days', (t) => {
+  const { cwd, fixturePath } = shopWithETags(t);
+  const first = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const folder = cacheOf(cwd);
+  const used = readdirSync(folder);
+  assert.equal(used.length, 6);
+  // An entry that no run has read or written for UNUSED_DAYS + 10 days.
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--full'], { fixturePath, cwd });
+  assert.equal(second.status, 0, second.stderr);
+  assert.ok(second.stdout.endsWith(madeRequests(cwd, 6, 1, 6)), second.stdout);
+  assert.deepEqual(readdirSync(folder).sort(), used.sort());
+});
+
+test('a run that fails still removes the cache entries that no run has used for 30 days', (t) => {
+  const cwd = newFolder(t);
+  const folder = cacheOf(cwd);
+  mkdirSync(folder, { recursive: true });
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  const fresh = join(folder, `${'b'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  writeFileSync(fresh, '{}');
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken', cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /does not fit the history schema/);
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(fresh), true);
 });
 
 test('--no-cache gets no 304s and writes no cache folder', (t) => {

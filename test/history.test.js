@@ -57,7 +57,7 @@ test('readHistory fills the spec 8.3 fields, with files from every page of the f
       { name: 'test', conclusion: 'failure' },
       { name: 'Secret scan', conclusion: 'success' }
     ],
-    classification: { fix: false, fix_signal: null }
+    classification: { kinds: [], fix: false, fix_signal: null }
   });
 });
 
@@ -173,11 +173,11 @@ test('readHistory turns a GitHub reply that is not a GraphQL reply into a tool e
 test('readHistory marks fix PRs with the default signals when it gets none', async () => {
   const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) }) });
   assert.deepEqual(lines.map((l) => [l.number, l.classification]), [
-    [7, { fix: false, fix_signal: null }],
-    [4, { fix: false, fix_signal: null }],
-    [5, { fix: true, fix_signal: 'label:bug' }],
-    [3, { fix: false, fix_signal: null }],
-    [1, { fix: false, fix_signal: null }]
+    [7, { kinds: [], fix: false, fix_signal: null }],
+    [4, { kinds: [], fix: false, fix_signal: null }],
+    [5, { kinds: [], fix: true, fix_signal: 'label:bug' }],
+    [3, { kinds: [], fix: false, fix_signal: null }],
+    [1, { kinds: [], fix: false, fix_signal: null }]
   ]);
 });
 

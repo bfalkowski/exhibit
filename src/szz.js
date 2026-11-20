@@ -153,8 +153,8 @@ export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {
 // branch in the clone: a commit that the default branch got on its own, such as a squash merge,
 // and not one that came in through a merge commit. The tip is the default branch of a remote
 // that points at the forge's repo, else the local branch with that name. Git lists the line
-// once per run, when a merge SHA first needs it. With no such branch in the clone, no commit is
-// on the line.
+// once per run, when a merge SHA first needs it. With no such branch in the clone, or when git
+// fails to list the line, no commit is on the line, so the forge is asked.
 function mainLineCheck(dir, forge) {
   let line = null;
   return async (sha, branch) => {
@@ -164,9 +164,14 @@ function mainLineCheck(dir, forge) {
 }
 
 async function firstParentLine(dir, forge, branch) {
-  const tip = await branchTip(dir, forge, branch);
-  if (!tip) return new Set();
-  return new Set((await git(dir, ['rev-list', '--first-parent', tip])).split('\n').filter(Boolean));
+  try {
+    const tip = await branchTip(dir, forge, branch);
+    if (!tip) return new Set();
+    return new Set((await git(dir, ['rev-list', '--first-parent', tip])).split('\n').filter(Boolean));
+  } catch (error) {
+    if (!(error instanceof GitError)) throw error;
+    return new Set();
+  }
 }
 
 async function branchTip(dir, forge, branch) {

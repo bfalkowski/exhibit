@@ -3,6 +3,11 @@ import { REVERT_NOT_FOUND, REVERTS_A_REVERT } from './szz.js';
 // Builds the history report (spec 8.5): report.md and a self-contained report.html, from the
 // history lines. Both files come from one list of blocks, so they always hold the same facts.
 
+// Where each command writes its report (spec 8.5). Backtest has its own names, so a backtest
+// run never writes over the history report.
+export const HISTORY_REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
+export const BACKTEST_REPORT = { markdown: '.exhibit/backtest.md', html: '.exhibit/backtest.html' };
+
 // The rule for weak history (spec 8.5). The history is weak when it has fewer than `minFixPrs`
 // fix PRs, when SZZ linked none of them or did not run, or when fewer than half of the escaped
 // defects have a link with a confidence of `strongConfidence` or more.

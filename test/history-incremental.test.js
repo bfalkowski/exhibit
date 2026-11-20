@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { history } from '../src/commands/history.js';
+import { buildExhibit } from '../src/check.js';
 import { checkHistoryLine } from '../src/history-schema.js';
+import { readPolicy } from '../src/policy.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { graphqlReplies } from './fixtures/github/graphql-replies.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
@@ -50,7 +52,8 @@ function pull(number, day) {
   };
 }
 
-// The GitHub of acme/days: its merged PRs, and the reviews of each PR by number.
+// The GitHub of acme/days: its merged PRs, the reviews of each PR by number, and the two file
+// paths of each PR by number, when a test sets them.
 // The PRs: 1 on November 1, 2 on November 5, 3 on November 10, 4 on November 14.
 function repo() {
   return { pulls: [pull(4, 14), pull(3, 10), pull(2, 5), pull(1, 1)], reviews: {} };
@@ -73,7 +76,7 @@ function replies(gh) {
     headRef: pr.head.ref,
     headSha: pr.head.sha,
     labels: [],
-    files: [{ path: `src/f${pr.number}.js`, additions: 1, deletions: 0 }, { path: `test/f${pr.number}.test.js`, additions: 2, deletions: 0 }],
+    files: (gh.files?.[pr.number] ?? [`src/f${pr.number}.js`, `test/f${pr.number}.test.js`]).map((path, i) => ({ path, additions: i + 1, deletions: 0 })),
     reviews: (gh.reviews[pr.number] ?? []).map((review) => ({ state: review.state, submittedAt: review.submitted_at, author: { __typename: 'User', login: review.user.login } })),
     comments: [],
     ci: []
@@ -207,6 +210,33 @@ test('a file from an older schema version forces a full run, with one line that 
   for (const line of readLines(cwd)) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
 });
 
+// Runs history once, changes each line of the file with `change`, runs it again, and returns the
+// one note that says why the second run read every PR again.
+async function noteForOlderFile(change) {
+  const cwd = newFolder();
+  const gh = repo();
+  await run(cwd, gh);
+  const old = readLines(cwd).map((line) => change({ ...line }));
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), old.map((line) => JSON.stringify(line) + '\n').join(''));
+  const second = await run(cwd, gh);
+  const notes = second.stderr.split('\n').filter((text) => text.includes('reads every merged PR again'));
+  assert.equal(notes.length, 1, second.stderr);
+  return notes[0];
+}
+
+test('the older-file note leaves out the "/" when a field is missing at the top of the line', async () => {
+  const note = await noteForOlderFile((line) => {
+    delete line.base_ref;
+    return line;
+  });
+  assert.match(note, /\(PR 4 misses the field base_ref\)\.$/);
+});
+
+test('the older-file note keeps the path when the problem is deeper in the line', async () => {
+  const note = await noteForOlderFile((line) => ({ ...line, reviews: { change_request_rounds: 0 } }));
+  assert.match(note, /\(PR 4 \/reviews: misses the field list\)\.$/);
+});
+
 test('a file from another repo forces a full run', async () => {
   const cwd = newFolder();
   const gh = repo();
@@ -279,10 +309,10 @@ test('a changed fix_signals classifies every kept line again, with no extra GitH
   const changed = await run(cwd, gh, ['--json']);
   const lines = readLines(cwd);
   assert.deepEqual(lines.map((line) => [line.number, line.classification]), [
-    [4, { fix: true, fix_signal: 'pr:4' }],
-    [3, { fix: false, fix_signal: null }],
-    [2, { fix: true, fix_signal: 'branch:topic-2' }],
-    [1, { fix: true, fix_signal: 'pr:1' }]
+    [4, { kinds: [], fix: true, fix_signal: 'pr:4' }],
+    [3, { kinds: [], fix: false, fix_signal: null }],
+    [2, { kinds: [], fix: true, fix_signal: 'branch:topic-2' }],
+    [1, { kinds: [], fix: true, fix_signal: 'pr:1' }]
   ]);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   // The same cost as the run with no change: no REST request, and the same 3 GraphQL queries,
@@ -298,7 +328,7 @@ test('a changed fix_signals classifies every kept line again, with no extra GitH
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, branch:topic-2, pr:4]\n');
   const third = await run(cwd, gh);
   const pr1 = readLines(cwd).find((line) => line.number === 1);
-  assert.deepEqual([pr1.classification, pr1.szz], [{ fix: false, fix_signal: null }, null]);
+  assert.deepEqual([pr1.classification, pr1.szz], [{ kinds: [], fix: false, fix_signal: null }, null]);
   assert.match(third.stderr, /another way: PR 1 is no longer a fix\.\n/);
 
   // With the same signals again, nothing changes, so there is no note.
@@ -334,12 +364,12 @@ test('inside a clone, a kept line that becomes a fix gets SZZ, and one that stop
   const after = new Map(linesOf().map((line) => [line.number, line]));
   for (const line of after.values()) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   // PR 12 stays a fix and keeps its szz. PR 11 became a fix, so SZZ ran on it.
-  assert.deepEqual(after.get(12).classification, { fix: true, fix_signal: 'pr:12' });
+  assert.deepEqual(after.get(12).classification, { kinds: [], fix: true, fix_signal: 'pr:12' });
   assert.deepEqual(after.get(12).szz, before.get(12).szz);
-  assert.deepEqual(after.get(11).classification, { fix: true, fix_signal: 'pr:11' });
+  assert.deepEqual(after.get(11).classification, { kinds: [], fix: true, fix_signal: 'pr:11' });
   assert.notEqual(after.get(11).szz, null);
   // PR 6 is no longer a fix, so its szz is null.
-  assert.deepEqual([after.get(6).classification, after.get(6).szz], [{ fix: false, fix_signal: null }, null]);
+  assert.deepEqual([after.get(6).classification, after.get(6).szz], [{ kinds: [], fix: false, fix_signal: null }, null]);
   assert.deepEqual(JSON.parse(second.stdout).szz.fix_prs, 2);
 });
 
@@ -397,7 +427,7 @@ test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ
   const second = run();
   assert.equal(second.status, 0, second.stderr);
   const reverted = linesOf().get(14);
-  assert.deepEqual(reverted.classification, { fix: true, fix_signal: 'revert' });
+  assert.deepEqual(reverted.classification, { kinds: [], fix: true, fix_signal: 'revert' });
   assert.deepEqual(reverted.szz, { blamed_commit: null, links: [{ pr: 13, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null });
 
   // Back to blame: the revert's szz no longer fits, so SZZ blames the lines again.
@@ -405,4 +435,169 @@ test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ
   const third = run();
   assert.equal(third.status, 0, third.stderr);
   assert.deepEqual(linesOf().get(14).szz, blamed);
+});
+
+// A small policy with three kinds, and a default. No kind needs evidence, so check runs no tests.
+const THREE_KINDS = `kinds:
+  api:
+    match: ["src/api/**"]
+    risk: high
+    needs: []
+  docs:
+    match: ["**/*.md"]
+    risk: low
+    needs: []
+  tests:
+    match: ["test/**"]
+    risk: low
+    needs: []
+default:
+  risk: medium
+  needs: []
+`;
+
+// THREE_KINDS with docs matching only docs/, and a new kind, config, for package.json.
+const CHANGED_KINDS = `kinds:
+  api:
+    match: ["src/api/**"]
+    risk: high
+    needs: []
+  config:
+    match: ["package.json"]
+    risk: medium
+    needs: []
+  docs:
+    match: ["docs/**"]
+    risk: low
+    needs: []
+  tests:
+    match: ["test/**"]
+    risk: low
+    needs: []
+default:
+  risk: medium
+  needs: []
+`;
+
+// PR 4 touches the API and a doc, PR 3 only docs, PR 2 code and a test, and PR 1 no kind at all.
+function repoWithKinds() {
+  return { ...repo(), files: { 4: ['src/api/users.js', 'README.md'], 3: ['docs/a.md', 'docs/b.md'], 1: ['lib/x.js', 'package.json'] } };
+}
+
+// What `exhibit check` gives as the kinds of a change to `paths` under the policy in `cwd`.
+async function checkKinds(cwd, paths) {
+  const exhibit = await buildExhibit({
+    policy: await readPolicy(cwd),
+    policyFile: { path: 'evidence.yml', sha256: 'a'.repeat(64) },
+    files: paths,
+    pr: { title: '', labels: [], branch: 'topic' },
+    signalsFrom: 'branch',
+    repo: REPO,
+    prNumber: null,
+    base: '1'.repeat(40),
+    head: '2'.repeat(40)
+  }, { collectors: {}, environment: { node: '20.x', os: 'linux' }, now: () => new Date('2026-11-20T10:00:00Z'), clock: () => 0 });
+  return exhibit.classification.kinds;
+}
+
+test('each line\'s kinds are the kinds exhibit check gives for the same files', async () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), THREE_KINDS);
+  const ran = await run(cwd, repoWithKinds());
+  const lines = readLines(cwd);
+  assert.deepEqual(lines.map((line) => [line.number, line.classification.kinds]), [
+    [4, ['api', 'docs']],
+    [3, ['docs']],
+    [2, ['tests']],
+    [1, []]
+  ]);
+  for (const line of lines) {
+    assert.deepEqual(line.classification.kinds, await checkKinds(cwd, line.files.map((file) => file.path)), `PR ${line.number}`);
+    assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  }
+  assert.doesNotMatch(ran.stderr, /kinds/);
+});
+
+test('with no evidence.yml, or one with no kinds, every line has empty kinds, and history says so in one line', async () => {
+  const cwd = newFolder();
+  const none = await run(cwd, repoWithKinds());
+  for (const line of readLines(cwd)) {
+    assert.deepEqual(line.classification.kinds, [], `PR ${line.number}`);
+    assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  }
+  assert.equal(none.stderr.split('\n').filter((text) => text.includes('kinds')).join('\n'), 'exhibit: note: there is no evidence.yml, so the kinds of every PR in .exhibit/history.jsonl are empty, which means default.');
+
+  writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug]\n');
+  const noKinds = await run(cwd, repoWithKinds(), ['--full']);
+  assert.ok(readLines(cwd).every((line) => line.classification.kinds.length === 0));
+  assert.equal(noKinds.stderr.split('\n').filter((text) => text.includes('kinds')).join('\n'), 'exhibit: note: evidence.yml names no kinds, so the kinds of every PR in .exhibit/history.jsonl are empty, which means default.');
+});
+
+test('a changed policy matches every kept line again from its stored files, says which changed, and asks GitHub nothing more', async () => {
+  const cwd = newFolder();
+  const gh = repoWithKinds();
+  writeFileSync(join(cwd, 'evidence.yml'), THREE_KINDS);
+  await run(cwd, gh);
+  const unchanged = await run(cwd, gh, ['--json']);
+  assert.doesNotMatch(unchanged.stderr, /kinds/);
+
+  // Now docs matches only docs/, and config matches package.json. PRs 1 and 2 are before the
+  // look-back window, so their lines are kept, not read again.
+  writeFileSync(join(cwd, 'evidence.yml'), CHANGED_KINDS);
+  const changed = await run(cwd, gh, ['--json']);
+  const lines = readLines(cwd);
+  assert.deepEqual(lines.map((line) => [line.number, line.classification.kinds]), [
+    [4, ['api']],
+    [3, ['docs']],
+    [2, ['tests']],
+    [1, ['config']]
+  ]);
+  for (const line of lines) {
+    assert.deepEqual(line.classification.kinds, await checkKinds(cwd, line.files.map((file) => file.path)), `PR ${line.number}`);
+    assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  }
+  // The same requests as the run with no change: the list, and one query each for PRs 3 and 4.
+  const summary = JSON.parse(changed.stdout);
+  assert.deepEqual([summary.github.requests, summary.github.graphql], [0, { queries: 3, points: 3 }]);
+  assert.deepEqual([...changed.asked].sort(), [...unchanged.asked].sort());
+  assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
+  assert.match(changed.stderr, /exhibit: note: the kinds in evidence\.yml now give 2 PRs in \.exhibit\/history\.jsonl other kinds: PR 4 from api, docs to api; PR 1 from default to config\.\n/);
+});
+
+test('a file written before history had kinds is kept, and the next run fills in kinds with no note', async () => {
+  const cwd = newFolder();
+  const gh = repoWithKinds();
+  await run(cwd, gh);
+  // Take kinds out of every line, as in a file from before S4. Such a file still passes the schema.
+  const old = readLines(cwd).map((line) => {
+    const classification = { ...line.classification };
+    delete classification.kinds;
+    return { ...line, classification };
+  });
+  for (const line of old) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), old.map((line) => JSON.stringify(line) + '\n').join(''));
+
+  writeFileSync(join(cwd, 'evidence.yml'), THREE_KINDS);
+  const next = await run(cwd, gh, ['--json']);
+  const summary = JSON.parse(next.stdout);
+  // PRs 1 and 2 are kept, not read again, and still get their kinds from their stored files.
+  assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
+  assert.deepEqual(readLines(cwd).map((line) => [line.number, line.classification.kinds]), [
+    [4, ['api', 'docs']],
+    [3, ['docs']],
+    [2, ['tests']],
+    [1, []]
+  ]);
+  assert.doesNotMatch(next.stderr, /kinds/);
+});
+
+test('a kind whose name the policy schema takes, even the empty name, is written, and the line passes the schema', async () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'kinds:\n  "":\n    match: ["**"]\n    risk: low\n    needs: []\n');
+  await run(cwd, repo());
+  for (const line of readLines(cwd)) {
+    assert.deepEqual(line.classification.kinds, [''], `PR ${line.number}`);
+    assert.deepEqual(line.classification.kinds, await checkKinds(cwd, line.files.map((file) => file.path)), `PR ${line.number}`);
+    assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  }
 });
