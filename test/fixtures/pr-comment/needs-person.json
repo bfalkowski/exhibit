@@ -1,0 +1,106 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": null
+  },
+  "repo": "acme/widgets",
+  "pr": 8,
+  "base": "1111111111111111111111111111111111111111",
+  "head": "3333333abcdef333333333333333333333333333",
+  "classification": {
+    "kinds": [],
+    "risk": "high",
+    "fix": true,
+    "fix_signal": "label:bug",
+    "feature": false,
+    "signals_from": "pr",
+    "merge_without_reading": "never",
+    "used_default": true,
+    "policy_changed": true
+  },
+  "requirements": [],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "failing-before",
+      "status": "missing",
+      "how_to_fix": "Add a test that fails on the base\nand passes on the head."
+    },
+    {
+      "type": "policy-change",
+      "status": "missing",
+      "how_to_fix": "Ask a maintainer to review the policy change."
+    },
+    {
+      "type": "probe",
+      "name": "probe-3",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-3 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-4",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-4 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-5",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-5 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-6",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-6 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-7",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-7 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-8",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-8 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-9",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-9 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-10",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-10 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-11",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-11 and fix what it reports."
+    },
+    {
+      "type": "probe",
+      "name": "probe-12",
+      "status": "failed",
+      "how_to_fix": "Run npm run probe-12 and fix what it reports."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 0,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-20T10:00:00Z"
+}

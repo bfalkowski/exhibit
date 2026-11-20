@@ -1,0 +1,21 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": { "path": "evidence.yml", "sha256": null },
+  "repo": "acme/widgets",
+  "pr": 7,
+  "base": "1111111111111111111111111111111111111111",
+  "head": "2222222abcdef222222222222222222222222222",
+  "classification": {
+    "kinds": ["api", "docs"], "risk": "medium", "fix": false, "fix_signal": null, "feature": false,
+    "signals_from": "pr", "merge_without_reading": "never", "used_default": false, "policy_changed": false
+  },
+  "requirements": [
+    { "type": "tests-before-after", "params": {}, "kinds": ["api"], "status": "met", "details": {}, "author": "builder", "duration_ms": 1200 }
+  ],
+  "verdict": "meets_policy",
+  "gaps": [],
+  "checks_by_author": { "builder": 1, "hidden": 0 },
+  "flaky_tests": [],
+  "environment": { "node": "20.x", "os": "linux" },
+  "created_at": "2026-11-20T10:00:00Z"
+}

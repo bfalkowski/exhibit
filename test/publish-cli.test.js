@@ -218,3 +218,29 @@ test('a name that git refuses for the commit gives exit 2 with git\'s reason, no
   assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
   assert.equal(fixture.git(fixture.repo, 'for-each-ref', 'refs/exhibit'), '');
 });
+
+test('a 403 when posting the comment gives exit 2 and a plain message, and the exhibit stays on the data branch', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const replies = fileURLToPath(new URL('./fixtures/github/pr-comment-forbidden.json', import.meta.url));
+  const env = gitEnv(fixture.home, { ...IDENTITY, GITHUB_TOKEN: 'test-token', EXHIBIT_TEST_FIXTURE: replies });
+
+  const run = spawnSync(process.execPath, ['--import', preload, ...publishArgs(file, ['--comment'])], { cwd: fixture.repo, encoding: 'utf8', env });
+
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stdout, /^Stored prs\/12\/1{40}\.json on exhibit-data in commit [0-9a-f]{40}, pushed to origin\.\n$/);
+  assert.equal(run.stderr, `exhibit: the exhibit is stored at prs/12/${HEAD_1}.json on exhibit-data, but the comment on PR 12 was not posted: GitHub answered 403 (Resource not accessible by integration) for /repos/acme/widgets/issues/12/comments. The token may lack access, or the rate limit is used up: check the token, or wait and try again. A fine-grained GITHUB_TOKEN needs the permission "Pull requests: write" for this request.\n`);
+  assert.equal(fixture.git(fixture.remote, 'show', `exhibit-data:prs/12/${HEAD_1}.json`), readFileSync(file, 'utf8'));
+});
+
+test('--comment with no GITHUB_TOKEN gives exit 2 and stores nothing', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+
+  const run = runPublish(fixture, fixture.repo, file, ['--comment']);
+
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: GITHUB_TOKEN is not set\. --comment posts on the PR in GitHub/);
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+});
