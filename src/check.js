@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
-import { runTestsOnBaseAndHead, testsBeforeAfter } from './test-runs.js';
+import { describeTests, failingBefore } from './failing-before.js';
+import { runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
@@ -9,19 +10,12 @@ const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
-// how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The other
-// evidence collectors come in later tickets. Until each one lands, it says `skipped`, so a
-// requirement it cannot check never passes on its own. The probe collector needs the head
-// worktree, so the check command adds it (src/probe.js).
-const notBuilt = (what) => async () => ({
-  status: 'skipped',
-  details: { reason: 'not built yet' },
-  how_to_fix: `Exhibit cannot collect ${what} yet: this collector is not built yet, and a later S4 ticket builds it. Until then a person must check it.`
-});
-
+// how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. Mutation comes
+// in slice S6. Until then it says `skipped`, so a requirement it cannot check never passes on its
+// own. The probe collector needs the head worktree, so the check command adds it (src/probe.js).
 export const COLLECTORS = Object.freeze({
   'tests-before-after': testsBeforeAfter,
-  'failing-before': notBuilt('failing-before (a test that fails on the base and passes on the head)'),
+  'failing-before': failingBefore,
   mutation: async () => ({
     status: 'skipped',
     details: { reason: 'mutation comes in slice S6' },
@@ -36,10 +30,17 @@ export const COLLECTORS = Object.freeze({
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
 // `head` SHAs, and `cwd`, the clone, and `env` for the test command.
 //
-// Each collector gets a context: `cwd`, `env`, `base`, `head`, the policy's `settings`, and
-// `testRuns()`, which runs the tests on the base and the head the first time it is called and
-// gives back the same per-test results after that. So a later collector, such as failing-before,
-// uses the same results and does not run the tests again. `runTests` makes those results.
+// Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
+// `settings`, and `testRuns()`, which runs the tests on the base and the head the first time it is
+// called and gives back the same per-test results after that. So a later collector, such as
+// failing-before, uses the same results and does not run the tests again. `runTests` makes those
+// results. `baseWithPrTests(paths)` runs the tests on the base with those paths as they are on the
+// head (spec 9.4). `runBaseWithPrTests` makes that run. It runs once for each set of paths, so two
+// failing-before requirements share one run.
+//
+// A failing-before whose `when` names neither fix nor feature of this change is not needed
+// (spec 8.1). It gets `skipped` with the reason, and no collector runs. This skip is no gap, so it
+// does not stop meets_policy, and it does not count in checks_by_author.
 //
 // Each requirement goes to the collector for its type. A collector that throws, or gives back no
 // valid status, makes that requirement `error`, and the verdict `error`. The verdict is
@@ -49,27 +50,37 @@ export const COLLECTORS = Object.freeze({
 // `clock` gives milliseconds for duration_ms, and `now` the time for created_at. These and
 // `environment` are the only parts of the result that can differ between two runs on the same
 // commits.
-export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
+export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, runBaseWithPrTests = runTestsOnBaseWithPrTests, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
   const files = [...new Set(change.files)].sort();
   const { classification, requirements } = classifyChange(change.policy, files, change.pr);
   const { has_default: hasDefault, ...shown } = classification;
 
   let testRuns;
+  const withPrTests = new Map();
   const context = {
     cwd: change.cwd,
     env: change.env ?? process.env,
     base: change.base,
     head: change.head,
+    files,
     settings: change.policy?.settings ?? {},
-    testRuns: () => (testRuns ??= runTests({ cwd: change.cwd, base: change.base, head: change.head, settings: change.policy?.settings ?? {}, env: change.env ?? process.env }))
+    testRuns: () => (testRuns ??= runTests({ cwd: change.cwd, base: change.base, head: change.head, settings: change.policy?.settings ?? {}, env: change.env ?? process.env })),
+    baseWithPrTests: (paths) => {
+      const key = paths.join('\0');
+      if (!withPrTests.has(key)) withPrTests.set(key, runBaseWithPrTests({ cwd: change.cwd, base: change.base, head: change.head, paths, settings: change.policy?.settings ?? {}, env: change.env ?? process.env }));
+      return withPrTests.get(key);
+    }
   };
 
   const collected = [];
   const gaps = [];
   const flaky = new Set();
+  const notNeeded = new Set();
   for (const requirement of requirements) {
     const started = clock();
-    const result = await collect(collectors, requirement, context);
+    const result = requirement.not_needed
+      ? { status: 'skipped', details: { reason: requirement.not_needed }, flaky_tests: [] }
+      : await collect(collectors, requirement, context);
     for (const name of result.flaky_tests) flaky.add(name);
     const item = {
       type: requirement.type,
@@ -81,7 +92,8 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
       duration_ms: Math.max(0, Math.round(clock() - started))
     };
     collected.push(item);
-    if (item.status !== 'met') {
+    if (requirement.not_needed) notNeeded.add(item);
+    else if (item.status !== 'met') {
       gaps.push({
         type: item.type,
         ...(item.type === 'probe' ? { name: item.params.name } : {}),
@@ -121,8 +133,8 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     verdict,
     gaps,
     checks_by_author: {
-      builder: collected.filter((item) => item.author === 'builder').length,
-      hidden: collected.filter((item) => item.author === 'hidden').length
+      builder: collected.filter((item) => item.author === 'builder' && !notNeeded.has(item)).length,
+      hidden: collected.filter((item) => item.author === 'hidden' && !notNeeded.has(item)).length
     },
     flaky_tests: [...flaky].sort(),
     environment,
@@ -194,7 +206,7 @@ export function renderSummary(exhibit) {
   for (const item of exhibit.requirements) {
     const name = item.type === 'probe' ? ` ${item.params.name}` : '';
     const hidden = item.author === 'hidden' ? ', hidden check' : '';
-    lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.${probeFiles(item)}`);
+    lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.${probeFiles(item)}${otherDetails(item)}`);
   }
   lines.push('');
 
@@ -208,6 +220,14 @@ export function renderSummary(exhibit) {
     lines.push('', 'A skipped requirement counts as not met: the verdict is meets_policy only when every requirement is met.');
   }
   return lines.join('\n') + '\n';
+}
+
+// More words for a requirement's line in summary.md: the tests that failing-before found, or why
+// a requirement was not needed.
+function otherDetails(item) {
+  if (item.type !== 'failing-before') return '';
+  if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
+  return describeTests(item.details);
 }
 
 // The links to a probe's output and artifacts, for its line in summary.md. The files are under
