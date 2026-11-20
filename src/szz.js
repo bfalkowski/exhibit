@@ -365,11 +365,12 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     const comments = markComments(rows.map((row) => row.text), path, rows.map((row) => lineFact[row.line]?.inBlock));
     return rows.map((row, i) => {
       const level = lineFact[row.line]?.level;
-      return { ...row, level, key: squash(row.text, path, level), comment: comments[i] };
+      const codeKey = squash(stripComments(row.text, path), path, level);
+      return { ...row, level, key: squash(row.text, path, level), codeKey, comment: comments[i] };
     });
   };
   const added = hunks.flatMap((hunk, at) => {
-    const rows = hunk.added.map((text, i) => ({ at, line: hunk.newStart + i, text, used: false }));
+    const rows = hunk.added.map((text, i) => ({ at, path: hunk.newPath, line: hunk.newStart + i, text, used: false }));
     return side(rows, hunk.newPath, factsOf('after', after, hunk.newPath));
   }).map((row, place) => ({ ...row, place }));
   const deleted = hunks.flatMap((hunk, at) => {
@@ -379,8 +380,8 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   const index = indexByKey(added);
   const sameFile = (deletedAt, addedAt) => hunks[deletedAt].newPath !== null && hunks[deletedAt].newPath === hunks[addedAt].newPath;
 
-  // Finds the first unused added line with the same text, give or take whitespace, in the same
-  // hunk or in another one, and uses it up.
+  // Finds the first unused added line with the same text, with at most whitespace changed, in
+  // the same hunk or in another one, and uses it up.
   // Returns the matched line, or undefined.
   const pair = (line, sameHunk) => {
     const byHunk = index.get(line.key);
@@ -405,18 +406,36 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   // Lines that another hunk adds back moved only as a block: lines next to each other that
   // another hunk adds back next to each other, in the same order. A short line such as "}" is
   // in many places, so one moved line, or a block with only one line of words, still counts.
+  // A block can pass over a line that its own hunk adds back, so that line does not split the
+  // block. That line keeps its reason, and its own hunk keeps the added line it paired with. The
+  // block leaves that line's match in the other hunk unused, so another block can still take it.
+  // The block does not move that line, so the line does not count toward its two lines with
+  // words. Otherwise a block that moves one line could take an added line from a real block.
+  const secondWordAt = secondWordLines(deleted);
+  const runs = knownRuns(added.length);
   for (let i = 0; i < deleted.length;) {
-    const block = movedBlock(deleted, added, index, i);
-    if (block.filter((row) => hasWords(row.text)).length < 2) {
+    // A block starts at a line that no rule drops yet. When the block can not reach two lines
+    // with words, it can not pass, so do not look for it.
+    if (deleted[i].reason !== null || secondWordAt[i] === -1) {
+      runs.forget();
+      i++;
+      continue;
+    }
+    const block = movedBlock(deleted, added, index, i, secondWordAt[i], runs);
+    if (block.length === 0) {
+      runs.step();
       i++;
       continue;
     }
     const inFile = sameFile(deleted[i].at, block[0].at);
     for (const [k, row] of block.entries()) {
-      deleted[i + k].reason = 'moved';
-      deleted[i + k].movedInFile = inFile && hasWords(deleted[i + k].text);
+      const line = deleted[i + k];
+      if (line.reason !== null) continue;
       row.used = true;
+      line.reason = 'moved';
+      line.movedInFile = inFile && hasWords(line.text);
     }
+    runs.forget();
     i += block.length;
   }
   // A blank line outside a moved block that another hunk adds back moved too. Any other blank
@@ -433,20 +452,19 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   }
   // A code line where only the comment at its end changed, such as "x = 1; // old note" to
   // "x = 1;": the same hunk adds a code line with the same code once the comments come off both
-  // lines, give or take whitespace. The added code lines are indexed by hunk and code, as above.
-  const codeOf = (row, path) => squash(stripComments(row.text, path), path, row.level);
+  // lines, with at most whitespace changed. That code is each row's codeKey. Each side reads
+  // its comments with its own path, so a rename from .py to .js reads "#" only on the old side.
+  // The added code lines are indexed by hunk and codeKey, as above.
   const byCode = new Map();
   for (const row of added) {
     if (row.comment) continue;
-    const id = `${row.at}\n${codeOf(row, hunks[row.at].oldPath)}`;
+    const id = `${row.at}\n${row.codeKey}`;
     if (!byCode.has(id)) byCode.set(id, hunkRows());
     byCode.get(id).rows.push(row);
   }
   for (const line of deleted) {
-    if (line.reason !== null || line.comment) continue;
-    const key = codeOf(line, line.path);
-    if (key === '') continue;
-    const match = byCode.get(`${line.at}\n${key}`)?.firstUnused();
+    if (line.reason !== null || line.comment || line.codeKey === '') continue;
+    const match = byCode.get(`${line.at}\n${line.codeKey}`)?.firstUnused();
     if (match) {
       match.used = true;
       line.reason = 'comment';
@@ -497,29 +515,91 @@ function hunkRows() {
 }
 
 // Finds the longest run of added lines, in one hunk other than the deleted line's, that matches
-// the deleted lines from `start` on, line by line. Each matched line is unused, and each deleted
-// line in the run is in the same hunk and is not dropped yet. Only added lines with the key of
-// the line at `start` can begin a run, so the index gives them.
-// Returns the matched added lines, or [] when no other hunk adds back the line at `start`.
-function movedBlock(deleted, added, index, start) {
+// the deleted lines from `start` on, line by line, and reaches the deleted line at `secondWord`:
+// the second line with words that the block moves. Only added lines with the key of the line at `start` can begin a
+// run, so the index gives them. A run from added line j can reach `secondWord` only when the
+// added line as far from j fits it, so the search walks no other run. `runs` holds the runs that
+// the line before `start` found, and gets the runs of this call for the line after it.
+// Returns the matched added lines, or [] when no such run exists.
+function movedBlock(deleted, added, index, start, secondWord, runs) {
   const first = deleted[start];
-  let best = [];
-  if (first.reason !== null) return best;
+  const reach = secondWord - start;
+  let bestAt = 0;
+  let bestSize = reach;
   for (const [at, { rows }] of index.get(first.key) ?? []) {
     if (at === first.at) continue;
     for (const { place: j } of rows) {
-      let size = 0;
-      while (true) {
-        const from = deleted[start + size];
-        const to = added[j + size];
-        if (from === undefined || to === undefined || from.at !== first.at || from.reason !== null) break;
-        if (to.at !== added[j].at || to.used || to.key !== from.key) break;
-        size++;
+      let size = runs.get(j);
+      if (size === 0) {
+        if (!fits(deleted, added, start, j, reach)) continue;
+        while (fits(deleted, added, start, j, size)) size++;
       }
-      if (size > best.length) best = added.slice(j, j + size);
+      runs.keep(j, size);
+      if (size > bestSize) {
+        bestAt = j;
+        bestSize = size;
+      }
     }
   }
-  return best;
+  return bestSize > reach ? added.slice(bestAt, bestAt + bestSize) : [];
+}
+
+// Says whether the deleted line `k` lines after `start` and the added line `k` lines after `j`
+// can be in one run. Each line stays in the hunk of the first line on its side, the added line
+// is unused, and the two lines have the same key. The deleted line can be one that its own hunk
+// adds back.
+function fits(deleted, added, start, j, k) {
+  const from = deleted[start + k];
+  const to = added[j + k];
+  if (from === undefined || to === undefined) return false;
+  return from.at === deleted[start].at && to.at === added[j].at && !to.used && to.key === from.key;
+}
+
+// Keeps the runs that one start line found, one line shorter, for the next start line, so that
+// line does not walk them again. Without this, a long run of the same short line, such as "],",
+// costs the cube of its length. Two typed arrays take turns, so the search makes no new array
+// for each line. A run is known only while no line changes, so the caller forgets them all when
+// it marks a block, or skips a start line.
+function knownRuns(size) {
+  let now = new Int32Array(size + 1);
+  let next = new Int32Array(size + 1);
+  return {
+    // The length of the run from added line j for this start line, or 0 when it is not known.
+    get: (j) => now[j],
+    // Keeps the run of `length` lines from added line j for the next start line.
+    keep(j, length) {
+      if (length > 1) next[j + 1] = length - 1;
+    },
+    // Moves on to the next start line.
+    step() {
+      [now, next] = [next, now];
+      next.fill(0);
+    },
+    forget() {
+      now.fill(0);
+      next.fill(0);
+    }
+  };
+}
+
+// For each deleted line, the place of the second line with words from it on in its hunk that no
+// rule drops yet, or -1 when the rest of the hunk has fewer than two. A block needs two such
+// lines: a line that its own hunk adds back does not count, because the block does not move it.
+function secondWordLines(deleted) {
+  const first = new Array(deleted.length);
+  const second = new Array(deleted.length);
+  for (let i = deleted.length - 1; i >= 0; i--) {
+    const sameHunk = i + 1 < deleted.length && deleted[i + 1].at === deleted[i].at;
+    const nextFirst = sameHunk ? first[i + 1] : -1;
+    if (deleted[i].reason === null && hasWords(deleted[i].text)) {
+      first[i] = i;
+      second[i] = nextFirst;
+    } else {
+      first[i] = nextFirst;
+      second[i] = sameHunk ? second[i + 1] : -1;
+    }
+  }
+  return second;
 }
 
 // A line holds words when it has a letter or a digit, unlike "}" or "];".
@@ -686,6 +766,13 @@ const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').rep
 // JavaScript a "/* */" comment. Text in quotes is code, so a "//" or "#" in a string stays. A
 // comment mark counts only at the start of the line or after a space, so "http://a" stays too:
 // a line can be part of a string that opened on an earlier line, which this cannot see.
+// In JavaScript, a regex literal is code too, so the quote in "r = /'/; // n" opens no string.
+// And a "//" in JSX text, with a closing tag after it on the line, such as
+// "<p>Price // 10 USD</p>", is text. Other text that only looks like a comment, such as a "#"
+// in a docstring or a "//" in a template literal that spans lines, is still read as a comment.
+// The whitespace right before a comment that comes off goes too, so it cannot stop a match.
+// Other whitespace at the end of the line stays: it can be text in a string that goes on to
+// the next line.
 function stripComments(text, path) {
   const style = commentStyle(path);
   if (style === null) return text;
@@ -700,18 +787,50 @@ function stripComments(text, path) {
       else if (ch === quote) quote = null;
       continue;
     }
+    const regexEnd = style === 'slash' && ch === '/' && opensRegex(out) ? endOfRegex(text, i) : -1;
+    if (regexEnd !== -1) {
+      out += text.slice(i, regexEnd + 1);
+      i = regexEnd;
+      continue;
+    }
     if (quotes.includes(ch)) quote = ch;
     const spaced = i === 0 || /\s/.test(text[i - 1]);
-    if (spaced && (style === 'hash' ? ch === '#' : text.startsWith('//', i))) break;
+    const lineComment = style === 'hash' ? ch === '#' : text.startsWith('//', i) && !closingTag.test(text.slice(i + 2));
+    if (spaced && lineComment) return out.trimEnd();
     if (spaced && style === 'slash' && text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2);
-      if (end === -1) break;
+      if (end === -1) return out.trimEnd();
+      out = out.trimEnd();
       i = end + 1;
       continue;
     }
     out += ch;
   }
   return out;
+}
+
+// A JSX closing tag, such as "</p>", "</Foo.Bar>" or "</>".
+const closingTag = /<\/([A-Za-z][\w.:-]*)?\s*>/;
+
+// Whether a "/" after this code starts a regex literal, not a division: the code before it
+// ends with nothing, with a mark such as "=", "(" or ",", or with a word such as "return".
+// After "<" or ">" it is a division or a JSX tag, such as "</p>".
+const opensRegex = (code) => /(^|[(,=:[!&|?{};+\-*%~^]|\b(return|typeof|case|void|delete|throw|yield|await|in|of|else|do))\s*$/.test(code);
+
+// Where the regex literal that starts at `start` ends: the index of its last "/". A "/" in a
+// class such as [/] or after a backslash does not end it. Returns -1 when the "/" starts a
+// comment, or when no "/" ends the regex on this line.
+function endOfRegex(text, start) {
+  if (text[start + 1] === '/' || text[start + 1] === '*') return -1;
+  let inClass = false;
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') i++;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) return i;
+  }
+  return -1;
 }
 
 // Version 1 knows the comments of JavaScript and TypeScript, and of Python.
