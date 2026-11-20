@@ -1,3 +1,4 @@
+import { matchKinds } from './classify.js';
 import { commentReviews, quotedVerdictWarnings } from './comment-reviews.js';
 import { classifyWithTracker, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
 import { ToolError } from './tool-error.js';
@@ -34,12 +35,16 @@ export async function readHistory(options) {
 // exhibit) are left out. The schema requires szz, so the history command
 // (src/commands/history.js) adds szz to each line that has none before it checks and writes the
 // lines.
+// `kinds` holds the policy's kinds (spec 8.1), or {} when it has none. `classification.kinds` on
+// every line, kept lines too, holds the kinds that the line's files match, by the same function as
+// `exhibit check` (matchKinds in src/classify.js). A kept line is matched from its own files, so a
+// change to the kinds reaches the whole file with no extra request, as a change to the signals does.
 // `tracker` is a connected tracker, such as Jira, for the tracker:jira signal, or null. Each PR
 // asks it at most once, kept lines too (see classifyWithTracker in src/fix-signals.js).
 // `warn` gets one text for each PR whose files list the forge cut short, one for each comment
 // whose only verdict is in a quoted line, and one for each PR whose ticket the tracker could not
 // read, in the order of the lines.
-export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, tracker = null, warn = () => {} }) {
+export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, kinds = {}, tracker = null, warn = () => {} }) {
   let merged = await forge.mergedPulls({ since, limit });
   if (since) merged = merged.filter((pr) => new Date(pr.mergedAt) >= since);
   merged.sort((a, b) => b.mergedAt.localeCompare(a.mergedAt) || b.number - a.number);
@@ -53,6 +58,7 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
     const { classification, problem } = await classifyWithTracker({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, tracker);
     return { classification, warnings: problem ? [`PR ${pr.number}: ${problem}`] : [] };
   };
+  const withKinds = (classification, files) => ({ kinds: matchKinds(kinds, files.map((file) => file.path)), ...classification });
 
   const read = await mapInBatches(toRead, PRS_AT_ONCE, async (pr) => {
     const [files, reviews, comments, ci, classified] = await Promise.all([
@@ -67,18 +73,18 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
       number: pr.number,
-      line: toHistoryLine(forge, pr, files, reviews, comments, ci, classified.classification),
+      line: toHistoryLine(forge, pr, files, reviews, comments, ci, withKinds(classified.classification, files)),
       warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments), ...classified.warnings]
     };
   });
   const fresh = new Map(read.map((one) => [one.number, one]));
-  // A kept line is classified again from its own title, body and labels, and from the branch name in
-  // the list of merged PRs, as a line does not hold its branch name. It keeps its szz: the history
+  // A kept line is classified again from its own title, body, labels and files, and from the branch
+  // name in the list of merged PRs, as a line does not hold its branch name. It keeps its szz: the history
   // command sets szz to null on a line that is no fix.
   const kept = await mapInBatches(merged.filter((pr) => !fresh.has(pr.number)), PRS_AT_ONCE, async (pr) => {
     const line = old.get(pr.number);
     const { classification, warnings } = await classify({ ...pr, title: line.title, body: line.body, labels: line.labels });
-    return { number: pr.number, line: { ...line, classification }, warnings };
+    return { number: pr.number, line: { ...line, classification: withKinds(classification, line.files) }, warnings };
   });
   const byNumber = new Map([...fresh, ...kept.map((one) => [one.number, one])]);
   const lines = merged.map((pr) => byNumber.get(pr.number));

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { REVERT_SIGNAL } from '../fix-signals.js';
@@ -7,7 +7,7 @@ import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { JIRA_TRACKER } from '../jira.js';
 import { checkHistoryLine } from '../history-schema.js';
-import { readPolicy } from '../policy.js';
+import { DEFAULT_POLICY, readPolicy } from '../policy.js';
 import { buildReport } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
@@ -36,6 +36,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // With tracker:jira in the fix signals, it asks Jira about each PR's ticket (spec 9.1), with the
 // token in JIRA_API_TOKEN, and says how many Jira requests it made. With no token, the signal
 // matches no PR, the run still succeeds, and it says so in one line on stderr.
+// It writes the kinds of change that each PR's files match in evidence.yml (spec 8.3). With no
+// kinds in the policy, every PR's kinds is empty, which means default, and it says so in one line.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
@@ -46,13 +48,18 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // Read and check the policy before asking GitHub, so a bad evidence.yml fails fast.
   const policy = await readPolicy(cwd);
   const fixSignals = policy.settings.fix_signals;
+  const kinds = policy.kinds;
+  if (Object.keys(kinds).length === 0) {
+    const why = (await exists(join(cwd, DEFAULT_POLICY))) ? `${DEFAULT_POLICY} names no kinds` : `there is no ${DEFAULT_POLICY}`;
+    stderr.write(`exhibit: note: ${why}, so the kinds of every PR in ${OUTPUT} are empty, which means default.\n`);
+  }
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   const tracker = connectTracker(policy.settings, { env, fetch, stderr });
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
   const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
   try {
-    await run(options, { cwd, forge, tracker, fixSignals, folder, warn, stdout, stderr });
+    await run(options, { cwd, forge, tracker, fixSignals, kinds, folder, warn, stdout, stderr });
   } catch (error) {
     const { requests, not_modified: notModified, queries, points } = forge.counts();
     if (requests > 0 || queries > 0) {
@@ -76,12 +83,14 @@ function connectTracker(settings, { env, fetch, stderr }) {
   return JIRA_TRACKER.connect({ settings: settings.jira, token, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch });
 }
 
-async function run(options, { cwd, forge, tracker, fixSignals, folder, warn, stdout, stderr }) {
+async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
-  const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, tracker, warn });
+  const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, kinds, tracker, warn });
   const read = keepSzz(updated.lines, previous);
   const changes = classificationChanges(read, previous);
   if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
+  const kindChanges = kindsChanges(read, previous);
+  if (kindChanges.length > 0) stderr.write(`exhibit: note: ${kindChanges}\n`);
 
   const root = await cloneRoot(cwd, forge);
   let lines;
@@ -214,6 +223,32 @@ function classificationChanges(lines, previous) {
   });
   const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
   return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
+}
+
+// Returns one text that lists the PRs whose kinds differ from their line in the old file, or ''
+// when none does. The kinds in evidence.yml match every line again on each run, kept lines too, so
+// no line keeps old kinds. This is how a person sees what a change to the kinds did. A line from a
+// file written before history had kinds gets them with no note.
+function kindsChanges(lines, previous) {
+  const old = new Map(previous.map((line) => [line.number, line.classification.kinds]));
+  const changed = lines.filter((line) => {
+    const before = old.get(line.number);
+    return before && before.join() !== line.classification.kinds.join();
+  });
+  if (changed.length === 0) return '';
+  const named = (list) => (list.length === 0 ? 'default' : list.join(', '));
+  const said = changed.slice(0, 10).map(({ number, classification }) => `PR ${number} from ${named(old.get(number))} to ${named(classification.kinds)}`);
+  const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
+  return `the kinds in ${DEFAULT_POLICY} now give ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} other kinds: ${said.join('; ')}${more}.`;
+}
+
+async function exists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseOptions(argv, forgeModule) {
