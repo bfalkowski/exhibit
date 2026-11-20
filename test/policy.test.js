@@ -116,6 +116,15 @@ test('readPolicy refuses an unknown setting', async (t) => {
   await refuses(t, 'settings:\n  test_comand: npm test\n', /^evidence\.yml settings has a field the schema does not allow: test_comand\.$/);
 });
 
+test('readPolicy reads the storage settings, and refuses a storage that is not data-branch or local', async (t) => {
+  const policy = await readPolicy(folderWith(t, 'settings:\n  storage: local\n  data_branch: evidence\n  local_path: out\n'));
+  assert.equal(policy.settings.storage, 'local');
+  assert.equal(policy.settings.data_branch, 'evidence');
+  assert.equal(policy.settings.local_path, 'out');
+  await refuses(t, 'settings:\n  storage: s3\n', /^evidence\.yml settings\.storage must be data-branch or local, not "s3"\.$/);
+  await refuses(t, 'settings:\n  data_branch: "-x"\n', /^evidence\.yml settings\.data_branch does not match/);
+});
+
 // The fix_signals tests below came from readFixSignals, which readPolicy replaces.
 // Their messages are the same.
 
