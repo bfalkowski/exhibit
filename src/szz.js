@@ -915,12 +915,24 @@ const closesBlock = (text) => {
   return rest.startsWith('*') && rest.endsWith('*/') && !rest.slice(0, -2).includes('/*');
 };
 
+// Says whether one of these rows closes a block comment that opened before the first of them.
+// The look stops at the first row that opens a block with "/*": a "*/" after that row closes the
+// new block, not the earlier one. So in " * qty;", "/* a", " * b */" the last row does not make
+// " * qty;" a comment.
+function closesEarlierBlock(texts) {
+  for (const text of texts) {
+    if (closesBlock(text)) return true;
+    if (text.includes('/*')) return false;
+  }
+  return false;
+}
+
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. `starts` says for each row whether
 // it starts inside a block comment, when the whole file is known. Without the file, a row that
 // starts with "*" counts as a row of such a block only when the row or a later row of the hunk
-// closes the block, or when the row is a JSDoc tag such as "* @param". Code can start with "*"
-// too, such as "* qty;" after a line that ends in "price".
+// closes the block before any row that opens a new one, or when the row is a JSDoc tag such as
+// "* @param". Code can start with "*" too, such as "* qty;" after a line that ends in "price".
 function markComments(texts, path, starts = []) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
@@ -934,7 +946,7 @@ function markComments(texts, path, starts = []) {
       if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
         const end = rest.indexOf('*/');
         if (end !== -1) return rest.slice(end + 2).trim() === '';
-        return /^\*\s*@\w/.test(rest) || texts.slice(i + 1).some(closesBlock);
+        return /^\*\s*@\w/.test(rest) || closesEarlierBlock(texts.slice(i + 1));
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
