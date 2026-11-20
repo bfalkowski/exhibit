@@ -250,6 +250,25 @@ test('a merge SHA from before a default branch rename', async (t) => {
   });
 });
 
+// PR 2 has base_ref "master" as above, so its merge SHA needs the first-parent line. Here git
+// fails to list that line. SZZ then asks GitHub, as it did before the line was checked, and
+// GitHub lists PR 2 for its commit.
+test('when git cannot list the first-parent line of the default branch, SZZ asks GitHub', async (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  const history = repo.history.map((pr) => (pr.number === 2 ? { ...pr, base_ref: 'master' } : pr));
+  const pr2Sha = history.find((pr) => pr.number === 2).merge_sha;
+  const fetch = commitPullsFetch(repo, REPO);
+  gitThatFailsOn(t, '--first-parent', 'rev-list broke');
+  const warnings = [];
+  const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), warn: (text) => warnings.push(text) });
+  const fix7 = lines.find((line) => line.number === 7);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(fix7.szz.links.map((link) => link.pr), [2, 3]);
+  assert.ok(fetch.calls.some((call) => call.key.includes(`/commits/${pr2Sha}/pulls`)), 'GitHub is asked about PR 2\'s commit');
+  for (const line of lines.filter((l) => l.classification?.fix)) assert.notEqual(line.szz, null, `PR ${line.number}`);
+});
+
 test('SZZ gives szz: null and a warning when the fix merge commit is not in the clone', async (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
@@ -491,6 +510,56 @@ test('commit-to-PR mapping across base branches', async (t) => {
   });
 });
 
+// A repo where PR 30 is squash merged into a release branch, and PR 31 is a merge commit that
+// brings release into main. Fix PR 32 on main then changes the line that PR 30 added.
+function repoWithReleaseBranch(t) {
+  const dir = tempDir(t, 'exhibit-release-');
+  git(dir, ['init', '--quiet', '--initial-branch=main']);
+  const commit = (...args) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', ...args]);
+  const write = (text) => {
+    writeFileSync(join(dir, 'a.js'), text);
+    git(dir, ['add', 'a.js']);
+  };
+  write('one;\ntwo;\n');
+  commit('-m', 'Add a.js (#1)');
+  git(dir, ['checkout', '--quiet', '-b', 'release']);
+  write('one;\nTWO;\n');
+  commit('-m', 'Change two (#30)');
+  const squash = git(dir, ['rev-parse', 'HEAD']);
+  git(dir, ['checkout', '--quiet', 'main']);
+  git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'merge', '--quiet', '--no-ff', '-m', 'Merge release into main (#31)', 'release']);
+  const merge = git(dir, ['rev-parse', 'HEAD']);
+  write('one;\n2;\n');
+  commit('-m', 'Fix two (#32)');
+  return { dir, squash, merge, fix: git(dir, ['rev-parse', 'HEAD']) };
+}
+
+test('a merge SHA of a PR squash merged into a release branch does not decide in the clone: GitHub is asked', async (t) => {
+  const { dir, squash, merge, fix } = repoWithReleaseBranch(t);
+  const asked = [];
+  const forge = {
+    repo: REPO,
+    isRemote: () => false,
+    defaultBranch: async () => 'main',
+    issue: async () => null,
+    pullsForCommit: async (sha) => {
+      asked.push(sha);
+      return sha === squash ? [
+        { number: 30, baseRef: 'release', mergedAt: '2026-01-02T00:00:00Z' },
+        { number: 31, baseRef: 'main', mergedAt: '2026-01-03T00:00:00Z' }
+      ] : [];
+    }
+  };
+  const lines = [
+    { number: 30, base_ref: 'release', merge_sha: squash },
+    { number: 31, base_ref: 'main', merge_sha: merge },
+    { number: 32, base_ref: 'main', merge_sha: fix, classification: { fix: true } }
+  ];
+  const [line] = await addSzz([lines[2]], { dir, forge, known: lines });
+  assert.deepEqual(asked, [squash]);
+  assert.deepEqual(line.szz.links.map((link) => [link.pr, link.confidence]), [[31, 1]]);
+});
+
 // Makes a folder in the system temp folder, and removes it when test t ends.
 function tempDir(t, prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -635,14 +704,14 @@ function repoWithManyChangedFiles(t) {
   return dir;
 }
 
-// Puts a git first on PATH that fails `git cat-file --batch` at once, without reading its
-// input, and runs the real git for every other command.
-function gitThatFailsCatFile(t) {
+// Puts a git first on PATH that fails at once, without reading its input, when one of its
+// arguments is `arg`, and runs the real git for every other command.
+function gitThatFailsOn(t, arg, message) {
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const bin = tempDir(t, 'exhibit-fake-git-');
   writeFileSync(join(bin, 'git'), `#!/bin/sh
 for arg in "$@"; do
-  if [ "$arg" = --batch ]; then echo 'fatal: cat-file broke' >&2; exit 128; fi
+  if [ "$arg" = ${arg} ]; then echo 'fatal: ${message}' >&2; exit 128; fi
 done
 exec '${realGit}' "$@"
 `, { mode: 0o755 });
@@ -654,7 +723,7 @@ exec '${realGit}' "$@"
 test('when git cat-file fails before it reads a long file list, SZZ skips the fix with a warning, and the run goes on', async (t) => {
   const dir = repoWithManyChangedFiles(t);
   const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
-  gitThatFailsCatFile(t);
+  gitThatFailsOn(t, '--batch', 'cat-file broke');
   const warnings = [];
   const [line] = await addSzz([fix], { dir, forge: noPrs(), warn: (text) => warnings.push(text) });
   assert.equal(line.szz, null);
