@@ -148,3 +148,29 @@ test('a lazy line goes on a quote only when the quote ends in a paragraph', () =
   assert.equal(commentVerdict('> ````js\n> code\n> ````\nVerdict: fix'), 'fix');
   assert.equal(commentVerdict('> [!NOTE]\n> > ````\n> > code\n> > ````\n> Verdict: fix'), 'fix');
 });
+
+test('a lazy line does not go on a quote that ends in code, a setext heading or an empty list item', () => {
+  // GitHub shows "Verdict: fix" outside the quote here, because a lazy line needs an open
+  // paragraph, and the quote ends in code, a heading or an empty list item.
+  assert.equal(commentVerdict('> ```\n> code\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> ~~~\n> code\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('>     indented code\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quoted\n> ===\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> quoted\n> --\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> -\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> 1.\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> > ```\n> > code\n> Verdict: fix'), 'fix');
+  assert.equal(commentVerdict('> [!NOTE]\n> >     indented code\n> Verdict: fix'), 'fix');
+  // A line of text after the code, or right under a line of text, is a paragraph again.
+  assert.equal(commentVerdict('> ```\n> code\n> ```\n> text\nVerdict: fix'), null);
+  assert.equal(commentVerdict('>     indented code\n> text\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> quoted\n>     more text\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> ===\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> quoted\n> *\nVerdict: fix'), null);
+});
+
+test('a line that starts with inline code is text, not a code fence', () => {
+  // A backtick fence has no backtick after its marks, so the next line is a quote, not code.
+  assert.equal(commentVerdict('```x``` said\n> Verdict: fix'), null);
+  assert.equal(quotedVerdict('```x``` said\n> Verdict: fix'), 'fix');
+});
