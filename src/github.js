@@ -625,7 +625,7 @@ export function createGitHubForge({ repo, ...client }) {
     // old name does after a rename or a transfer. GitHub answers GET /repos/{old name} with a
     // redirect to the repo, and fetch follows it. The id stays the same after a rename or a
     // transfer, so the two replies are one repo when their ids match. Each name costs one request
-    // at most, in any case.
+    // at most, in upper or lower case, except after a 5xx.
     // A name that the token cannot read is another repo: GitHub does not know it, or refuses it,
     // such as a private repo behind SAML SSO (403) or a repo blocked for legal reasons (451). So
     // a stray mention of such a repo never stops the run. A 5xx is another repo too, but that
@@ -646,7 +646,9 @@ export function createGitHubForge({ repo, ...client }) {
           return found.id === (await thisRepo()).id;
         });
       } catch (error) {
-        if (canNotRead(error)) return false;
+        // Only a 5xx for the named repo gets here: the inner catch answers every 4xx. An error on
+        // this repo's own reply is thrown, as for any other request.
+        if (canNotRead(error) && error.status >= 500) return false;
         throw error;
       }
     },

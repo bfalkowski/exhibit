@@ -359,6 +359,11 @@ test('sameRepo: a repo the token cannot read is another repo, and only a refused
   assert.equal(await forge.sameRepo('oldacme/widgets'), false);
   assert.equal(await forge.sameRepo('oldacme/widgets'), true);
   assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/oldacme/widgets', '/repos/acme/widgets']);
+  // An error on this repo's own reply is not an answer about the name: it is thrown.
+  const own = createGitHubForge({ repo: 'acme/widgets', token: 't', sleep: async () => {}, fetch: async (url) => (new URL(url).pathname === '/repos/acme/widgets'
+    ? json(403, { message: 'Resource not accessible by integration' }, { 'x-ratelimit-remaining': '4999' })
+    : json(200, { id: 7, full_name: 'acme/widgets' })) });
+  await assert.rejects(own.sameRepo('oldacme/widgets'), (error) => error instanceof GitHubReplyError && error.status === 403);
 });
 
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {
