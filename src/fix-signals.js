@@ -13,18 +13,70 @@ const BRACKETED = `(?:\\[${KEY}\\]|\\(${KEY}\\))\\s*(?:[:,-]\\s*)?`;
 const BARE = `${KEY}(?:\\s*[:,]\\s*|\\s+-\\s*|\\s+)`;
 const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE})+`);
 
+// A Jira issue key, such as PAY-482: letters and digits, a hyphen, and digits.
+const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
+// A key at the start of a branch name, such as PAY-482-fix-crash or PAY-482/crash.
+const BRANCH_KEY = /^([a-z][a-z0-9_]*-\d+)(?![a-z0-9_])/;
+
 // Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's number, its title,
 // its label names and its branch name. The first signal in the list that matches is recorded, so a person
 // can see why the PR counts as a fix. Matching ignores case.
-export function classifyFix(pr, signals) {
-  const fixSignal = signals.find((signal) => matches(pr, signal)) ?? null;
-  return { fix: fixSignal !== null, fix_signal: fixSignal };
+// `ticket` is the tracker's answer for the PR's ticket, as classifyWithTracker gets it: { signal,
+// bug, escaped }, or null. A tracker signal, such as tracker:jira, matches only when the ticket
+// is a bug, and then fix_signal is the ticket's own signal, such as jira:PAY-482. With a ticket
+// that says where the bug was found, the classification gets `escaped` too.
+export function classifyFix(pr, signals, ticket = null) {
+  const matched = signals.find((signal) => matches(pr, signal, ticket)) ?? null;
+  if (matched === null) return { fix: false, fix_signal: null };
+  if (signalType(matched) !== 'tracker') return { fix: true, fix_signal: matched };
+  return { fix: true, fix_signal: ticket.signal, ...(ticket.escaped === null ? {} : { escaped: ticket.escaped }) };
 }
 
-function matches(pr, signal) {
+// Classifies `pr` as classifyFix does, and asks `tracker` about the PR's ticket when it must: when
+// the signals hold tracker:<name>, no signal before it matches, and the PR names a ticket key.
+// `tracker` is a connected tracker module, such as JIRA_TRACKER.connect in src/jira.js, or null
+// when there is no token, so the tracker signal matches nothing.
+// Returns { classification, problem }. problem is null, or a text that says why the tracker could
+// not answer for one request, such as a 503. Then the tracker signal does not match this PR, and
+// the caller warns and goes on. An error that stops every later request, such as a refused
+// token, is thrown.
+export async function classifyWithTracker(pr, signals, tracker) {
+  const at = signals.findIndex((signal) => signalType(signal) === 'tracker');
+  const before = at === -1 ? signals : signals.slice(0, at);
+  if (!tracker || at === -1 || signals[at] !== `tracker:${tracker.name}` || before.some((signal) => matches(pr, signal, null))) {
+    return { classification: classifyFix(pr, signals), problem: null };
+  }
+  const key = ticketKey(pr);
+  if (key === null) return { classification: classifyFix(pr, signals), problem: null };
+  let found;
+  try {
+    found = await tracker.ticket(key);
+  } catch (error) {
+    if (error.stopsRun !== false) throw error;
+    return { classification: classifyFix(pr, signals), problem: `the ${signals[at]} signal could not check ${key}, so it does not match. ${error.message}` };
+  }
+  const ticket = found === null ? null : { signal: `${tracker.name}:${found.key}`, bug: found.bug, escaped: found.escaped };
+  return { classification: classifyFix(pr, signals, ticket), problem: null };
+}
+
+// Returns the ticket key that a PR names, in capitals, such as PAY-482, or null. The key comes
+// from the start of the title, where title_after_key finds keys, and else from the start of the
+// branch name. A key of the form #79 is a GitHub number, not a tracker key, so it is skipped.
+export function ticketKey(pr) {
+  const leading = LEADING_KEY.exec(pr.title.trim().toLowerCase())?.[0] ?? '';
+  const fromTitle = ISSUE_KEY.exec(leading)?.[0];
+  if (fromTitle) return fromTitle.toUpperCase();
+  const fromBranch = BRANCH_KEY.exec((pr.branch ?? '').toLowerCase())?.[1];
+  return fromBranch ? fromBranch.toUpperCase() : null;
+}
+
+const signalType = (signal) => signal.slice(0, signal.indexOf(':'));
+
+function matches(pr, signal, ticket) {
   const colon = signal.indexOf(':');
   const type = signal.slice(0, colon);
   const value = signal.slice(colon + 1).toLowerCase();
+  if (type === 'tracker') return ticket?.bug === true;
   if (type === 'label') return pr.labels.some((label) => label.toLowerCase() === value);
   if (type === 'title') return startsWithWord(pr.title.trim().toLowerCase(), value);
   if (type === 'title_after_key') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value);

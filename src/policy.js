@@ -9,7 +9,9 @@ import { ToolError } from './tool-error.js';
 const POLICY = 'evidence.yml';
 const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
 const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'probe'];
-const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr'];
+const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr', 'tracker'];
+// The trackers a tracker: signal can name (spec 9.1).
+const TRACKERS = ['jira'];
 // A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
 const PR_NUMBER = /^[1-9]\d*$/;
 
@@ -42,6 +44,7 @@ export async function readPolicy(cwd) {
 
   const problems = schemaProblems(schema, policy);
   if (problems.length > 0) throw new ToolError(problems.map(describe).join('\n'));
+  checkJira(policy.settings ?? {});
   return withDefaults(policy);
 }
 
@@ -103,7 +106,7 @@ function checkSignals(signals) {
     const at = `${where}[${i}]`;
     if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.${spaceHint(signal)}`);
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch: or pr:.`);
+    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch:, pr: or tracker:.`);
     const value = signal.slice(type.length + 1);
     if (/[\r\n]/.test(value)) throw new ToolError(`${at} is ${JSON.stringify(signal)}. A signal must be on one line.`);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);
@@ -113,7 +116,25 @@ function checkSignals(signals) {
     // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
     if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
+    if (type === 'tracker' && !TRACKERS.includes(value)) throw new ToolError(`${at} is "${signal}". A tracker: signal names a tracker Exhibit knows: ${TRACKERS.map((name) => `tracker:${name}`).join(', ')}.`);
   });
+}
+
+// The tracker:jira signal needs settings.jira.site, and the "where found" field needs the values
+// that count as escaped, and the other way round. The schema cannot say these rules.
+function checkJira(settings) {
+  const signals = settings.fix_signals ?? [];
+  if (signals.includes('tracker:jira') && !settings.jira) {
+    throw new ToolError(`${POLICY} settings.fix_signals has tracker:jira, so settings needs jira: { site: https://your-site.atlassian.net }.`);
+  }
+  const jira = settings.jira;
+  if (!jira) return;
+  if (jira.found_field !== undefined && jira.escaped_values === undefined) {
+    throw new ToolError(`${POLICY} settings.jira.found_field needs escaped_values: the values that mean a bug got out to users, such as [Production].`);
+  }
+  if (jira.escaped_values !== undefined && jira.found_field === undefined) {
+    throw new ToolError(`${POLICY} settings.jira.escaped_values needs found_field: the Jira field that says where a bug was found, such as customfield_10042.`);
+  }
 }
 
 // In a YAML list, "pr: 96" with a space after the colon is a mapping, not text. Returns a hint

@@ -37,14 +37,14 @@ test('the fields later tickets fill may be absent or null', () => {
 test('classification must say whether the PR is a fix and which signal matched', () => {
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'title:fix' } }), []);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'pr:96' } }), []);
-  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'issue:96' } }), ['/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr):.+$']);
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'issue:96' } }), ['/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr|jira):.+$']);
   const { classification, ...without } = good();
   assert.ok(classification);
   assert.deepEqual(checkHistoryLine(without), ['/: misses the field classification']);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: null }), ['/classification: must be object, not null']);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: 'yes', fix_signal: 'bug' } }).sort(), [
     '/classification/fix: must be boolean, not string',
-    '/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr):.+$'
+    '/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr|jira):.+$'
   ]);
 });
 

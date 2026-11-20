@@ -41,7 +41,8 @@ const kind = (fields) => `version: 3\nkinds:\n  relay-core:\n    match: ["relay/
 test('the example policy in spec 8.1 passes, and readPolicy returns it as written', async (t) => {
   const policy = await readPolicy(folderWith(t, specExample()));
   assert.equal(policy.version, 3);
-  assert.deepEqual(policy.settings.fix_signals, ['label:bug', 'title:fix', 'branch:fix/']);
+  assert.deepEqual(policy.settings.fix_signals, ['label:bug', 'title:fix', 'branch:fix/', 'tracker:jira']);
+  assert.deepEqual(policy.settings.jira, { site: 'https://acme.atlassian.net', issue_types: ['Bug'], found_field: 'customfield_10042', escaped_values: ['Production'] });
   assert.equal(policy.settings.mutation_budget_seconds, 300);
   assert.deepEqual(Object.keys(policy.kinds), ['relay-core', 'manual']);
   assert.deepEqual(policy.kinds['relay-core'].needs, [
@@ -181,8 +182,8 @@ test('readPolicy refuses a malformed fix_signals with a tool error that says wha
     ['settings:\n  fix_signals: label:bug\n', /must be a list/],
     ['settings:\n  fix_signals: []\n', /at least one signal/],
     ['settings:\n  fix_signals: [label:bug, 7]\n', /fix_signals\[1\].*not 7/],
-    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, branch: or pr:/],
-    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, branch: or pr:/],
+    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, branch:, pr: or tracker:/],
+    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, branch:, pr: or tracker:/],
     ['settings:\n  fix_signals: ["title_after_key:"]\n', /"title_after_key:".*needs a value/],
     ['settings:\n  fix_signals: ["title_after_key: fix"]\n', /"title_after_key: fix".*space/],
     ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],
@@ -223,4 +224,18 @@ test('the evidence item rules are the same under kinds and under default', () =>
 test('readPolicy names NaN and infinity in a version message, not null', async (t) => {
   await refuses(t, 'version: .nan\n', /^evidence\.yml version must be 3, not NaN\.$/);
   await refuses(t, 'version: .inf\n', /^evidence\.yml version must be 3, not Infinity\.$/);
+});
+
+test('readPolicy reads settings.jira for the tracker:jira signal, and refuses a bad one', async (t) => {
+  const jira = 'settings:\n  fix_signals: [label:bug, tracker:jira]\n  jira:\n    site: https://acme.atlassian.net\n    issue_types: [Bug, Defect]\n    found_field: customfield_10042\n    escaped_values: [Production]\n';
+  const policy = await readPolicy(folderWith(t, jira));
+  assert.deepEqual(policy.settings.fix_signals, ['label:bug', 'tracker:jira']);
+  assert.deepEqual(policy.settings.jira, { site: 'https://acme.atlassian.net', issue_types: ['Bug', 'Defect'], found_field: 'customfield_10042', escaped_values: ['Production'] });
+
+  await refuses(t, 'settings:\n  fix_signals: [tracker:linear]\n', /^evidence\.yml settings\.fix_signals\[0\] is "tracker:linear"\. A tracker: signal names a tracker Exhibit knows: tracker:jira\.$/);
+  await refuses(t, 'settings:\n  fix_signals: [tracker:jira]\n', /settings needs jira: \{ site: https:\/\/your-site\.atlassian\.net \}/);
+  await refuses(t, 'settings:\n  jira:\n    site: https://acme.atlassian.net\n    found_field: customfield_10042\n', /^evidence\.yml settings\.jira\.found_field needs escaped_values/);
+  await refuses(t, 'settings:\n  jira:\n    site: https://acme.atlassian.net\n    escaped_values: [Production]\n', /^evidence\.yml settings\.jira\.escaped_values needs found_field/);
+  await refuses(t, 'settings:\n  jira:\n    issue_types: [Bug]\n', /settings\.jira/);
+  await refuses(t, 'settings:\n  jira:\n    site: https://acme.atlassian.net\n    token: abc\n', /settings\.jira has a field the schema does not allow: token/);
 });

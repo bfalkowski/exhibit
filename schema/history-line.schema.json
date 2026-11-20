@@ -76,8 +76,12 @@
         "fix": { "type": "boolean" },
         "fix_signal": {
           "type": ["string", "null"],
-          "pattern": "^(label|title|title_after_key|branch|pr):.+$",
-          "description": "The first fix signal that matched, such as label:bug or pr:96. null when the PR is not a fix."
+          "pattern": "^(label|title|title_after_key|branch|pr|jira):.+$",
+          "description": "The first fix signal that matched, such as label:bug or pr:96. For the tracker:jira signal it is the Jira issue that matched, such as jira:PAY-482. null when the PR is not a fix."
+        },
+        "escaped": {
+          "type": "boolean",
+          "description": "Only on a fix found by tracker:jira, when settings.jira.found_field has a value for its issue. false means the bug was found before release, so it is not an escaped defect (spec 8.5)."
         }
       }
     },

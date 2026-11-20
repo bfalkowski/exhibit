@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
+import { JIRA_TRACKER } from '../jira.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { readPolicy } from '../policy.js';
 import { buildReport } from '../report.js';
@@ -31,6 +32,9 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
 // REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
 // many points they used. A run that fails says it too, on stderr.
+// With tracker:jira in the fix signals, it asks Jira about each PR's ticket (spec 9.1), with the
+// token in JIRA_API_TOKEN, and says how many Jira requests it made. With no token, the signal
+// matches no PR, the run still succeeds, and it says so in one line on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
@@ -39,25 +43,41 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   if (!token) throw new ToolError(`${forgeModule.tokenEnv} is not set. Set it to a ${forgeModule.displayName} token that can read the repo, for example ${forgeModule.tokenExample}.`);
 
   // Read and check the policy before asking GitHub, so a bad evidence.yml fails fast.
-  const fixSignals = (await readPolicy(cwd)).settings.fix_signals;
+  const policy = await readPolicy(cwd);
+  const fixSignals = policy.settings.fix_signals;
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
+  const tracker = connectTracker(policy.settings, { env, fetch, stderr });
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
   const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
   try {
-    await run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr });
+    await run(options, { cwd, forge, tracker, fixSignals, folder, warn, stdout, stderr });
   } catch (error) {
     const { requests, not_modified: notModified, queries, points } = forge.counts();
     if (requests > 0 || queries > 0) {
       stderr.write(`exhibit: note: this run made ${plural(requests, 'GitHub REST request')}, and ${notModified} got a 304. It made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')}.\n`);
     }
+    if (tracker && tracker.counts().requests > 0) stderr.write(`exhibit: note: this run made ${plural(tracker.counts().requests, 'Jira request')}.\n`);
     throw error;
   }
 }
 
-async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr }) {
+// Returns the Jira tracker when the fix signals hold tracker:jira and JIRA_API_TOKEN is set.
+// Returns null when they do not hold it, and null with a one-line note when the token is missing:
+// then the signal matches no PR, and every other signal still works.
+function connectTracker(settings, { env, fetch, stderr }) {
+  if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return null;
+  const token = env[JIRA_TRACKER.tokenEnv];
+  if (!token) {
+    stderr.write(`exhibit: note: ${JIRA_TRACKER.tokenEnv} is not set, so the tracker:jira fix signal matched no PR. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.\n`);
+    return null;
+  }
+  return JIRA_TRACKER.connect({ settings: settings.jira, token, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch });
+}
+
+async function run(options, { cwd, forge, tracker, fixSignals, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
-  const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, warn });
+  const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, tracker, warn });
   const read = keepSzz(updated.lines, previous);
   const changes = classificationChanges(read, previous);
   if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
@@ -68,7 +88,7 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
     // SZZ runs on the lines with no szz yet, and on fix lines whose szz is null because SZZ did
     // not run for them before, such as after a first run outside a clone. The commit-to-PR map
     // still sees every line.
-    const done = await addSzz(read.filter((line) => line.szz === undefined || (line.szz === null && line.classification.fix)), { dir: root, forge, warn, known: read });
+    const done = await addSzz(read.filter((line) => line.szz === undefined || (line.szz === null && line.classification.fix)), { dir: root, forge, tracker, warn, known: read });
     const byNumber = new Map(done.map((line) => [line.number, line]));
     lines = read.map((line) => byNumber.get(line.number) ?? line);
   } else {
@@ -96,8 +116,11 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
   const { requests, not_modified: notModified, queries, points } = forge.counts();
   const github = { requests, not_modified: notModified, cache: folder, graphql: { queries, points } };
   const mode = previous.length > 0 ? 'incremental' : 'full';
+  // Only with tracker:jira in the fix signals: the Jira requests, or null when there was no token.
+  const usesJira = fixSignals.includes(`tracker:${JIRA_TRACKER.name}`);
+  const jira = tracker ? tracker.counts() : null;
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
@@ -108,7 +131,8 @@ async function run(options, { cwd, forge, fixSignals, folder, warn, stdout, stde
       : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
     stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n` +
       `Made ${plural(requests, 'GitHub REST request')}. ${cached}\n` +
-      `Made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')} of the GraphQL rate limit.\n`);
+      `Made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')} of the GraphQL rate limit.\n` +
+      (jira ? `Made ${plural(jira.requests, 'Jira request')}. ${jira.not_found} named an issue that Jira does not know.\n` : ''));
   }
 }
 
