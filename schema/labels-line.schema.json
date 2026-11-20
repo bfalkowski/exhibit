@@ -14,7 +14,18 @@
     "code": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,199}$", "description": "A short description of what went wrong: one line of at most 200 characters." },
     "category": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,59}$", "description": "The kind of bug: one line of at most 60 characters." },
     "would_have_caught": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,499}$", "description": "The evidence that would have caught the bug: one line of at most 500 characters." },
-    "labeled_by": { "type": "string", "pattern": "^(person|claude_draft_confirmed|claude_draft_edited)$" },
+    "labeled_by": { "type": "string", "pattern": "^(person|claude_draft_confirmed|claude_draft_edited)$", "description": "person when the person typed the label, with no draft or after throwing the draft away. claude_draft_confirmed when they kept Claude's draft unchanged, and claude_draft_edited when they changed it. exhibit label also checks that a Claude label has claude_draft, and that a confirmed label has the draft's code and category." },
+    "claude_draft": {
+      "type": "object",
+      "description": "The draft that exhibit label --claude showed, kept so a change can be seen later. Absent when no draft was shown.",
+      "required": ["code", "category", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,199}$" },
+        "category": { "type": "string", "pattern": "^\\S[^\\r\\n]{0,59}$" },
+        "model": { "type": "string", "minLength": 1, "description": "The Claude model that wrote the draft." }
+      }
+    },
     "szz_link_rejected": { "type": "boolean", "description": "true when the person rejected at least one SZZ link of the defect. exhibit label also checks that it is true exactly when rejected_prs is not empty." },
     "labeled_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" }
   }

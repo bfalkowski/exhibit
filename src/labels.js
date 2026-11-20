@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DraftError } from './claude.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
 import { defectText, escapedDefects } from './report.js';
@@ -27,6 +28,9 @@ export function checkLabelLine(line) {
   if (line.id !== defectId(line.fix_pr)) problems.push(`/id: must be ${defectId(line.fix_pr)}, the id of fix PR ${line.fix_pr}`);
   const rejected = (line.rejected_prs ?? []).length > 0;
   if (line.szz_link_rejected !== rejected) problems.push(`/szz_link_rejected: must be ${rejected}, because rejected_prs is ${rejected ? 'not empty' : 'empty'}`);
+  if (line.labeled_by !== 'person' && line.claude_draft === undefined) problems.push(`/claude_draft: a ${line.labeled_by} label must keep the draft in claude_draft`);
+  const matches = line.claude_draft !== undefined && line.code === line.claude_draft.code && line.category === line.claude_draft.category;
+  if (line.labeled_by === 'claude_draft_confirmed' && line.claude_draft !== undefined && !matches) problems.push('/code: a claude_draft_confirmed label must have the code and category of its draft');
   return problems;
 }
 
@@ -42,9 +46,17 @@ export function checkLabelLine(line) {
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
  *
+ * `draft({ id, title, body, text, categories })` is optional: Claude, or a script in a test. It
+ * returns { code, category, model } before the defect is shown, and the answer source gets it in
+ * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
+ * holds the message, so the person labels that defect by hand. With a draft, the reply also says
+ * `draft: 'confirmed' | 'edited' | 'replaced'`. A reply with the draft's code and category is
+ * claude_draft_confirmed; a replaced draft is the person's own label; any other change is
+ * claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
+ *
  * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
  */
-export async function labelDefects({ cwd, ask, now = () => new Date() }) {
+export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
   const history = await readHistory(cwd);
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
@@ -59,7 +71,8 @@ export async function labelDefects({ cwd, ask, now = () => new Date() }) {
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length });
+    const { drafted, draftError } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError });
     if (reply === 'quit') break;
     if (reply === 'skip') {
       skipped += 1;
@@ -76,7 +89,8 @@ export async function labelDefects({ cwd, ask, now = () => new Date() }) {
       code: reply.code,
       category: reply.category,
       would_have_caught: reply.would_have_caught,
-      labeled_by: 'person',
+      labeled_by: labeledBy(drafted, reply),
+      ...(drafted === null ? {} : { claude_draft: drafted }),
       szz_link_rejected: rejected.length > 0,
       labeled_at: now().toISOString()
     };
@@ -91,6 +105,23 @@ export async function labelDefects({ cwd, ask, now = () => new Date() }) {
     if (!categories.includes(line.category)) categories.push(line.category);
   }
   return { shown, labeled, skipped, open: open.length - labeled };
+}
+
+// Returns { drafted, draftError }. Both are null when there is no drafter.
+async function askForDraft(draft, input) {
+  if (draft === undefined) return { drafted: null, draftError: null };
+  try {
+    return { drafted: await draft(input), draftError: null };
+  } catch (error) {
+    if (!(error instanceof DraftError)) throw error;
+    return { drafted: null, draftError: error.message };
+  }
+}
+
+function labeledBy(drafted, reply) {
+  if (drafted === null) return 'person';
+  if (reply.code === drafted.code && reply.category === drafted.category) return 'claude_draft_confirmed';
+  return reply.draft === 'replaced' ? 'person' : 'claude_draft_edited';
 }
 
 async function readHistory(cwd) {
