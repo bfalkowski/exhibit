@@ -1,0 +1,91 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "92b8614fd44348060557cf6f5980affefedd2f429ca506d026a337a4aa6d6909"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 265,
+  "base": "2250e99a09f73305f674c6dcdda04f6397f361bc",
+  "head": "b651f5d6f42664b101c8d5e4cfcaa0a4b84a97c3",
+  "classification": {
+    "kinds": [
+      "docs",
+      "tooling"
+    ],
+    "risk": "medium",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": true,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs examples"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "met",
+      "details": {
+        "exit_code": 0,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 51
+    },
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "tooling"
+      ],
+      "status": "met",
+      "details": {
+        "base": {
+          "passed": 631,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 632,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": []
+      },
+      "author": "builder",
+      "duration_ms": 107824
+    }
+  ],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "policy-change",
+      "status": "missing",
+      "how_to_fix": "This change edits evidence.yml, the policy that Exhibit checks changes against. A change to the policy always needs a person, so that a builder cannot change the rules to pass its own PR. Ask a maintainer to review the policy change."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 2,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-20T23:00:14.811Z"
+}
