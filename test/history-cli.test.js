@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cacheFolder } from '../src/github-cache.js';
+import { cacheFolder, UNUSED_DAYS } from '../src/github-cache.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
@@ -387,6 +387,43 @@ test('a second run gets a 304 for every REST request, writes the same history, a
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 6, 1, 6));
   assert.equal(readFileSync(second.historyPath, 'utf8'), history);
+});
+
+test('a run removes the cache entries that no run has used for 30 days', (t) => {
+  const { cwd, fixturePath } = shopWithETags(t);
+  const first = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const folder = cacheOf(cwd);
+  const used = readdirSync(folder);
+  assert.equal(used.length, 6);
+  // An entry that no run has read or written for UNUSED_DAYS + 10 days.
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--full'], { fixturePath, cwd });
+  assert.equal(second.status, 0, second.stderr);
+  assert.ok(second.stdout.endsWith(madeRequests(cwd, 6, 1, 6)), second.stdout);
+  assert.deepEqual(readdirSync(folder).sort(), used.sort());
+});
+
+test('a run that fails still removes the cache entries that no run has used for 30 days', (t) => {
+  const cwd = newFolder(t);
+  const folder = cacheOf(cwd);
+  mkdirSync(folder, { recursive: true });
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  const fresh = join(folder, `${'b'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  writeFileSync(fresh, '{}');
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken', cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /does not fit the history schema/);
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(fresh), true);
 });
 
 test('--no-cache gets no 304s and writes no cache folder', (t) => {
