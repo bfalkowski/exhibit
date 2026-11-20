@@ -38,8 +38,8 @@ jobs:
       TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      # The whole history and every tag, to check that the tag is on the default branch and to
-      # find the newest release of the major version. No saved token: the job pushes nothing with git.
+      # The whole history, to check that the tag is on the default branch. No saved token: the job
+      # pushes nothing with git.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -98,11 +98,12 @@ jobs:
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
 
       # v0 for v0.1.0. It moves only to the newest release of its major version, so a late release
-      # of an old version, such as v0.1.1 after v0.2.0, does not move it back.
+      # of an old version, such as v0.1.1 after v0.2.0, does not move it back. It counts releases,
+      # not tags: a tag whose release run failed has no release, so it never holds v0 back.
       - name: Move the major tag to this release
         run: |
           major="${TAG%%.*}"
-          newest=$(git tag --list "$major.*.*" --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          newest=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName' | grep -E "^$major\.[0-9]+\.[0-9]+\$" | sort -V | tail -n 1)
           if [ "$newest" != "$TAG" ]; then
             echo "The newest release of $major is $newest, not $TAG, so $major stays where it is."
             exit 0

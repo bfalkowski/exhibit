@@ -6,8 +6,9 @@ version: 3
 
 settings:
   # All of relay/test/*.test.js as JUnit, one file at a time. relay/test/run.js writes no JUnit, so
-  # this uses node --test. Each run gets its own empty HOME, as run.js gives each file, so a test
-  # never reads a room's files under ~/.office-world. --ignore-scripts skips "prepare", which only
+  # this uses node --test. The whole run gets one new empty HOME, so no test reads a room's files
+  # under ~/.office-world. run.js gives each file a HOME of its own, but this command runs every
+  # file in one HOME, so it runs them one at a time. --ignore-scripts skips "prepare", which only
   # sets git hooks. The browser tests in relay/test/browser/ are not in it.
   test_command: "npm ci --ignore-scripts --no-audit --no-fund && HOME=\"$(mktemp -d)\" node --test --test-concurrency=1 --test-timeout=120000 --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml relay/test/*.test.js"
   test_results: .exhibit/junit.xml

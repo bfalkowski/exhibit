@@ -583,7 +583,7 @@ The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo,
   - It runs on a pushed tag of the form `v1.2.3` only, never on a branch or a PR. Its one job has the permission `contents: write`, to make the release and move the major tag, and nothing more.
   - It fails, and makes no release, when the tagged commit is not on the default branch, or when the tag, the `version` in `package.json` and `exhibit --version` do not all name the same version. `scripts/check-version.js` checks the versions.
   - Then it runs lint and the tests, and installs Exhibit in a clean copy of the tagged commit the way `action.yml` does (`npm ci --omit=dev`), and runs it.
-  - It makes the release, with notes that say how to pin it and the list of merged PRs. Then it moves the major tag, such as `v0`, to the release, but only when the release is the newest of its major version. So a repo can pin an exact version or the major tag. The setup notes pin the exact version: the major tag moves, so the check job and the publish job of one run could get different code.
+  - It makes the release, with notes that say how to pin it and the list of merged PRs. Then it moves the major tag, such as `v0`, to the release, but only when the release is the newest release of its major version. It counts releases, not tags, so a tag whose run failed does not hold the major tag back. So a repo can pin an exact version or the major tag. The setup notes pin the exact version: the major tag moves, so the check job and the publish job of one run could get different code.
   - `test/release.test.js` reads the workflow and runs the version check.
 - Later example workflows in `examples/`:
   - On push to the main branch: run `trace`.
