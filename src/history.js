@@ -57,20 +57,20 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
     ]);
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
-      line: toHistoryLine(forge.name, pr, files, reviews, comments, ci, fixSignals),
+      line: toHistoryLine(forge, pr, files, reviews, comments, ci, fixSignals),
       warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments)]
     };
   });
   for (const { warnings } of read) for (const warning of warnings) warn(warning);
   const fresh = new Map(read.map(({ line }) => [line.number, line]));
-  const lines = merged.map((pr) => fresh.get(pr.number) ?? classifyAgain(old.get(pr.number), pr.headRef, fixSignals));
+  const lines = merged.map((pr) => fresh.get(pr.number) ?? classifyAgain(old.get(pr.number), pr.headRef, forge.repo, fixSignals));
   return { lines, read: read.length };
 }
 
 // Returns the kept `line` with its classification by `fixSignals`, from its title, body and
-// labels. `branch` is the PR's branch name. The line keeps its szz: the history command sets szz to null on a line that is no fix.
-function classifyAgain(line, branch, fixSignals) {
-  const classification = classifyFix({ number: line.number, title: line.title, body: line.body, labels: line.labels, branch }, fixSignals);
+// labels. `branch` is the PR's branch name, and `repo` the forge's repo. The line keeps its szz: the history command sets szz to null on a line that is no fix.
+function classifyAgain(line, branch, repo, fixSignals) {
+  const classification = classifyFix({ number: line.number, title: line.title, body: line.body, labels: line.labels, branch, repo }, fixSignals);
   return { ...line, classification };
 }
 
@@ -91,7 +91,7 @@ async function checkFilesComplete(forge, number, listed) {
   return `PR ${number} changed ${changed} files, but ${forge.displayName} listed only the first ${listed}, so its files field is cut short.`;
 }
 
-function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) {
+function toHistoryLine(forge, pr, files, reviews, comments, ci, fixSignals) {
   const list = inTimeOrder(
     reviews.map((review) => ({ state: review.state, author: review.author, source: 'review', at: review.at })),
     commentReviews(comments)
@@ -109,7 +109,7 @@ function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) 
     // PR's branch left the base branch from this line alone (spec 16, question 8).
     head_sha: pr.headSha,
     merge_sha: pr.mergeSha,
-    forge: forgeName,
+    forge: forge.name,
     url: pr.url,
     files: files.map((file) => ({ path: file.path, additions: file.additions, deletions: file.deletions })),
     reviews: {
@@ -120,7 +120,7 @@ function toHistoryLine(forgeName, pr, files, reviews, comments, ci, fixSignals) 
     },
     // The history line keeps the name and conclusion of each CI result (spec 8.3).
     ci: ci.map(({ name, conclusion }) => ({ name, conclusion })),
-    classification: classifyFix({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef }, fixSignals)
+    classification: classifyFix({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals)
   };
 }
 

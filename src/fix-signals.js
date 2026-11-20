@@ -17,7 +17,7 @@ const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE})+`);
 export const REVERT_SIGNAL = 'revert';
 
 // Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's number, its title,
-// its body, its label names and its branch name. The first signal in the list that matches is
+// its body, its label names, its branch name and its repo ("owner/name", or absent when unknown). The first signal in the list that matches is
 // recorded, so a person can see why the PR counts as a fix. Matching ignores case.
 export function classifyFix(pr, signals) {
   const fixSignal = signals.find((signal) => matches(pr, signal)) ?? null;
@@ -52,30 +52,30 @@ const REVERTS_PR = /^[ \t]*reverts[ \t]+([\w.-]+\/[\w.-]+)#(\d+)\b/gim;
 const REVERTS_COMMIT = /^[ \t]*this reverts commit ([0-9a-f]{7,40})\b/gim;
 
 // Says whether a PR reverts earlier work: its title starts with 'Revert "', or its body names
-// the reverted PR or commit. A revert of a revert puts the reverted work back (a re-land), so it
-// is no fix. GitHub's button and older git write 'Revert "Revert "', and newer git writes
-// 'Reapply "'.
+// a reverted PR in the PR's own repo, or a reverted commit. A line that names another repo's PR,
+// as in copied release notes, does not count. When `pr.repo` is unknown, any repo counts. A
+// revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's button
+// and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
 export function isRevert(pr) {
   const title = (pr.title ?? '').trim().toLowerCase();
   if (title.startsWith('revert "revert "') || title.startsWith('reapply "')) return false;
   if (title.startsWith('revert "')) return true;
-  const { prs, commits, otherRepos } = revertedWork(pr.body, null);
-  return prs.length + commits.length + otherRepos > 0;
+  const { prs, commits } = revertedWork(pr.body, pr.repo ?? null);
+  return prs.length + commits.length > 0;
 }
 
 // Returns the work that a revert PR's body names: the numbers of the reverted PRs in `repo`
 // ("owner/name", any case), and the reverted commits, each once, in the order of the body.
-// `otherRepos` counts the PRs it names in other repos. With `repo` null, every named PR counts.
+// With `repo` null, every named PR counts.
 export function revertedWork(body, repo) {
   const prs = [];
   const commits = [];
-  let otherRepos = 0;
   for (const [, name, number] of (body ?? '').matchAll(REVERTS_PR)) {
-    if (repo !== null && name.toLowerCase() !== repo.toLowerCase()) otherRepos++;
-    else if (!prs.includes(Number(number))) prs.push(Number(number));
+    if (repo !== null && name.toLowerCase() !== repo.toLowerCase()) continue;
+    if (!prs.includes(Number(number))) prs.push(Number(number));
   }
   for (const [, sha] of (body ?? '').matchAll(REVERTS_COMMIT)) {
     if (!commits.includes(sha.toLowerCase())) commits.push(sha.toLowerCase());
   }
-  return { prs, commits, otherRepos };
+  return { prs, commits };
 }

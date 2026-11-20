@@ -48,7 +48,7 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
     refs = {
       base: pull.baseSha,
       head: pull.headSha,
-      pr: { title: pull.title ?? '', labels: pull.labels, branch: pull.headRef ?? '' },
+      pr: { title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
       hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
     };

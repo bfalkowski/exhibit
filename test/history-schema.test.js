@@ -147,6 +147,7 @@ test('a revert link has found_by revert and no lines, and an older line with no 
   const fix = { ...good(), classification: { fix: true, fix_signal: 'revert' } };
   assert.deepEqual(checkHistoryLine({ ...fix, szz: revert }), []);
   assert.deepEqual(checkHistoryLine({ ...fix, szz: { ...revert, links: [], no_link_reason: 'reverted change not found' } }), []);
+  assert.deepEqual(checkHistoryLine({ ...fix, szz: { ...revert, links: [], no_link_reason: 'reverts a revert' } }), []);
   assert.deepEqual(checkHistoryLine({ ...fix, szz: { ...revert, links: [{ pr: 4, confidence: 1, found_by: 'guess', lines: [] }] } }), ['/szz/links/0/found_by: must be revert, not "guess"']);
   // A line written before revert links has no found_by on its links and a blamed_commit. It still passes.
   const line = { path: 'src/a.js', line: 3, text: 'x', blame: { commit: 'e'.repeat(40), original_path: 'src/a.js', original_line: 3, author: 'ana', author_time: '2026-01-01T00:00:00Z', summary: 'Add a' } };

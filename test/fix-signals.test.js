@@ -177,6 +177,16 @@ test('revert is a signal like the others: the first one in the list that matches
 
 test('revertedWork lists the PRs of this repo and the commits that a revert body names', () => {
   const body = 'Reverts acme/widgets#12\nReverts ACME/widgets#14\nReverts other/repo#3\nReverts acme/widgets#12\n\nThis reverts commit 3F2A9C1E0D4B5A6978877665544332211AABBCCD.';
-  assert.deepEqual(revertedWork(body, 'acme/widgets'), { prs: [12, 14], commits: ['3f2a9c1e0d4b5a6978877665544332211aabbccd'], otherRepos: 1 });
-  assert.deepEqual(revertedWork(null, 'acme/widgets'), { prs: [], commits: [], otherRepos: 0 });
+  assert.deepEqual(revertedWork(body, 'acme/widgets'), { prs: [12, 14], commits: ['3f2a9c1e0d4b5a6978877665544332211aabbccd'] });
+  assert.deepEqual(revertedWork(body, null), { prs: [12, 14, 3], commits: ['3f2a9c1e0d4b5a6978877665544332211aabbccd'] });
+  assert.deepEqual(revertedWork(null, 'acme/widgets'), { prs: [], commits: [] });
+});
+
+test('a body that names only a PR in another repo is no revert, when the PR\'s repo is known', () => {
+  const signals = ['revert'];
+  const bump = { title: 'Bump lodash from 4.17.20 to 4.17.21', body: 'Release notes:\nReverts lodash/lodash#5000' };
+  assert.deepEqual(classifyFix(pr({ ...bump, repo: 'acme/widgets' }), signals), notFix);
+  assert.deepEqual(classifyFix(pr({ ...bump, body: `${bump.body}\nReverts acme/widgets#12`, repo: 'acme/widgets' }), signals), { fix: true, fix_signal: 'revert' });
+  // A title from GitHub's Revert button still counts, whatever the body names.
+  assert.deepEqual(classifyFix(pr({ title: 'Revert "Bump lodash"', body: 'Reverts lodash/lodash#5000', repo: 'acme/widgets' }), signals), { fix: true, fix_signal: 'revert' });
 });

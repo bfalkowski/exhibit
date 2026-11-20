@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
-import { addSzz, REVERT_NOT_FOUND } from '../src/szz.js';
+import { addSzz, REVERT_NOT_FOUND, REVERTS_A_REVERT } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
@@ -114,6 +114,23 @@ test('a revert that names more than one PR links each one, and splits the confid
   const [done] = await addSzz([revert], { dir: repo.dir, forge, known: [...repo.history, revert] });
   assert.deepEqual(done.szz.links, [revertLink(2, 1 / 3), revertLink(5, 1 / 3), revertLink(10, 1 / 3)]);
   assert.deepEqual(checkHistoryLine(done), []);
+});
+
+test('a re-land with an edited title does not link the revert it takes back', async (t) => {
+  const { repo, lines } = fixtureWithReverts(t);
+  const pr15 = lines.at(-2);
+  // PR 17 clicks Revert on PR 15, then renames the title, so only the body says what it reverts.
+  const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts fixture/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17` };
+  const forge = createGitHubForge({ repo: REPO, token: 't', fetch: commitPullsFetch(repo, REPO) });
+  const [done] = await addSzz([reland], { dir: repo.dir, forge, known: [...lines, reland] });
+  assert.deepEqual(done.szz, { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: REVERTS_A_REVERT });
+  assert.deepEqual(checkHistoryLine(done), []);
+
+  await t.test('a revert that names a revert and a plain PR links only the plain PR', async () => {
+    const both = { ...reland, body: 'Reverts fixture/shop#15\nReverts fixture/shop#2' };
+    const [line] = await addSzz([both], { dir: repo.dir, forge, known: [...lines, both] });
+    assert.deepEqual(line.szz.links, [revertLink(2)]);
+  });
 });
 
 test('a reverted PR that the history and the forge do not know gives no link, and says so', async (t) => {

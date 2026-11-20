@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { REVERT_SIGNAL, revertedWork } from './fix-signals.js';
+import { isRevert, REVERT_SIGNAL, revertedWork } from './fix-signals.js';
 import { GitHubReplyError } from './github.js';
 
 const run = promisify(execFile);
@@ -110,7 +110,7 @@ async function askForge(forge, sha, defaultBranch) {
 // incremental run passes the whole file there, and only the lines SZZ must run on as `lines`.
 export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines }) {
   const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
-  const knownPrs = new Set(known.map((line) => line.number));
+  const knownPrs = new Map(known.map((line) => [line.number, line]));
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -222,13 +222,19 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
   };
 }
 
-// The no_link_reason of a revert whose reverted PR neither the history nor the forge knows.
+// The no_link_reason of a revert for which SZZ found no PR in this repo: the body named none,
+// named only PRs in other repos, or named work that neither the history nor the forge knows.
 export const REVERT_NOT_FOUND = 'reverted change not found';
+// The no_link_reason of a revert whose every found PR is itself a revert. It puts work back (a
+// re-land), so the PR it takes back did not bring a bug.
+export const REVERTS_A_REVERT = 'reverts a revert';
 
 // A revert names the work it reverts, so SZZ blames no line: it links each reverted PR straight
 // away, marked as found by revert. The PRs share the confidence evenly. A PR the body names is
 // linked when the history holds it, or when the forge says it is a PR. A commit maps to its PR as
 // a blamed commit does (createPrFinder). A revert of a PR in another repo links nothing here.
+// A found PR whose history line is itself a revert is not linked: a re-land with an edited
+// title, such as "Reland: add cache", still takes back a revert, not a bug.
 async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
   const { prs, commits } = revertedWork(fix.body, forge.repo);
   const found = new Set();
@@ -241,13 +247,15 @@ async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
     if (pr !== null) found.add(pr);
   }
   found.delete(fix.number);
+  const reverts = [...found].filter((number) => knownPrs.has(number) && isRevert({ ...knownPrs.get(number), repo: forge.repo }));
+  for (const number of reverts) found.delete(number);
   const linked = [...found].sort((a, b) => a - b);
   return {
     blamed_commit: null,
     links: linked.map((pr) => ({ pr, confidence: 1 / linked.length, found_by: 'revert', lines: [] })),
     unlinked_lines: [],
     dropped_lines: [],
-    no_link_reason: linked.length === 0 ? REVERT_NOT_FOUND : null
+    no_link_reason: linked.length > 0 ? null : reverts.length > 0 ? REVERTS_A_REVERT : REVERT_NOT_FOUND
   };
 }
 

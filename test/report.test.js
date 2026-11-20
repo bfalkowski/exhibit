@@ -233,12 +233,17 @@ test('a revert link shows "revert" as its evidence, in place of blame lines, in 
     classification: { fix: true, fix_signal: 'revert' },
     szz: { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: 'reverted change not found' }
   };
-  const { markdown, html } = report([...shopLines(), revert, notFound]);
+  // A title-only revert asks nobody, and gets the same reason.
+  const titleOnly = { ...notFound, number: 17, title: 'Revert "Add a footer"', merged_at: '2026-02-03T09:00:00Z' };
+  const reland = { ...notFound, number: 18, title: 'Reland: add a page', merged_at: '2026-02-04T09:00:00Z', szz: { ...notFound.szz, no_link_reason: 'reverts a revert' } };
+  const { markdown, html } = report([...shopLines(), revert, notFound, titleOnly, reland]);
   for (const text of [markdownText(markdown), htmlText(html)]) {
     assert.ok(text.includes('Fix PR 15: Revert "Add the shop entry point"'), text);
     assert.ok(text.includes('Merged on 2026-02-01. It is a revert, so SZZ ran no git blame: the revert names the PR it takes back.'), text);
     assert.ok(text.includes('Introducing PR 5: Add the shop entry point, confidence 100%, evidence: revert. PR 15 reverts it.'), text);
-    assert.ok(text.includes('PR 16 (Revert "Add a page"): It is a revert, but neither the history nor the forge knows the change it reverts.'), text);
+    assert.ok(text.includes('PR 16 (Revert "Add a page"): It is a revert, but Exhibit found no PR in this repo that it names.'), text);
+    assert.ok(text.includes('PR 17 (Revert "Add a footer"): It is a revert, but Exhibit found no PR in this repo that it names.'), text);
+    assert.ok(text.includes('PR 18 (Reland: add a page): It reverts a revert, so it puts a change back, and the PR it takes back brought no bug.'), text);
   }
   assert.deepEqual(factsIn(markdownText(markdown)).defects, [15, 14, 12, 7, 6]);
   // A revert link is strong: it holds the whole fix.
