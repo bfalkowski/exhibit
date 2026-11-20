@@ -365,11 +365,12 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     const comments = markComments(rows.map((row) => row.text), path, rows.map((row) => lineFact[row.line]?.inBlock));
     return rows.map((row, i) => {
       const level = lineFact[row.line]?.level;
-      return { ...row, level, key: squash(row.text, path, level), comment: comments[i] };
+      const codeKey = squash(stripComments(row.text, path), path, level);
+      return { ...row, level, key: squash(row.text, path, level), codeKey, comment: comments[i] };
     });
   };
   const added = hunks.flatMap((hunk, at) => {
-    const rows = hunk.added.map((text, i) => ({ at, line: hunk.newStart + i, text, used: false }));
+    const rows = hunk.added.map((text, i) => ({ at, path: hunk.newPath, line: hunk.newStart + i, text, used: false }));
     return side(rows, hunk.newPath, factsOf('after', after, hunk.newPath));
   }).map((row, place) => ({ ...row, place }));
   const deleted = hunks.flatMap((hunk, at) => {
@@ -379,8 +380,8 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   const index = indexByKey(added);
   const sameFile = (deletedAt, addedAt) => hunks[deletedAt].newPath !== null && hunks[deletedAt].newPath === hunks[addedAt].newPath;
 
-  // Finds the first unused added line with the same text, give or take whitespace, in the same
-  // hunk or in another one, and uses it up.
+  // Finds the first unused added line with the same text, with at most whitespace changed, in
+  // the same hunk or in another one, and uses it up.
   // Returns the matched line, or undefined.
   const pair = (line, sameHunk) => {
     const byHunk = index.get(line.key);
@@ -433,20 +434,19 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   }
   // A code line where only the comment at its end changed, such as "x = 1; // old note" to
   // "x = 1;": the same hunk adds a code line with the same code once the comments come off both
-  // lines, give or take whitespace. The added code lines are indexed by hunk and code, as above.
-  const codeOf = (row, path) => squash(stripComments(row.text, path), path, row.level);
+  // lines, with at most whitespace changed. That code is each row's codeKey. Each side reads
+  // its comments with its own path, so a rename from .py to .js reads "#" only on the old side.
+  // The added code lines are indexed by hunk and codeKey, as above.
   const byCode = new Map();
   for (const row of added) {
     if (row.comment) continue;
-    const id = `${row.at}\n${codeOf(row, hunks[row.at].oldPath)}`;
+    const id = `${row.at}\n${row.codeKey}`;
     if (!byCode.has(id)) byCode.set(id, hunkRows());
     byCode.get(id).rows.push(row);
   }
   for (const line of deleted) {
-    if (line.reason !== null || line.comment) continue;
-    const key = codeOf(line, line.path);
-    if (key === '') continue;
-    const match = byCode.get(`${line.at}\n${key}`)?.firstUnused();
+    if (line.reason !== null || line.comment || line.codeKey === '') continue;
+    const match = byCode.get(`${line.at}\n${line.codeKey}`)?.firstUnused();
     if (match) {
       match.used = true;
       line.reason = 'comment';
@@ -686,6 +686,13 @@ const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').rep
 // JavaScript a "/* */" comment. Text in quotes is code, so a "//" or "#" in a string stays. A
 // comment mark counts only at the start of the line or after a space, so "http://a" stays too:
 // a line can be part of a string that opened on an earlier line, which this cannot see.
+// In JavaScript, a regex literal is code too, so the quote in "r = /'/; // n" opens no string.
+// And a "//" in JSX text, with a closing tag after it on the line, such as
+// "<p>Price // 10 USD</p>", is text. Other text that only looks like a comment, such as a "#"
+// in a docstring or a "//" in a template literal that spans lines, is still read as a comment.
+// The whitespace right before a comment that comes off goes too, so it cannot stop a match.
+// Other whitespace at the end of the line stays: it can be text in a string that goes on to
+// the next line.
 function stripComments(text, path) {
   const style = commentStyle(path);
   if (style === null) return text;
@@ -700,18 +707,50 @@ function stripComments(text, path) {
       else if (ch === quote) quote = null;
       continue;
     }
+    const regexEnd = style === 'slash' && ch === '/' && opensRegex(out) ? endOfRegex(text, i) : -1;
+    if (regexEnd !== -1) {
+      out += text.slice(i, regexEnd + 1);
+      i = regexEnd;
+      continue;
+    }
     if (quotes.includes(ch)) quote = ch;
     const spaced = i === 0 || /\s/.test(text[i - 1]);
-    if (spaced && (style === 'hash' ? ch === '#' : text.startsWith('//', i))) break;
+    const lineComment = style === 'hash' ? ch === '#' : text.startsWith('//', i) && !closingTag.test(text.slice(i + 2));
+    if (spaced && lineComment) return out.trimEnd();
     if (spaced && style === 'slash' && text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2);
-      if (end === -1) break;
+      if (end === -1) return out.trimEnd();
+      out = out.trimEnd();
       i = end + 1;
       continue;
     }
     out += ch;
   }
   return out;
+}
+
+// A JSX closing tag, such as "</p>", "</Foo.Bar>" or "</>".
+const closingTag = /<\/([A-Za-z][\w.:-]*)?\s*>/;
+
+// Whether a "/" after this code starts a regex literal, not a division: the code before it
+// ends with nothing, with a mark such as "=", "(" or ",", or with a word such as "return".
+// After "<" or ">" it is a division or a JSX tag, such as "</p>".
+const opensRegex = (code) => /(^|[(,=:[!&|?{};+\-*%~^]|\b(return|typeof|case|void|delete|throw|yield|await|in|of|else|do))\s*$/.test(code);
+
+// Where the regex literal that starts at `start` ends: the index of its last "/". A "/" in a
+// class such as [/] or after a backslash does not end it. Returns -1 when the "/" starts a
+// comment, or when no "/" ends the regex on this line.
+function endOfRegex(text, start) {
+  if (text[start + 1] === '/' || text[start + 1] === '*') return -1;
+  let inClass = false;
+  for (let i = start + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') i++;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) return i;
+  }
+  return -1;
 }
 
 // Version 1 knows the comments of JavaScript and TypeScript, and of Python.
