@@ -32,7 +32,7 @@ export const COLLECTORS = Object.freeze({
 // Builds the exhibit, the content of evidence.json (spec 8.2), for one change.
 //
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
-// changed paths `files`, what is known of the PR (`pr`: title, labels, branch), where the fix
+// changed paths `files`, what is known of the PR (`pr`: title, body, labels, branch, repo), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
 // `head` SHAs, and `cwd`, the clone, and `env` for the test command.
 //
