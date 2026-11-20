@@ -65,7 +65,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`, and with `--comment` it reads the repo from the exhibit. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -75,7 +75,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
-| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. |
+| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment [--enforce]]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. With `--comment`, it then posts a short summary of the exhibit as one comment on the PR, or updates the comment it posted before (section 9.12). It reads the PR from the exhibit's `repo` and `pr`, and `GITHUB_TOKEN` must be set. Without `--enforce`, the comment says that it is shadow mode. Without `--comment`, nothing is posted. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -512,9 +512,17 @@ The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wi
   - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`. An identity variable that is set but empty, such as `GIT_AUTHOR_NAME=`, counts as not set. When git still cannot make the commit, publish exits 2 with git's reason.
 - `local` writes the file to a folder, `settings.local_path` or `--local-path`, by default `.exhibit/out`, relative to the repo. It makes no git change. When the file already holds the same bytes, it writes nothing.
 
+**The PR comment.** With `--comment`, publish posts a short summary of the exhibit as one comment on the PR, so a reviewer reads the verdict and the gaps without opening CI. Posting is a forge method, `upsertComment`, beside the others in the forge module.
+
+- The comment starts with a hidden marker, `<!-- exhibit:pr-summary -->`. On each later run, publish updates the first comment that starts with the marker and that the token's own account wrote. It never changes a comment by anyone else, even one that starts with the marker. With no such comment, it posts a new one. When the comment already holds the same text, it changes nothing.
+- The comment shows the verdict, the head commit, the kinds and the risk, and each gap with how to fix it. It shows at most the first 10 gaps, then says how many more there are. Without `--enforce`, it says "Shadow mode: nothing waits on this."
+- It ends with a link to the full exhibit, on the data branch at the commit that holds it, when the remote is the PR's repo on GitHub. Otherwise it names the stored file.
+- Publish checks for the repo, the PR number and `GITHUB_TOKEN` before it stores the exhibit, and a missing one gives exit 2 and stores nothing. It stores the exhibit before it posts the comment. A failure to post, such as a 403 from a token with no write permission, gives exit 2 and a message that says the exhibit is stored, and the stored exhibit stays. A fine-grained token needs the permission "Pull requests: write".
+- A PR from a fork gets a token that cannot write, so the GitHub Action ticket handles comments for those PRs.
+
 Later tickets add the rest of storage:
 
-- In CI, the exhibit is uploaded as a workflow artifact. A short summary is posted as one PR comment, which is updated on each run.
+- In CI, the exhibit is uploaded as a workflow artifact.
 - The history cache and reports live on the data branch too.
 
 ## 10. GitHub Action

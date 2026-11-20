@@ -19,7 +19,7 @@ try {
   } else if (command === 'check') {
     process.exitCode = await check(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout });
   } else if (command === 'publish') {
-    process.exitCode = await publish(rest, { cwd: process.cwd(), stdout: process.stdout });
+    process.exitCode = await publish(rest, { cwd: process.cwd(), env: process.env, fetch: globalThis.fetch, stdout: process.stdout });
   } else {
     throw new ToolError(`unknown command ${command === undefined ? '(none)' : command}. The commands are history, label, check, publish and --version.`);
   }

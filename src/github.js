@@ -6,6 +6,7 @@ const GRAPHQL = `${API}/graphql`;
 // The token permissions that Exhibit's requests need (spec 8.3). Pass one as `permission`.
 const PERMISSIONS = {
   pullRequests: 'Pull requests: read',
+  pullRequestsWrite: 'Pull requests: write',
   checks: 'Checks: read',
   commitStatuses: 'Commit statuses: read'
 };
@@ -176,7 +177,20 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
     return reply.data;
   }
 
-  return { getAll, getOne, graphql, counts: () => ({ ...counts }) };
+  // Sends one REST request that changes something, such as a POST or a PATCH, with the JSON body
+  // `body`, and returns the JSON object of the reply. It never uses the cache. It waits and asks
+  // again when GitHub says to, as a GET does, because GitHub did not act on a refused request.
+  async function write(method, path, body, { permission } = {}) {
+    const url = API + path;
+    const init = { method, headers: { ...headers(), 'content-type': 'application/json' }, body: JSON.stringify(body) };
+    const { response, limited } = await withWaits(() => send(url, init, 'requests'));
+    if (!response.ok) throw await apiError(response, url, limited ? undefined : permission);
+    const reply = await jsonOf(response);
+    if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) throw notShaped(url, 'a JSON object');
+    return reply;
+  }
+
+  return { getAll, getOne, graphql, write, counts: () => ({ ...counts }) };
 }
 
 // Returns the parsed JSON body of a response, or undefined when it is not JSON.
@@ -398,9 +412,17 @@ const COMMIT_CI = `query CommitCi(${REPO_VARIABLES}, $oid: GitObjectID!, $after:
   repository(owner: $owner, name: $name) { object(oid: $oid) { ... on Commit { statusCheckRollup { ${listPage('contexts', CI_RESULT, true)} } } } }
 }`;
 
+// The comments on one PR, from the cursor `$after`, with what upsertComment needs to find its own
+// comment. viewerDidAuthor is true for a comment that the token's own account wrote. A comment's
+// id is past 2^31 on GitHub, so it comes as fullDatabaseId, a string, and not as the Int databaseId.
+const OWN_COMMENTS = `query PullCommentsForUpsert(${REPO_VARIABLES}, $number: Int!, $after: String) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${listPage('comments', 'fullDatabaseId url body viewerDidAuthor', true)} } }
+}`;
+
 const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] };
 
-// The GitHub forge: every request that history and SZZ send to GitHub, as one method each, for
+// The GitHub forge: every request that history, SZZ, check and publish send to GitHub, as one method each, for
 // the one repo `repo` ("owner/name"). Only this module builds GitHub API paths and queries, so
 // another forge, such as GitLab, can come later as a second module with the same methods. The
 // other options go to createGitHub.
@@ -422,6 +444,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
 // - issue: { createdAt, isPull }, or null.
 // - defaultBranch: the branch name.
+// - upsertComment, for exhibit publish --comment: { action, url }.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
   const base = `/repos/${repo}`;
@@ -569,6 +592,34 @@ export function createGitHubForge({ repo, ...client }) {
     // as one that was never pushed. A 404 means the same here: the repo itself was read before.
     // Both give an empty list.
     pullsForCommit: async (sha) => (await github.getAll(`${base}/commits/${sha}/pulls?per_page=100`, { emptyOn: [404, 422], ...pullRequests })).map(fromRestPull),
+
+    // Posts `body` as a comment on PR `number`, or updates the comment that this method posted
+    // before, so the PR holds one such comment. That comment is the first one that the token's own
+    // account wrote and whose body starts with `marker`. A comment by anyone else is never changed,
+    // even when it starts with the marker. Returns { action, url }, where action is created,
+    // updated, or unchanged when the comment already holds `body`.
+    async upsertComment(number, marker, body) {
+      const ask = async (after) => (await github.graphql(OWN_COMMENTS, { owner, name, number, after }, pullRequests)).repository?.pullRequest?.comments;
+      const first = await ask(null);
+      if (first === undefined || first === null) throw new ToolError(`GitHub has no PR ${number} in ${repo}.`);
+      const own = (await allItems(first, ask)).find((comment) => comment.viewerDidAuthor === true && typeof comment.body === 'string' && comment.body.startsWith(marker));
+      const write = { permission: PERMISSIONS.pullRequestsWrite };
+      if (own === undefined) {
+        const made = await github.write('POST', `${base}/issues/${number}/comments`, { body }, write);
+        return { action: 'created', url: made.html_url };
+      }
+      // GitHub keeps a comment's line ends as \r\n when it was edited in the browser, and as sent
+      // otherwise. The comparison ignores that difference.
+      if (own.body.replace(/\r\n/g, '\n') === body) return { action: 'unchanged', url: own.url };
+      if (!/^\d+$/.test(own.fullDatabaseId)) throw notShaped(GRAPHQL, 'a comment with an id');
+      const changed = await github.write('PATCH', `${base}/issues/comments/${own.fullDatabaseId}`, { body }, write);
+      return { action: 'updated', url: changed.html_url };
+    },
+
+    // The web page of the file `path` in this repo at the commit `commit`.
+    fileUrl(commit, path) {
+      return `https://github.com/${repo}/blob/${commit}/${path.split('/').map(encodeURIComponent).join('/')}`;
+    },
 
     // The issue (or PR) with the number `number`, or null when GitHub does not know it or it was
     // deleted. GitHub lists a PR as an issue too, and marks it with a pull_request field.
