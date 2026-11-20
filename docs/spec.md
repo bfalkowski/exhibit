@@ -85,7 +85,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 ```yaml
 version: 3
 settings:
-  test_command: "npm ci && node --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml"
+  test_command: "npm ci && node --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml test/*.test.js"
   test_results: ".exhibit/junit.xml"
   fix_signals: [label:bug, title:fix, branch:fix/]
   mutation_budget_seconds: 300

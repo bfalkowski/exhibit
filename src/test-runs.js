@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parseJUnit } from './junit.js';
 
@@ -38,9 +38,11 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
     throw new TestRunError('missing', 'the policy has no settings.test_command or no settings.test_results',
       'The policy needs tests-before-after, but evidence.yml does not say how to run the tests. Set settings.test_command to a command that runs the tests and writes JUnit XML, and settings.test_results to the path of that file.');
   }
-  // Exhibit removes the results file before each run, so it must be a file in the worktree.
-  const inside = normalize(results);
-  if (isAbsolute(results) || inside === '.' || inside === '..' || inside.startsWith('..' + sep)) {
+  // Exhibit removes the results file before each run, so it must be a file in the worktree. The
+  // path is resolved against a stand-in root, so "./" and "a/..//" count as the root itself.
+  const root = resolve(sep, 'worktree');
+  const inside = relative(root, resolve(root, results));
+  if (isAbsolute(results) || inside === '' || inside === '..' || inside.startsWith('..' + sep)) {
     throw new TestRunError('error', `settings.test_results is not a path in the worktree: ${results}`,
       `settings.test_results in evidence.yml is "${results}", which is not a file inside the repo. Exhibit removes that file before each run, so it must be a path in the repo, such as .exhibit/junit.xml. Change it, and run exhibit check again.`);
   }

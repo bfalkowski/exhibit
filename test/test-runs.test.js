@@ -167,7 +167,7 @@ test('a results path outside the worktree gives error, and Exhibit touches no fi
   const fixture = buildRepo(t);
   const outside = join(dirname(fixture.repo), 'keep.xml');
   writeFileSync(outside, 'keep');
-  for (const results of ['../keep.xml', outside]) {
+  for (const results of ['../keep.xml', outside, './', 'a/..//']) {
     writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, results));
     const { code, requirement, gap } = await runCheck(fixture.repo, 'good');
     assert.equal(requirement.status, 'error');
