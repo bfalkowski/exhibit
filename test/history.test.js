@@ -147,7 +147,7 @@ test('readHistory with since and limit asks for more pages of the kept PRs only'
   const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't0ken', fetch }), since: new Date('2026-03-01T00:00:00Z'), limit: 2 });
   assert.deepEqual(lines.map((l) => l.number), [7, 4]);
   // The two pages of merged PRs, then the second pages of PR 7's lists and of PR 4's CI results.
-  const later = fetch.calls.filter((c) => !c.key.startsWith('graphql MergedPulls '));
+  const later = fetch.calls.filter((c) => !/^graphql (Recent)?MergedPulls /.test(c.key));
   assert.ok(later.length > 0);
   assert.ok(later.every((c) => /"number":[47],|c{39}[47]"/.test(c.key)), later.map((c) => c.key).join(', '));
 });

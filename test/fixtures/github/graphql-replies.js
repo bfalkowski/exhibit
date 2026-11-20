@@ -1,8 +1,11 @@
 // Builds GitHub GraphQL replies for history, in the shape GitHub sends them, from plain PR data.
 // The replies use the keys of test-support/replay-fetch.js.
 //
-// Each PR is { number, url, title, body, author, mergedAt, changedFiles, mergeSha, baseRef,
+// Each PR is { number, url, title, body, author, mergedAt, updatedAt, changedFiles, mergeSha, baseRef,
 // baseSha, headRef, headSha, labels, files, reviews, comments, ci }:
+// - updatedAt: when the PR was last updated. It is mergedAt when left out.
+// - sortedAt: where RecentMergedPulls puts the PR. It is updatedAt when left out. GitHub's order
+//   does not always follow updatedAt, and a test can give a PR an older sortedAt to show that.
 // - author: { __typename, login }, or null for a deleted account. A review or comment has one too.
 // - labels: [{ name }]. files: [{ path, additions, deletions }].
 // - reviews: [{ state, submittedAt, author }]. comments: [{ body, createdAt, author }].
@@ -24,13 +27,19 @@ export function graphqlReplies(repo, pulls, { pullsPerPage = 50, itemsPerPage = 
   const replies = {};
   const ok = (data) => ({ status: 200, headers: {}, body: { data: { rateLimit: { cost: 1 }, ...data } } });
 
-  const pullPages = chunks(pulls, pullsPerPage);
-  pullPages.forEach((page, index) => {
-    const after = index === 0 ? null : `pulls-${index}`;
-    const pageInfo = { hasNextPage: index < pullPages.length - 1, endCursor: `pulls-${index + 1}` };
-    const nodes = page.map((pull) => pullNode(pull, itemsPerPage));
-    replies[graphqlKey('MergedPulls', { owner, name, after })] = ok({ repository: { pullRequests: { pageInfo, nodes } } });
-  });
+  // MergedPulls lists the PRs in the order given. RecentMergedPulls lists them updated last first,
+  // as GitHub does, with its own cursors.
+  const sorted = (pull) => pull.sortedAt ?? pull.updatedAt ?? pull.mergedAt;
+  const byUpdate = [...pulls].sort((a, b) => sorted(b).localeCompare(sorted(a)));
+  for (const [query, list, cursor] of [['MergedPulls', pulls, 'pulls'], ['RecentMergedPulls', byUpdate, 'recent']]) {
+    const pullPages = chunks(list, pullsPerPage);
+    pullPages.forEach((page, index) => {
+      const after = index === 0 ? null : `${cursor}-${index}`;
+      const pageInfo = { hasNextPage: index < pullPages.length - 1, endCursor: `${cursor}-${index + 1}` };
+      const nodes = page.map((pull) => pullNode(pull, itemsPerPage));
+      replies[graphqlKey(query, { owner, name, after })] = ok({ repository: { pullRequests: { pageInfo, nodes } } });
+    });
+  }
 
   for (const pull of pulls) {
     for (const [field, query] of Object.entries(LISTS)) {
@@ -54,6 +63,7 @@ function pullNode(pull, itemsPerPage) {
     // GraphQL gives an empty body as "", where the REST API gives null.
     body: pull.body ?? '',
     mergedAt: pull.mergedAt,
+    updatedAt: pull.updatedAt ?? pull.mergedAt,
     changedFiles: pull.changedFiles ?? pull.files.length,
     author: pull.author,
     mergeCommit: { oid: pull.mergeSha },

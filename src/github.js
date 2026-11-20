@@ -349,7 +349,7 @@ function listPage(field, item, paged = false) {
 
 // A PR with the first page of each list. The CI results are on the PR's last commit: its check
 // runs and its commit statuses together, in GitHub's status check rollup.
-const PULL = `number url title body mergedAt changedFiles ${AUTHOR} mergeCommit { oid }
+const PULL = `number url title body mergedAt updatedAt changedFiles ${AUTHOR} mergeCommit { oid }
   baseRefName baseRefOid headRefName headRefOid
   ${Object.entries(PULL_LISTS).map(([field, item]) => listPage(field, item)).join('\n  ')}
   commits(last: 1) { nodes { commit { oid statusCheckRollup { ${listPage('contexts', CI_RESULT)} } } } }`;
@@ -360,6 +360,18 @@ const MERGED_PULLS = `query MergedPulls(${REPO_VARIABLES}, $after: String) {
   rateLimit { cost }
   repository(owner: $owner, name: $name) {
     pullRequests(states: MERGED, first: ${PULLS_PER_QUERY}, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ${PULL} }
+    }
+  }
+}`;
+
+// The merged PRs, the PR updated last first. With --since or --limit, history reads this list
+// and stops early (see mergedPulls).
+const RECENT_MERGED_PULLS = `query RecentMergedPulls(${REPO_VARIABLES}, $after: String) {
+  rateLimit { cost }
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, orderBy: { field: UPDATED_AT, direction: DESC }, first: ${PULLS_PER_QUERY}, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes { ${PULL} }
     }
@@ -474,18 +486,49 @@ export function createGitHubForge({ repo, ...client }) {
       return typeof url === 'string' && url.toLowerCase().startsWith(`https://github.com/${repo}/pull/`.toLowerCase());
     },
 
-    // The PRs that were merged, in the order GitHub lists them.
-    async mergedPulls() {
+    // The PRs that were merged. `since` (a Date) and `limit` are history's options: history keeps
+    // the PRs merged at or after `since`, and of those the newest `limit` by merge time. With
+    // neither, it reads every merged PR, in the order GitHub lists them. With either, it reads
+    // the PRs updated last first, and stops when no later page can hold a PR that history keeps
+    // (see noneLeftToKeep). So it may return more PRs than history keeps, but never fewer.
+    async mergedPulls({ since, limit } = {}) {
+      const byUpdate = Boolean(since) || limit !== undefined;
+      const query = byUpdate ? RECENT_MERGED_PULLS : MERGED_PULLS;
       const merged = [];
-      for (let after = null, more = true; more; ) {
-        const data = await github.graphql(MERGED_PULLS, { owner, name, after }, forHistory);
+      const seen = new Set();
+      async function readPage(after) {
+        const data = await github.graphql(query, { owner, name, after }, forHistory);
         const page = data.repository?.pullRequests;
         if (!Array.isArray(page?.nodes)) throw notShaped(GRAPHQL, 'a list of PRs');
         for (const found of page.nodes) {
+          if (seen.has(found.number)) continue;
+          seen.add(found.number);
           keep(found);
           merged.push(fromGraphqlPull(found, await pullList(found.number, 'labels')));
         }
+        return page;
+      }
+
+      let pages = 0;
+      let firstNewest;
+      for (let after = null, more = true; more; ) {
+        const page = await readPage(after);
+        pages += 1;
+        if (pages === 1) firstNewest = newestUpdate(page.nodes);
         ({ hasNextPage: more, endCursor: after } = page.pageInfo);
+        if (byUpdate && more && noneLeftToKeep(merged, oldestUpdate(page.nodes), since, limit)) break;
+      }
+      // A PR that someone updated while the pages were read moves to the top of the list, so the
+      // later pages do not hold it. Read from the top again, down to a page that ends more than
+      // ORDER_MARGIN_MS before the newest update on the first page, to find it. This is most often
+      // one or two queries. When the first page had no update times, the first pass did not stop
+      // early and read the whole list, so there is nothing to find.
+      if (byUpdate && pages > 1 && Number.isFinite(firstNewest)) {
+        for (let after = null, more = true; more; ) {
+          const page = await readPage(after);
+          ({ hasNextPage: more, endCursor: after } = page.pageInfo);
+          if (oldestUpdate(page.nodes) + ORDER_MARGIN_MS < firstNewest) break;
+        }
       }
       return merged;
     },
@@ -535,6 +578,34 @@ export function createGitHubForge({ repo, ...client }) {
       return { createdAt: typeof found.created_at === 'string' ? found.created_at : null, isPull: Boolean(found.pull_request) };
     }
   };
+}
+
+// The newest and the oldest update time of the PRs `nodes`, in milliseconds. A page with no
+// update times gives NaN, and a comparison with NaN is false, so the list does not stop early.
+const newestUpdate = (nodes) => Math.max(...nodes.map((found) => Date.parse(found.updatedAt)));
+const oldestUpdate = (nodes) => Math.min(...nodes.map((found) => Date.parse(found.updatedAt)));
+
+// GitHub's list "ordered by UPDATED_AT" is not always in the order of the updatedAt it gives. On
+// cli/cli, a PR came after another PR that it was updated 2.2 hours later than (spec 8.3). So the
+// stops below allow a PR on a later page to be updated, and merged, up to this long after the
+// oldest update time on the page before. GitHub does not document how far off its order can be,
+// so this margin is a guess, made large against the one case seen.
+export const ORDER_MARGIN_MS = 24 * 60 * 60 * 1000;
+
+// Returns true when no PR after the page whose oldest update time is `oldest` can be one that
+// history keeps. `merged` holds the PRs read so far. Each later PR was updated at or before
+// `oldest` plus ORDER_MARGIN_MS, and a merge updates the PR, so it was merged by then too. Call
+// that time `latest`. A later PR is not kept when `latest` is before `since`. And it is not kept
+// when `limit` PRs that history keeps were merged after `latest`, because those PRs come first.
+function noneLeftToKeep(merged, oldest, since, limit) {
+  const latest = oldest + ORDER_MARGIN_MS;
+  if (since && latest < since.getTime()) return true;
+  if (limit === undefined) return false;
+  const newer = merged.filter((pr) => {
+    const at = Date.parse(pr.mergedAt);
+    return at > latest && (!since || at >= since.getTime());
+  });
+  return newer.length >= limit;
 }
 
 // Returns every item of a GraphQL list, from its first page `page` on. `nextPage(cursor)` asks

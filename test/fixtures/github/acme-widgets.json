@@ -20,6 +20,7 @@
                 "title": "Add the widget cache",
                 "body": "Body of #7.",
                 "mergedAt": "2026-03-05T12:00:00Z",
+                "updatedAt": "2026-03-06T10:00:00Z",
                 "changedFiles": 3,
                 "author": {
                   "__typename": "User",
@@ -152,6 +153,7 @@
                 "title": "Fix the off-by-one in paging",
                 "body": "",
                 "mergedAt": "2026-03-01T09:00:00Z",
+                "updatedAt": "2026-03-04T10:00:00Z",
                 "changedFiles": 2,
                 "author": {
                   "__typename": "User",
@@ -233,6 +235,7 @@
                 "title": "Rename the widget table",
                 "body": "Body of #4.",
                 "mergedAt": "2026-03-03T08:30:00Z",
+                "updatedAt": "2026-03-03T08:30:00Z",
                 "changedFiles": 1,
                 "author": {
                   "__typename": "User",
@@ -356,6 +359,7 @@
                 "title": "Update the README",
                 "body": "Body of #3.",
                 "mergedAt": "2026-02-10T16:45:00Z",
+                "updatedAt": "2026-02-10T16:45:00Z",
                 "changedFiles": 1,
                 "author": null,
                 "mergeCommit": {
@@ -438,6 +442,7 @@
                 "title": "First commit of widgets",
                 "body": "Body of #1.",
                 "mergedAt": "2026-01-15T10:00:00Z",
+                "updatedAt": "2026-01-15T10:00:00Z",
                 "changedFiles": 2,
                 "author": {
                   "__typename": "User",
@@ -698,6 +703,543 @@
                 ]
               }
             }
+          }
+        }
+      }
+    }
+  },
+  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null}": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequests": {
+            "pageInfo": {
+              "hasNextPage": true,
+              "endCursor": "recent-1"
+            },
+            "nodes": [
+              {
+                "number": 7,
+                "url": "https://github.com/acme/widgets/pull/7",
+                "title": "Add the widget cache",
+                "body": "Body of #7.",
+                "mergedAt": "2026-03-05T12:00:00Z",
+                "updatedAt": "2026-03-06T10:00:00Z",
+                "changedFiles": 3,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev7"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7",
+                "headRefName": "topic-7",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc7",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "labels-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "name": "feature"
+                    },
+                    {
+                      "name": "cache"
+                    }
+                  ]
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "files-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "src/cache.js",
+                      "additions": 120,
+                      "deletions": 0
+                    },
+                    {
+                      "path": "src/widget.js",
+                      "additions": 8,
+                      "deletions": 3
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "reviews-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "CHANGES_REQUESTED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev1"
+                      }
+                    },
+                    {
+                      "state": "COMMENTED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev7"
+                      }
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": true,
+                    "endCursor": "comments-7-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "Review of ccccccc. Verdict: fix (one blocking finding).\n\nWhat I ran: npm test. The cache never drops an old widget.",
+                      "createdAt": "2026-02-28T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev3"
+                      }
+                    },
+                    {
+                      "body": "<!-- office:dev -->\nThanks. Verdict fix is right, and the cache now drops old widgets in ddddddd.",
+                      "createdAt": "2026-02-28T11:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev7"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc7",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": true,
+                              "endCursor": "ci-7-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 71,
+                                "name": "Secret scan",
+                                "conclusion": "SUCCESS",
+                                "url": null
+                              },
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 72,
+                                "name": "test",
+                                "conclusion": "FAILURE",
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 5,
+                "url": "https://github.com/acme/widgets/pull/5",
+                "title": "Fix the off-by-one in paging",
+                "body": "",
+                "mergedAt": "2026-03-01T09:00:00Z",
+                "updatedAt": "2026-03-04T10:00:00Z",
+                "changedFiles": 2,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev5"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa5"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5",
+                "headRefName": "topic-5",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc5",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "labels-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "name": "bug"
+                    }
+                  ]
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "src/paging.js",
+                      "additions": 1,
+                      "deletions": 1
+                    },
+                    {
+                      "path": "test/paging.test.js",
+                      "additions": 12,
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "comments-5-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "> Verdict: fix\n\nFixed in abc1234.",
+                      "createdAt": "2026-02-20T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "dev5"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc5",
+                        "statusCheckRollup": null
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 4,
+                "url": "https://github.com/acme/widgets/pull/4",
+                "title": "Rename the widget table",
+                "body": "Body of #4.",
+                "mergedAt": "2026-03-03T08:30:00Z",
+                "updatedAt": "2026-03-03T08:30:00Z",
+                "changedFiles": 1,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev4"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4",
+                "headRefName": "topic-4",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc4",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-4-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "db/schema.sql",
+                      "additions": 2,
+                      "deletions": 2
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "reviews-4-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "DISMISSED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev1"
+                      }
+                    },
+                    {
+                      "state": "APPROVED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev2"
+                      }
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc4",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": true,
+                              "endCursor": "ci-4-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 41,
+                                "name": "test",
+                                "conclusion": "SUCCESS",
+                                "url": "https://github.com/acme/widgets/runs/41"
+                              },
+                              {
+                                "__typename": "StatusContext",
+                                "context": "buildkite/widgets",
+                                "state": "SUCCESS",
+                                "targetUrl": "https://buildkite.com/acme/widgets/builds/401"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"recent-1\"}": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1
+        },
+        "repository": {
+          "pullRequests": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "recent-2"
+            },
+            "nodes": [
+              {
+                "number": 3,
+                "url": "https://github.com/acme/widgets/pull/3",
+                "title": "Update the README",
+                "body": "Body of #3.",
+                "mergedAt": "2026-02-10T16:45:00Z",
+                "updatedAt": "2026-02-10T16:45:00Z",
+                "changedFiles": 1,
+                "author": null,
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3",
+                "headRefName": "topic-3",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc3",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-3-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "README.md",
+                      "additions": 5,
+                      "deletions": 1
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "reviews-3-1"
+                  },
+                  "nodes": [
+                    {
+                      "state": "APPROVED",
+                      "submittedAt": "2026-03-01T00:00:00Z",
+                      "author": null
+                    }
+                  ]
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc3",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": false,
+                              "endCursor": "ci-3-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 31,
+                                "name": "test",
+                                "conclusion": "SKIPPED",
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 1,
+                "url": "https://github.com/acme/widgets/pull/1",
+                "title": "First commit of widgets",
+                "body": "Body of #1.",
+                "mergedAt": "2026-01-15T10:00:00Z",
+                "updatedAt": "2026-01-15T10:00:00Z",
+                "changedFiles": 2,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev1"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1",
+                "headRefName": "topic-1",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc1",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-1-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "package.json",
+                      "additions": 20,
+                      "deletions": 0
+                    },
+                    {
+                      "path": "src/widget.js",
+                      "additions": 40,
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "comments-1-1"
+                  },
+                  "nodes": [
+                    {
+                      "body": "## Review of ccccccc: verdict fix\n\nThe test fails on an empty list.",
+                      "createdAt": "2026-02-20T10:00:00Z",
+                      "author": {
+                        "__typename": "User",
+                        "login": "rev3"
+                      }
+                    }
+                  ]
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc1",
+                        "statusCheckRollup": {
+                          "contexts": {
+                            "pageInfo": {
+                              "hasNextPage": false,
+                              "endCursor": "ci-1-1"
+                            },
+                            "nodes": [
+                              {
+                                "__typename": "CheckRun",
+                                "databaseId": 11,
+                                "name": "test",
+                                "conclusion": null,
+                                "url": null
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       }
