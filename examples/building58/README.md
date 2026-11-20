@@ -18,7 +18,7 @@ Change nothing else in the PR. A PR that changes `evidence.yml` always gets `nee
 The workflow is [examples/pull-request.yml](../pull-request.yml) with three changes:
 
 - The check job sets up Node with `lts/*`, as Building58's CI does. Exhibit needs Node 20 or later, so the check job does not use Node 18.
-- The check job has a time limit of 120 minutes, and the publish job one of 10. The tests run one file at a time, on the base and on the head, and once more on the base for a fix. Building58's CI notes say one such run took about 10 minutes there. On a busy Mac, one run took 39 minutes, mostly spent waiting on timers. If the check job often takes long, lower the limit or make the tests faster (see below).
+- The check job has a time limit of 60 minutes, and the publish job one of 10. A check runs the tests on the base and on the head, and once more on the base for a fix. On a GitHub runner (`ubuntu-24.04`), a full check of Building58 PR 147 took 17 minutes (two test runs), and of PR 111, a fix, 24 minutes (three test runs). If the check job is always much faster than its limit, lower the limit. If it often comes near the limit, make the tests faster.
 - Both jobs pin `bfalkowski/exhibit@v0.1.0`. Keep the same release in both jobs. Do not pin `v0` or `main`. They move, so the check job and the publish job of one run could get different code. To move to a newer release, change both lines in a PR of its own.
 
 The runner is `ubuntu-24.04`, where Exhibit's own real runs passed. Building58's CI uses `ubuntu-24.04-arm` because it costs less. Exhibit is plain JavaScript, so arm should work, but no real run has shown it yet.
@@ -48,13 +48,13 @@ Building58's branch protection covers `main` only, so the publish job can push `
 
 Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`.
 
-The test command runs `relay/test/*.test.js` with `node --test`, because Exhibit reads the results from a JUnit file, and `relay/test/run.js` writes none. It differs from `npm test` in three ways:
+The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run.js`) does: six files at a time, and each file with a new empty HOME of its own, so no test reads a room's files under `~/.office-world` or another file's. Exhibit reads the results from a JUnit file, and `run.js` writes none, so the command runs each file with `node --test` and its JUnit reporter, and then joins the files into `.exhibit/junit.xml`. It differs from `npm test` in three ways:
 
-- It runs one file at a time, not six, so the files do not share one HOME at the same time. It gives the whole run one new empty HOME, so no test reads a room's files.
-- It has no time limit for each file, only for each test (120 seconds).
+- It has no time limit for each file, only for each test (120 seconds). A file that never ends stops the check job at its time limit.
+- It does not take the room's settings (`OFFICE_*`, `RELAY_*`, `CLAUDE_CODE_*`) out of the environment. On CI there are none. A session that runs `exhibit check` on its own computer runs it from a room, so it may see different results.
 - It leaves out the browser tests in `relay/test/browser/`.
 
-A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 39 minutes on a busy Mac. A room ticket can make it faster later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
+A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 7.5 minutes on a Mac. The same files, one at a time with one shared HOME, took 39 minutes there, and more than 72 minutes for two runs on a GitHub runner, so this policy does not do that. A room ticket can make it simpler later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
 
 This policy is a start. Phase A of the field test finds Building58's escaped defects, and the kinds and their needs come from them later.
 
