@@ -197,7 +197,7 @@ export function renderSummary(exhibit) {
   lines.push(`- Risk: ${c.risk}.`);
   lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
   if (c.signals_from === 'branch') {
-    lines.push('- Exhibit knew only the branch name, not the PR\'s title or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
+    lines.push('- Exhibit knew only the branch name, not the PR\'s title, body or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
   }
   lines.push(`- Merge without reading: ${c.merge_without_reading}.`, '');
 
