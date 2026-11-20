@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createGitHub, createGitHubForge, GITHUB_FORGE, PERMISSIONS } from '../src/github.js';
+import { createGitHub, createGitHubForge, GitHubReplyError, GITHUB_FORGE, PERMISSIONS } from '../src/github.js';
 import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 
@@ -320,6 +320,45 @@ test('sameRepo says whether a repo name leads to this repo, as an old name does 
   assert.equal(await forge.sameRepo('acme/gadgets'), false);
   assert.equal(await forge.defaultBranch(), 'main');
   assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/acme/widgets', '/repos/acme/gadgets', '/repos/gone/widgets']);
+});
+
+test('sameRepo: a repo the token cannot read is another repo, and only a refused token or a rate limit stops the run', async () => {
+  const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+  // A reset far away, so the client does not wait for it and the reply stays a rate limit.
+  const farReset = String(Math.floor(Date.now() / 1000) + 3600);
+  let flaky = 0;
+  const replies = {
+    '/repos/acme/widgets': () => json(200, { id: 7, full_name: 'acme/widgets' }),
+    '/repos/samlorg/private': () => json(403, { message: 'Resource protected by organization SAML enforcement.' }, { 'x-ratelimit-remaining': '4999' }),
+    '/repos/blocked/repo': () => json(451, { message: 'Repository access blocked' }),
+    '/repos/limited/repo': () => json(403, { message: 'API rate limit exceeded' }, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': farReset }),
+    '/repos/many/requests': () => json(429, { message: 'Too many requests' }, { 'retry-after': '3600' }),
+    '/repos/refused/token': () => json(401, { message: 'Bad credentials' }),
+    // A 502 first, then the old name of this repo.
+    '/repos/oldacme/widgets': () => (flaky++ === 0 ? json(502, { message: 'Server Error' }) : json(200, { id: 7, full_name: 'acme/widgets' }))
+  };
+  const asked = [];
+  const fetch = async (url) => {
+    const path = new URL(url).pathname;
+    asked.push(path);
+    return replies[path]();
+  };
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch, sleep: async () => {} });
+  // A private repo behind SAML SSO (403, not a rate limit) and a repo blocked for legal reasons
+  // (451) are other repos. The answer is kept, so a second mention sends no request.
+  assert.equal(await forge.sameRepo('samlorg/private'), false);
+  assert.equal(await forge.sameRepo('blocked/repo'), false);
+  assert.equal(await forge.sameRepo('samlorg/private'), false);
+  assert.deepEqual(asked, ['/repos/samlorg/private', '/repos/blocked/repo']);
+  // A rate limit (a 403 with no requests left, or a 429) and a refused token still stop the run.
+  for (const [name, status] of [['limited/repo', 403], ['many/requests', 429], ['refused/token', 401]]) {
+    await assert.rejects(forge.sameRepo(name), (error) => error instanceof GitHubReplyError && error.status === status && error.stopsRun, name);
+  }
+  // A 502 is another repo for now, but that answer is not kept: the next call asks again.
+  asked.length = 0;
+  assert.equal(await forge.sameRepo('oldacme/widgets'), false);
+  assert.equal(await forge.sameRepo('oldacme/widgets'), true);
+  assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/oldacme/widgets', '/repos/acme/widgets']);
 });
 
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {

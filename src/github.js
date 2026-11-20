@@ -280,10 +280,13 @@ function nextLink(header) {
 
 // A reply from GitHub that is not OK. `status` is its HTTP status, so a caller can tell a problem
 // with one request, such as a 502, from one that stops every request, such as a refused token.
+// `limited` is true when the reply is a rate limit, so a 403 that is a rate limit can be told from
+// a 403 that refuses access.
 export class GitHubReplyError extends ToolError {
-  constructor(message, status) {
+  constructor(message, status, limited = false) {
     super(message);
     this.status = status;
+    this.limited = status === 429 || limited;
   }
 
   // True when every later request would fail too: a refused token (401), a missing permission
@@ -293,11 +296,17 @@ export class GitHubReplyError extends ToolError {
   }
 }
 
+// True when `error` is GitHub's answer that one repo cannot be read, not a refused token or a
+// rate limit, which stop every later request too.
+function canNotRead(error) {
+  return error instanceof GitHubReplyError && error.status !== 401 && !error.limited;
+}
+
 // `limited` is true when the reply is still a rate limit after the waits.
 async function apiError(response, url, permission, limited = false) {
   const detail = await messageOf(response);
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
-  return new GitHubReplyError(`${what}.${advice(response.status, permission, limited)}`, response.status);
+  return new GitHubReplyError(`${what}.${advice(response.status, permission, limited)}`, response.status, limited);
 }
 
 // `permission` is one permission, or a list of them. `limited` is true for a known rate limit.
@@ -615,16 +624,31 @@ export function createGitHubForge({ repo, ...client }) {
     // Returns true when the repo name `named` ("owner/name") leads to this repo, as the repo's
     // old name does after a rename or a transfer. GitHub answers GET /repos/{old name} with a
     // redirect to the repo, and fetch follows it. The id stays the same after a rename or a
-    // transfer, so the two replies are one repo when their ids match. A name that GitHub does not
-    // know, or a repo the token cannot read (404), is not this repo. Each name costs one request
+    // transfer, so the two replies are one repo when their ids match. Each name costs one request
     // at most, in any case.
+    // A name that the token cannot read is another repo: GitHub does not know it, or refuses it,
+    // such as a private repo behind SAML SSO (403) or a repo blocked for legal reasons (451). So
+    // a stray mention of such a repo never stops the run. A 5xx is another repo too, but that
+    // answer is not kept, so the next call asks again. A refused token (401) and a rate limit
+    // still throw, because every later request would fail too.
     async sameRepo(named) {
       const key = named.toLowerCase();
       if (key === repo.toLowerCase()) return true;
-      return once(`same ${key}`, async () => {
-        const found = await github.getOne(`/repos/${named}`, { emptyOn: [404] });
-        return found !== null && found.id === (await thisRepo()).id;
-      });
+      try {
+        return await once(`same ${key}`, async () => {
+          let found;
+          try {
+            found = await github.getOne(`/repos/${named}`);
+          } catch (error) {
+            if (canNotRead(error) && error.status < 500) return false;
+            throw error;
+          }
+          return found.id === (await thisRepo()).id;
+        });
+      } catch (error) {
+        if (canNotRead(error)) return false;
+        throw error;
+      }
     },
 
     // The PRs that hold the commit `sha`. GitHub answers 422 for a commit it does not know, such
