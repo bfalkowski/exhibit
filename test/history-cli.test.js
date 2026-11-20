@@ -345,7 +345,7 @@ test('a folder that cannot be written gives exit 2 and a message, not a stack tr
   assert.doesNotMatch(run.stderr, /\n\s+at /);
 });
 
-test('when the last write fails, the run keeps all three old files, so they still match', (t) => {
+test('when the first or the last write fails, the run keeps all three old files, so they still match', (t) => {
   const cwd = newFolder(t);
   const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(first.status, 0, first.stderr);
@@ -357,6 +357,13 @@ test('when the last write fails, the run keeps all three old files, so they stil
   assert.match(run.stderr, /could not write \.exhibit\/report\.html: ENOSPC/);
   assert.deepEqual(names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8')), before, 'no file changed');
   assert.deepEqual(readdirSync(join(cwd, '.exhibit')).sort(), [...names].sort(), 'no temporary file is left');
+
+  // The same run again, but the disk is full when history.jsonl, the first file, is written.
+  const firstFails = exhibit(t, ['history', '--repo', 'acme/widgets', '--full', '--limit', '2'], { cwd, failWrite: 'history.jsonl' });
+  assert.equal(firstFails.status, 2);
+  assert.match(firstFails.stderr, /could not write \.exhibit\/history\.jsonl: ENOSPC/);
+  assert.deepEqual(names.map((name) => readFileSync(join(cwd, '.exhibit', name), 'utf8')), before, 'no file changed when the first write fails');
+  assert.deepEqual(readdirSync(join(cwd, '.exhibit')).sort(), [...names].sort(), 'no temporary file is left when the first write fails');
 });
 
 // Builds the shop fixture repo as a clone of fixture/shop, and writes a copy of its replay file
