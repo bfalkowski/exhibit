@@ -526,9 +526,10 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     }
   }
   // A fix that only moves lines inside a file, such as an export moved above the code that
-  // needs it, would get no link at all. Its moved lines are the change, so they count.
+  // needs it, would get no link at all. Its moved lines are the change, so they count. A line
+  // that is only a comment carries no bug, so it stays dropped even when it moved.
   if (deleted.every((line) => line.reason !== null)) {
-    for (const line of deleted) if (line.movedInFile) line.reason = null;
+    for (const line of deleted) if (line.movedInFile && !line.comment) line.reason = null;
   }
 
   const counted = new Map();
@@ -676,9 +677,10 @@ const squash = (text, path, level) => {
 // Takes the whitespace out of a line of code, except inside a string. Code inside ${ } in a
 // template literal is code, so its whitespace goes too. A comment after the code, which starts
 // after whitespace as in stripComments, ends the search, so its whitespace goes.
-// Each line is read alone, so the next line of a string that spans lines reads as code. A quote
-// mark that opens no string, such as an apostrophe in JSX text or a quote in a regex, keeps the
-// whitespace after it on that line.
+// In JavaScript a regex literal is code, as in stripComments, so a quote or a { in one, such as
+// /'/ or /{/, opens nothing. Each line is read alone, so the next line of a string that spans
+// lines reads as code. A quote mark that opens no string, such as an apostrophe in JSX text,
+// keeps the whitespace after it on that line.
 function squashCode(text, style) {
   const quotes = style === 'slash' ? ['"', "'", '`'] : ['"', "'"];
   const comment = style === 'slash' ? '//' : '#';
@@ -707,6 +709,12 @@ function squashCode(text, style) {
     const spaced = i === 0 || /\s/.test(text[i - 1]);
     if (spaced && text.startsWith(comment, i)) return out + text.slice(i).replace(/\s+/g, '');
     if (/\s/.test(char)) continue;
+    const regexEnd = style === 'slash' && char === '/' && opensRegex(text.slice(0, i)) ? endOfRegex(text, i) : -1;
+    if (regexEnd !== -1) {
+      out += text.slice(i, regexEnd + 1);
+      i = regexEnd;
+      continue;
+    }
     out += char;
     if (quotes.includes(char)) inside.push(char);
     else if (top !== undefined && char === '{') inside[inside.length - 1] += 1;
