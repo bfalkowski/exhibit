@@ -196,6 +196,22 @@ test('a test that is flaky in any run does not qualify, even when it fails on th
   assert.deepEqual(exhibit.flaky_tests, ['t.test.js > a']);
 });
 
+test('two failing-before requirements share one run on the base with the PR\'s tests', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: [{ 'failing-before': { when: ['fix'] } }, 'failing-before'] } };
+  const runTests = async () => ({ base: new Map(), head: new Map([['t.test.js > a', 'passed']]) });
+  let runs = 0;
+  const runBaseWithPrTests = async () => {
+    runs += 1;
+    return new Map([['t.test.js > a', 'failed']]);
+  };
+  const exhibit = await buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['t.test.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['met', 'met']);
+  assert.equal(runs, 1);
+});
+
 test('a change with no test file gives missing and runs no extra test run', async () => {
   const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
   const runTests = async () => ({ base: new Map([['t > a', 'passed']]), head: new Map([['t > a', 'passed']]) });

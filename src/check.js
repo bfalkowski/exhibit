@@ -35,7 +35,8 @@ export const COLLECTORS = Object.freeze({
 // called and gives back the same per-test results after that. So a later collector, such as
 // failing-before, uses the same results and does not run the tests again. `runTests` makes those
 // results. `baseWithPrTests(paths)` runs the tests on the base with those paths as they are on the
-// head (spec 9.4). `runBaseWithPrTests` makes that run.
+// head (spec 9.4). `runBaseWithPrTests` makes that run. It runs once for each set of paths, so two
+// failing-before requirements share one run.
 //
 // A failing-before whose `when` names neither fix nor feature of this change is not needed
 // (spec 8.1). It gets `skipped` with the reason, and no collector runs. This skip is no gap, so it
@@ -55,6 +56,7 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
   const { has_default: hasDefault, ...shown } = classification;
 
   let testRuns;
+  const withPrTests = new Map();
   const context = {
     cwd: change.cwd,
     env: change.env ?? process.env,
@@ -63,7 +65,11 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     files,
     settings: change.policy?.settings ?? {},
     testRuns: () => (testRuns ??= runTests({ cwd: change.cwd, base: change.base, head: change.head, settings: change.policy?.settings ?? {}, env: change.env ?? process.env })),
-    baseWithPrTests: (paths) => runBaseWithPrTests({ cwd: change.cwd, base: change.base, head: change.head, paths, settings: change.policy?.settings ?? {}, env: change.env ?? process.env })
+    baseWithPrTests: (paths) => {
+      const key = paths.join('\0');
+      if (!withPrTests.has(key)) withPrTests.set(key, runBaseWithPrTests({ cwd: change.cwd, base: change.base, head: change.head, paths, settings: change.policy?.settings ?? {}, env: change.env ?? process.env }));
+      return withPrTests.get(key);
+    }
   };
 
   const collected = [];
