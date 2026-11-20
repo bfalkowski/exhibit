@@ -233,7 +233,7 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
     html_url: 'https://github.com/acme/widgets/pull/9'
   };
   const replies = {
-    '/repos/acme/widgets/commits/abc/pulls': [restPull, { ...restPull, number: 10, user: null, merged_at: null, merge_commit_sha: null }],
+    '/repos/acme/widgets/commits/abc/pulls': [restPull, { ...restPull, number: 10, user: null, merged_at: null, merge_commit_sha: 'd'.repeat(40) }],
     '/repos/acme/widgets/pulls/9': restPull,
     '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z' },
     '/repos/acme/widgets/issues/51': { number: 51, created_at: '2026-01-06T09:30:00Z', pull_request: {} }

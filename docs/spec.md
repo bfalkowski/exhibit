@@ -223,7 +223,7 @@ What each version fills:
   - The first verdict in the comment counts. `fix` gives the state `CHANGES_REQUESTED`, so it is a round. `merge` gives the state `APPROVED`.
   - A comment that starts with an `<!-- office:` marker, such as `<!-- office:dev -->`, is a room note or a Dev's reply, not a review, even when it repeats the verdict.
   - A comment with no verdict is not a review, and is not in `reviews`.
-  - The comment reviews and the GitHub reviews are merged into one list by time: `created_at` for a comment, `submitted_at` for a review. At the same time, the review comes first. A pending review has no `submitted_at`, so it comes before every comment that is still left, even an older one.
+  - The comment reviews and the GitHub reviews are merged into one list by time: the forge gives each comment and each review an `at`. At the same time, the review comes first. A pending review has no `at`, so it comes before every comment that is still left, even an older one.
 - **Head commit, forge and web page (ticket 78):** every line has `head_sha`, `forge` and `url`, and the schema requires all three.
   - `head_sha` is the PR's last head commit: the last commit on the PR's branch. It is not the merge commit. For a squash merge, `merge_sha` is a new commit that is not on the PR's branch at all. With `head_sha`, `git merge-base` can find where the PR's branch left the base branch from the line alone, for example `git merge-base <head_sha> <merge_sha>^1`. This needs the head commit in the clone. GitHub keeps it at `refs/pull/<number>/head` after the branch is deleted, but a plain clone does not fetch those refs, so fetch them first, for example with `git fetch origin '+refs/pull/*/head:refs/pull/*/head'`.
   - `forge` names the forge the PR came from. Today it is always `github`. The schema allows only the forges Exhibit knows, so a new forge adds its name there.
@@ -483,7 +483,7 @@ Exhibit only reports these numbers. It never changes a rung.
 | Files and a data branch instead of a server or a database | Anyone can run it, and everything stays in their repo. |
 | Tests with `node:test`, and recorded API responses as fixtures | No network access in unit tests. |
 
-Every request to the forge goes through one module, `src/github.js` for GitHub, with one named method for each kind of read: `mergedPulls`, `pullFiles`, `pullReviews`, `pullComments`, `pullFileCount`, `ciResults`, `defaultBranch`, `pullsForCommit` and `issue`, and `pull` for `exhibit check --pr`. Each method gives a small forge-neutral shape, not the forge's own objects, so history and SZZ read the same fields from any forge:
+Every request to the forge goes through one module, `src/github.js` for GitHub, with one named method for each kind of read: `mergedPulls`, `pullFiles`, `pullReviews`, `pullComments`, `pullFileCount`, `ciResults`, `defaultBranch`, `pullsForCommit`, `issue`, and `pull` for `exhibit check --pr`. Each method gives a small forge-neutral shape, not the forge's own objects, so history and SZZ read the same fields from any forge:
 
 - `mergedPulls`, `pullsForCommit` and `pull` give PRs: `number`, `title`, `body`, `author`, `labels`, `mergedAt`, `baseRef`, `baseSha`, `headRef`, `headSha`, `mergeSha` and `url`. An empty body is null. The author is a login, or null for a deleted account. The labels are names. `mergedAt` and `mergeSha` are null for a PR that was not merged.
 - `pullFiles` gives each file as `path`, `additions` and `deletions`.
