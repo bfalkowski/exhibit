@@ -11,6 +11,11 @@ import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
 
+// Node 20's JUnit reporter writes no file for a test, so a test's name starts with its file only
+// on later Node versions. These helpers accept both.
+const NAME = (file, name) => new RegExp(`^(${file.replace(/[.]/g, '\\.')} > )?test > ${name}$`);
+const statusOf = (tests, name) => [...tests].find(([key]) => key.endsWith(`test > ${name}`))?.[1];
+
 const NODE_TESTS = `"${process.execPath}" --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml`;
 const policy = (command = NODE_TESTS, results = '.exhibit/junit.xml') => `version: 3
 settings:
@@ -107,8 +112,9 @@ test('a test that fails on the head gives failed, and the gap names it', async (
   const fixture = buildRepo(t);
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'broken');
   assert.equal(requirement.status, 'failed');
-  assert.deepEqual(requirement.details.failed_on_head, ['test/math.test.js > test > add sums two numbers']);
-  assert.match(gap.how_to_fix, /1 test fails on the head, also when run again: test\/math\.test\.js > test > add sums two numbers\./);
+  assert.equal(requirement.details.failed_on_head.length, 1);
+  assert.match(requirement.details.failed_on_head[0], NAME('test/math.test.js', 'add sums two numbers'));
+  assert.ok(gap.how_to_fix.includes(`1 test fails on the head, also when run again: ${requirement.details.failed_on_head[0]}.`), gap.how_to_fix);
   assert.equal(evidence.verdict, 'needs_person');
   assert.equal(code, 1);
   assertNoWorktreeLeft(fixture);
@@ -118,7 +124,8 @@ test('a test that fails once and then passes is flaky, and does not fail the req
   const fixture = buildRepo(t);
   const { evidence, requirement } = await runCheck(fixture.repo, 'flaky');
   assert.equal(requirement.status, 'met');
-  assert.deepEqual(evidence.flaky_tests, ['test/flaky.test.js > test > passes the second time']);
+  assert.equal(evidence.flaky_tests.length, 1);
+  assert.match(evidence.flaky_tests[0], NAME('test/flaky.test.js', 'passes the second time'));
   assert.deepEqual(requirement.details.head, { passed: 2, failed: 0, skipped: 0, flaky: 1 });
   assert.equal(evidence.verdict, 'meets_policy');
   assertNoWorktreeLeft(fixture);
@@ -162,9 +169,9 @@ test('the base run does not see the head, or changes in the checkout', async (t)
   writeFileSync(join(fixture.repo, 'src', 'math.js'), 'export const add = () => -1;\n');
   const sha = (ref) => fixture.git('rev-parse', ref).trim();
   const runs = await runTestsOnBaseAndHead({ cwd: fixture.repo, base: sha('start'), head: sha('broken'), settings: { test_command: NODE_TESTS, test_results: '.exhibit/junit.xml' } });
-  assert.equal(runs.base.get('test/math.test.js > test > add sums two numbers'), 'passed');
-  assert.equal(runs.head.get('test/math.test.js > test > add sums two numbers'), 'failed');
-  assert.equal(runs.base.get('test/math.test.js > test > add keeps zero'), 'passed');
-  assert.equal(runs.head.get('test/math.test.js > test > add keeps zero'), 'passed');
+  assert.equal(statusOf(runs.base, 'add sums two numbers'), 'passed');
+  assert.equal(statusOf(runs.head, 'add sums two numbers'), 'failed');
+  assert.equal(statusOf(runs.base, 'add keeps zero'), 'passed');
+  assert.equal(statusOf(runs.head, 'add keeps zero'), 'passed');
   assertNoWorktreeLeft(fixture);
 });

@@ -28,7 +28,8 @@ export class TestRunError extends Error {
 //
 // It gives back { base, head }: for each side a Map from a test's name to its status, `passed`,
 // `failed`, `skipped` or `flaky`. A test is flaky when its two runs disagree. The name is the
-// test's file (relative to the worktree), its classname and its name, joined by " > ".
+// test's file (relative to the worktree), its classname and its name, joined by " > ". A part
+// that the JUnit file leaves out is left out.
 // It throws a TestRunError when a side cannot give results.
 export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, env = process.env }) {
   const command = settings.test_command;

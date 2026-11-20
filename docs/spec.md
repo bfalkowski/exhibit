@@ -194,7 +194,7 @@ The fields:
 
 Until the evidence collectors are built, `exhibit check` gives every `failing-before` and `probe` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then. The `tests-before-after` collector is built (section 9.3).
 
-`flaky_tests` lists each test that failed and then passed on its second run, on the base or the head (section 9.3). A test's name is its file, relative to the repo, its classname and its name, joined by ` > `, for example `test/math.test.js > test > add sums two numbers`.
+`flaky_tests` lists each test that failed and then passed on its second run, on the base or the head (section 9.3). A test's name is its file, relative to the repo, its classname and its name, joined by ` > `, for example `test/math.test.js > test > add sums two numbers`. A part that the JUnit file leaves out is left out of the name too. Node 20's reporter gives no file, for example.
 
 ### 8.3 `.exhibit/history.jsonl`
 
