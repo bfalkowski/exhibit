@@ -46,8 +46,10 @@ test('a change that matches two kinds gets the union of their needs and the high
   const result = classifyChange(POLICY, ['docs/manual/install.md', 'relay/supervisor.js'], NOT_FIX);
   assert.deepEqual(result.classification.kinds, ['manual', 'relay-core']);
   assert.equal(result.classification.risk, 'high');
-  // failing-before is left out: this change is neither a fix nor a feature.
-  assert.deepEqual(types(result), ['probe', 'tests-before-after', 'mutation']);
+  // failing-before stays, marked not needed: this change is neither a fix nor a feature.
+  assert.deepEqual(types(result), ['probe', 'tests-before-after', 'failing-before', 'mutation']);
+  assert.match(result.requirements[2].not_needed, /only on a fix or a feature/);
+  assert.equal(result.requirements[1].not_needed, undefined);
 });
 
 test('the same need from two kinds is one requirement that names both kinds', () => {
@@ -81,7 +83,7 @@ test('merge_without_reading is allowed only when every matched kind allows it', 
   assert.equal(classifyChange(policy, ['docs/manual/a.md', 'quiet/q.js'], NOT_FIX).classification.merge_without_reading, 'never');
 });
 
-test('failing-before with when stays only for a change of that kind, fix or feature', () => {
+test('failing-before with when is needed only for a change of that kind, fix or feature', () => {
   const fix = classifyChange(POLICY, ['relay/supervisor.js'], { title: 'Fix the restart', labels: [], branch: 'x' });
   assert.equal(fix.classification.fix, true);
   assert.equal(fix.classification.fix_signal, 'title:fix');
@@ -91,6 +93,8 @@ test('failing-before with when stays only for a change of that kind, fix or feat
   const feature = classifyChange(POLICY, ['relay/supervisor.js'], { title: 'Add restart', labels: ['Feature'], branch: 'x' });
   assert.equal(feature.classification.feature, true);
   assert.deepEqual(types(feature), ['tests-before-after', 'failing-before', 'mutation']);
+  assert.equal(fix.requirements[1].not_needed, undefined);
+  assert.equal(feature.requirements[1].not_needed, undefined);
 });
 
 test('a failing-before with no when applies to every change', () => {
