@@ -31,7 +31,7 @@ Exhibit starts in shadow mode: it shows a verdict on each PR, and nothing waits 
 
 1. Add `evidence.yml` at the top of the repo. It says what evidence each kind of change needs (docs/spec.md section 8.1). Exhibit's own [`evidence.yml`](evidence.yml) is a small example.
 2. Set `settings.test_command` so that it installs what the tests need and writes JUnit XML to `settings.test_results`. Exhibit runs it in clean worktrees of the base and the head.
-3. Copy [`examples/pull-request.yml`](examples/pull-request.yml) to `.github/workflows/exhibit.yml`. Keep the same Exhibit commit SHA in both jobs. If your tests need a certain Node, add `actions/setup-node` before the check step.
+3. Copy [`examples/pull-request.yml`](examples/pull-request.yml) to `.github/workflows/exhibit.yml`. Keep the same Exhibit release in both jobs. If your tests need a certain Node, add `actions/setup-node` before the check step.
 4. Open a PR. The check job writes the verdict to the job summary. The publish job stores the exhibit on the `exhibit-data` branch and posts one comment on the PR.
 5. When shadow mode has run long enough to trust it, a person sets `enforce: true` in both jobs.
 
