@@ -11,7 +11,7 @@ import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
 
-const NODE_TESTS = `"${process.execPath}" --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml "test/**/*.test.js"`;
+const NODE_TESTS = `"${process.execPath}" --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml`;
 const policy = (command = NODE_TESTS, results = '.exhibit/junit.xml') => `version: 3
 settings:
   test_command: ${JSON.stringify(command)}
