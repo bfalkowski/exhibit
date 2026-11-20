@@ -139,3 +139,57 @@ test('the run finds a PR that someone updated while it read the pages, and that 
   // updated when the first page was read, so it reads page 2 too, and stops there.
   assert.deepEqual(pagesAsked({ calls }), [null, 'recent-1', 'recent-2', 'recent-3', null, 'recent-1']);
 });
+
+// A fetch for a run where someone updated PRs during the first pass: it replays `before` until
+// the run asks for page 1 a second time, and `after` from then on. `calls` holds the calls of
+// both, in order.
+function beforeAndAfter(before, after) {
+  const fetchBefore = replay(before);
+  const fetchAfter = replay(after);
+  let topReads = 0;
+  const calls = [];
+  const fetch = async (url, init) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (query.includes('query RecentMergedPulls') && variables.after === null) topReads += 1;
+    const replayed = topReads < 2 ? fetchBefore : fetchAfter;
+    const reply = await replayed(url, init);
+    calls.push(replayed.calls.at(-1));
+    return reply;
+  };
+  fetch.calls = calls;
+  return fetch;
+}
+
+test('the second read of the top goes on while a page ends less than a day before the first page', async () => {
+  // The first pass reads the eight PRs and misses PR 17, which someone updated during the run.
+  // In the second read, page 1 ends with PR 15, now updated Nov 20 at 18:00: less than a day
+  // before PR 16's Nov 21 at noon, the newest update on the first pass's page 1. So the run reads
+  // page 2 too. There GitHub lists PR 17 lower than its update time, as in the out-of-order test.
+  const after = [
+    [16, '11-20', '11-21'], [15, '11-19', '11-20T18:00:00'],
+    [17, '11-12', '11-22', '11-20T06:00:00'], ...PULLS.slice(2)
+  ];
+  const fetch = beforeAndAfter(
+    graphqlReplies(REPO, PULLS.map(pull), { pullsPerPage: 2 }),
+    graphqlReplies(REPO, after.map(pull), { pullsPerPage: 2 })
+  );
+  const lines = await read(fetch, { since: new Date(day('11-11')) });
+  assert.deepEqual(lines.map((line) => line.number), [16, 15, 14, 17]);
+  // The first pass: pages 1 to 3. The second read: page 1, then page 2, where it finds PR 17.
+  // Page 2 ends with PR 14, updated Nov 18, more than a day before Nov 21, so it stops there.
+  assert.deepEqual(pagesAsked(fetch), [null, 'recent-1', 'recent-2', null, 'recent-1']);
+});
+
+test('with no update times, the run reads every page once and does not read the top again', async () => {
+  const recorded = graphqlReplies(REPO, PULLS.map(pull), { pullsPerPage: 2 });
+  for (const [key, reply] of Object.entries(recorded)) {
+    if (!key.startsWith('graphql RecentMergedPulls ')) continue;
+    for (const node of reply.body.data.repository.pullRequests.nodes) delete node.updatedAt;
+  }
+  const fetch = replay(recorded);
+  const lines = await read(fetch, { limit: 2 });
+  assert.deepEqual(lines.map((line) => line.number), [16, 15]);
+  // With no update time, no stop can be shown safe, so the first pass reads the whole list. Then
+  // nothing can have moved past it, so there is no second read.
+  assert.deepEqual(pagesAsked(fetch), [null, 'recent-1', 'recent-2', 'recent-3']);
+});

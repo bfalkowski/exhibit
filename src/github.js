@@ -497,10 +497,10 @@ export function createGitHubForge({ repo, ...client }) {
         if (byUpdate && more && noneLeftToKeep(merged, oldestUpdate(page.nodes), since, limit)) break;
       }
       // A PR that someone updated while the pages were read moves to the top of the list, so the
-      // later pages do not hold it. Read from the top again, down to the PRs that were updated
-      // before the first page was read, to find it. This is most often one query. When the first
-      // page had no update times, the first pass did not stop early and read the whole list, so
-      // there is nothing to find.
+      // later pages do not hold it. Read from the top again, down to a page that ends more than
+      // ORDER_MARGIN_MS before the newest update on the first page, to find it. This is most often
+      // one or two queries. When the first page had no update times, the first pass did not stop
+      // early and read the whole list, so there is nothing to find.
       if (byUpdate && pages > 1 && Number.isFinite(firstNewest)) {
         for (let after = null, more = true; more; ) {
           const page = await readPage(after);
