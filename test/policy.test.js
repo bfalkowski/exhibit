@@ -56,6 +56,21 @@ test('the example policy in spec 8.1 passes, and readPolicy returns it as writte
   assert.deepEqual(policy.default, { risk: 'medium', needs: ['tests-before-after', { mutation: { min: 0.7 } }] });
 });
 
+// The evidence.yml block in docs/index.html, with the HTML escapes undone. CLAUDE.md tells
+// readers to read that page first, so people copy this example too.
+function pageExample() {
+  const page = readFileSync(new URL('../docs/index.html', import.meta.url), 'utf8');
+  const block = /<pre class="yaml">([\s\S]*?)<\/pre>/.exec(page)[1];
+  return block.replaceAll('&quot;', '"').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+}
+
+test('the example policy in docs/index.html passes', async (t) => {
+  const policy = await readPolicy(folderWith(t, pageExample()));
+  assert.deepEqual(Object.keys(policy.kinds), ['relay-core', 'office-visual', 'ticket-store', 'manual']);
+  assert.deepEqual(policy.kinds['relay-core'].needs[2], { mutation: { min: 0.85 } });
+  assert.equal(policy.default.risk, 'medium');
+});
+
 test('readPolicy accepts a hidden probe, a bare failing-before and a min of 0 or 1', async (t) => {
   const needs = '    needs:\n      - failing-before\n      - mutation: { min: 0 }\n      - mutation: { min: 1 }\n      - probe: { name: suite, run: "npm run hidden", author: hidden }\n';
   const policy = await readPolicy(folderWith(t, kind(needs)));

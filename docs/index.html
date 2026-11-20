@@ -253,22 +253,37 @@ footer { padding: 40px 0 56px; color: var(--muted); font-size: 13.5px; }
 version: 3
 kinds:
   relay-core:
-    match: [relay/supervisor.js, relay/session-host.js]
+    match: [&quot;relay/supervisor.js&quot;, &quot;relay/session-host.js&quot;]
     risk: high
-    needs: [tests-before-after, restart-run, mutation: 0.85]
+    needs:
+      - tests-before-after
+      - probe: { name: restart-run, run: &quot;npm run restart-check&quot; }
+      - mutation: { min: 0.85 }
     merge_without_reading: never
   office-visual:
     match: [&quot;office/**/*.js&quot;, &quot;office/**/*.css&quot;]
-    needs: [tests-before-after, screenshot]
+    risk: medium
+    needs:
+      - tests-before-after
+      - probe: { name: screenshot, run: &quot;npm run screenshot&quot;, artifacts: [&quot;.exhibit/office.png&quot;] }
   ticket-store:
     match: [&quot;relay/ticket-stores/**&quot;]
-    needs: [contract-test, mutation: 0.80]
+    risk: high
+    needs:
+      - probe: { name: contract-test, run: &quot;npm run contract-test&quot; }
+      - mutation: { min: 0.80 }
   manual:
     match: [&quot;docs/manual/**&quot;]
-    needs: [link-check, plain-words]
+    risk: low
+    needs:
+      - probe: { name: link-check, run: &quot;npm run check-links&quot; }
+      - probe: { name: plain-words, run: &quot;npm run plain-words&quot; }
     merge_without_reading: allowed    # step 3 for this kind
 default:
-  needs: [tests-before-after, mutation: 0.70]</pre>
+  risk: medium
+  needs:
+    - tests-before-after
+    - mutation: { min: 0.70 }</pre>
   </div>
 </section>
 
