@@ -23,7 +23,7 @@ test('a fixed labels file gives the counts, the kept share and its 95% interval'
   near(low, 0.3475471);
   near(high, 0.9332605);
   assert.equal(draftAgreementText(agreement, 'in the whole labels file'),
-    'Claude\'s drafts in the whole labels file: 10 shown. 7 kept unchanged, 2 edited, 1 replaced. The person kept 70% of the drafts unchanged (7 of 10, 95% interval 35% to 93%).');
+    'Claude\'s drafts in the whole labels file: 10 shown. 7 kept unchanged, 2 edited, 1 replaced. The person kept 70% of the drafts unchanged (7 of 10, 95% interval 34% to 94%).');
 });
 
 test('with fewer than 10 drafts the kept share is weak, and the text says so', () => {
@@ -51,4 +51,29 @@ test('the Clopper-Pearson interval matches known values at the edges', () => {
   assert.equal(all.high, 1);
   // R: binom.test(1, 1) gives 0.025 to 1.
   near(clopperPearson(1, 1).low, 0.025);
+});
+
+test('the Clopper-Pearson interval stays right at the edges of a large n', () => {
+  // R: binom.test(1, 200) gives 0.0001266 to 0.0275, and binom.test(199, 200) gives 0.9725 to 0.9999.
+  // With 1 success the low end has a closed form, 1 - 0.975^(1/n), and with n - 1 the high end is
+  // 0.975^(1/n).
+  const one = clopperPearson(1, 200);
+  near(one.low, 1 - 0.975 ** (1 / 200));
+  assert.ok(Math.abs(one.high - 0.0275) < 1e-3, `${one.high}`);
+  const most = clopperPearson(199, 200);
+  assert.ok(Math.abs(most.low - 0.9725) < 1e-3, `${most.low}`);
+  near(most.high, 0.975 ** (1 / 200));
+  // R: binom.test(124, 125) gives a low end of about 0.956.
+  assert.ok(Math.abs(clopperPearson(124, 125).low - 0.956) < 1e-3);
+});
+
+test('the Clopper-Pearson interval holds the share and is symmetric, for every k up to n = 300', () => {
+  for (const n of [1, 2, 10, 131, 300]) {
+    for (let k = 0; k <= n; k += 1) {
+      const { low, high } = clopperPearson(k, n);
+      const mirror = clopperPearson(n - k, n);
+      assert.ok(low <= k / n && k / n <= high, `${k} of ${n}: ${low} to ${high}`);
+      assert.ok(Math.abs(low - (1 - mirror.high)) < 1e-9, `${k} of ${n} is not the mirror of ${n - k} of ${n}`);
+    }
+  }
 });

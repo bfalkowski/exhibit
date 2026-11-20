@@ -6,19 +6,26 @@ const TAIL = 0.025;
 
 // Returns { low, high } for k of n, with 0 <= k <= n and n >= 1.
 export function clopperPearson(k, n) {
-  // low is the share p at which k or more successes have a chance of 2.5%.
-  const low = k === 0 ? 0 : solve((p) => 1 - atMost(k - 1, n, p));
-  // high is the share p at which k or fewer successes have a chance of 2.5%.
-  const high = k === n ? 1 : solve((p) => atMost(k, n, p));
+  const logChoose = logChooseTable(n);
+  // The chance of i successes in n tries, each with chance p, summed over i from `from` to `to`.
+  // Each tail is its own sum, so a tiny tail is not lost by taking it away from a sum near 1.
+  const sum = (from, to, p) => {
+    let total = 0;
+    for (let i = from; i <= to; i += 1) total += Math.exp(logChoose[i] + i * Math.log(p) + (n - i) * Math.log(1 - p));
+    return total;
+  };
+  // low is the share p at which k or more successes have a chance of 2.5%. That chance grows with p.
+  const low = k === 0 ? 0 : solve((p) => sum(k, n, p), { rising: true });
+  // high is the share p at which k or fewer successes have a chance of 2.5%. That chance falls as p grows.
+  const high = k === n ? 1 : solve((p) => sum(0, k, p), { rising: false });
   return { low, high };
 }
 
-// Finds p in (0, 1) where tail(p) is 2.5%. `tail` must move one way only as p grows, which both
-// binomial tails do, so halving the range is enough.
-function solve(tail) {
+// Finds p in (0, 1) where tail(p) is 2.5%, by halving the range. The caller says which way the
+// tail moves as p grows, because a guess from two values fails when both round to 0 or to 1.
+function solve(tail, { rising }) {
   let lo = 0;
   let hi = 1;
-  const rising = tail(0.75) > tail(0.25);
   for (let step = 0; step < 100; step += 1) {
     const mid = (lo + hi) / 2;
     if ((tail(mid) < TAIL) === rising) lo = mid;
@@ -27,16 +34,9 @@ function solve(tail) {
   return (lo + hi) / 2;
 }
 
-// The chance of k or fewer successes in n tries, each with chance p. Sums in logs, so a large n
-// does not overflow.
-function atMost(k, n, p) {
-  let sum = 0;
-  for (let i = 0; i <= k; i += 1) sum += Math.exp(logChoose(n, i) + i * Math.log(p) + (n - i) * Math.log(1 - p));
-  return Math.min(sum, 1);
-}
-
-function logChoose(n, i) {
-  let total = 0;
-  for (let j = 1; j <= i; j += 1) total += Math.log(n - i + j) - Math.log(j);
-  return total;
+// log(n choose i) for each i from 0 to n, each built from the one before it.
+function logChooseTable(n) {
+  const table = [0];
+  for (let i = 1; i <= n; i += 1) table.push(table[i - 1] + Math.log(n - i + 1) - Math.log(i));
+  return table;
 }

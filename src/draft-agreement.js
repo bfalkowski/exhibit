@@ -29,8 +29,11 @@ export function draftAgreement(lines) {
 export function draftAgreementText(agreement, where) {
   const { shown, kept, edited, replaced, kept_share: share } = agreement;
   if (share === null) return `Claude's drafts ${where}: none, so there is no kept share yet.`;
-  const percent = (value) => `${Math.round(value * 100)}%`;
+  // The ends of the interval round outward, so the shown interval is never narrower than the real
+  // one. The tiny margin keeps a float such as 0.29 * 100 = 28.999999999999996 from rounding down.
+  const down = `${Math.floor(share.low * 100 + 1e-9)}%`;
+  const up = `${Math.ceil(share.high * 100 - 1e-9)}%`;
   const weak = share.weak ? ` With fewer than ${FEW_DRAFTS} drafts, this number is weak.` : '';
   return `Claude's drafts ${where}: ${shown} shown. ${kept} kept unchanged, ${edited} edited, ${replaced} replaced. ` +
-    `The person kept ${percent(share.rate)} of the drafts unchanged (${share.kept} of ${share.n}, 95% interval ${percent(share.low)} to ${percent(share.high)}).${weak}`;
+    `The person kept ${Math.round(share.rate * 100)}% of the drafts unchanged (${share.kept} of ${share.n}, 95% interval ${down} to ${up}).${weak}`;
 }

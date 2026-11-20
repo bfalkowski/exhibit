@@ -224,7 +224,7 @@ test('--claude: after a second run, the run numbers count only that run, and the
   const second = labelWithClaude(cwd, ['k', 't', 'Tax rounded too early', 'arithmetic', 'A rounding test'].join('\n') + '\n');
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /Claude's drafts in this run: 1 shown\. 0 kept unchanged, 0 edited, 1 replaced\. The person kept 0% of the drafts unchanged \(0 of 1, 95% interval 0% to 98%\)\./);
-  assert.match(second.stdout, /Claude's drafts in the whole labels file: 3 shown\. 1 kept unchanged, 1 edited, 1 replaced\. The person kept 33% of the drafts unchanged \(1 of 3, 95% interval 1% to 91%\)\./);
+  assert.match(second.stdout, /Claude's drafts in the whole labels file: 3 shown\. 1 kept unchanged, 1 edited, 1 replaced\. The person kept 33% of the drafts unchanged \(1 of 3, 95% interval 0% to 91%\)\./);
 
   // A third run has nothing left to label, so it has no drafts, but it still counts the file.
   const third = labelWithClaude(cwd, '');

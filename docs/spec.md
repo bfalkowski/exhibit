@@ -501,7 +501,7 @@ Exhibit only reports these numbers. It never changes a rung.
 - At the end of each `exhibit label --claude` run, it shows that number, from the labels lines alone, so it is the same each time it is worked out. It counts it twice: for the lines this run wrote, and for every line in `.exhibit/labels.jsonl`.
   - Drafts shown: the lines with `claude_draft`. A skipped defect, or a defect left when the person quit, has no line, so its draft is not counted. Nor is a draft that failed.
   - Kept unchanged: `claude_draft_confirmed`. Edited: `claude_draft_edited`, a change to the code, the category or both. Replaced: `person` with `claude_draft`, after `t`. A draft counts as kept only when both its code and its category are unchanged.
-  - The kept share is kept divided by drafts shown, with its n and the exact 95% Clopper-Pearson interval, as in section 9.10. So 7 kept of 10 shown is 70%, with an interval of 35% to 93%. The 2.5% tail sits on each side; with 0 kept the low end is 0, and with every draft kept the high end is 1.
+  - The kept share is kept divided by drafts shown, with its n and the exact 95% Clopper-Pearson interval, as in section 9.10. So 7 kept of 10 shown is 70%, with an interval of 34% to 94%. The text rounds the low end down and the high end up, so it never shows an interval narrower than the real one. The 2.5% tail sits on each side; with 0 kept the low end is 0, and with every draft kept the high end is 1.
   - With fewer than 10 drafts, it says the number is weak. With 9 it is weak, and with 10 it is not.
   - With no drafts, it says there are none and shows no share, not 0%.
 
