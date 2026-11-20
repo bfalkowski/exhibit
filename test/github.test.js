@@ -200,12 +200,67 @@ test('the GitHub forge gives CI results in one shape: check runs first, then com
   assert.deepEqual((await forge.ciResults('c'.repeat(39) + '1')), [{ name: 'test', conclusion: null, url: null }]);
 });
 
+test('the GitHub forge gives PRs, files, reviews and comments in forge-neutral shapes', async () => {
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: await widgets() });
+  const merged = await forge.mergedPulls();
+  assert.deepEqual(merged[0], {
+    number: 7,
+    title: 'Add the widget cache',
+    body: 'Body of #7.',
+    author: 'dev7',
+    labels: ['feature', 'cache'],
+    mergedAt: '2026-03-05T12:00:00Z',
+    baseRef: 'main',
+    baseSha: 'b'.repeat(39) + '7',
+    headRef: 'topic-7',
+    headSha: 'c'.repeat(39) + '7',
+    mergeSha: 'a'.repeat(39) + '7',
+    url: 'https://github.com/acme/widgets/pull/7'
+  });
+  // An empty body is null, and a deleted account is a null author.
+  assert.deepEqual([merged[1].body, merged[3].author], [null, null]);
+  assert.deepEqual((await forge.pullFiles(7))[0], { path: 'src/cache.js', additions: 120, deletions: 0 });
+  assert.deepEqual((await forge.pullReviews(7))[0], { state: 'CHANGES_REQUESTED', author: 'rev1', at: '2026-03-01T00:00:00Z' });
+  const comments = await forge.pullComments(7);
+  assert.deepEqual(Object.keys(comments[0]), ['body', 'author', 'at']);
+  assert.deepEqual([comments[0].author, comments[0].at, comments[3].author], ['rev3', '2026-02-28T10:00:00Z', null]);
+});
+
+test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-neutral shapes', async () => {
+  const restPull = {
+    number: 9, title: 'Fix it', body: null, user: { login: 'dev9' }, labels: [{ name: 'bug' }], merged_at: '2026-04-01T00:00:00Z',
+    base: { ref: 'main', sha: 'b'.repeat(40) }, head: { ref: 'fix-9', sha: 'c'.repeat(40) }, merge_commit_sha: 'a'.repeat(40),
+    html_url: 'https://github.com/acme/widgets/pull/9'
+  };
+  const replies = {
+    '/repos/acme/widgets/commits/abc/pulls': [restPull, { ...restPull, number: 10, user: null, merged_at: null, merge_commit_sha: null }],
+    '/repos/acme/widgets/pulls/9': restPull,
+    '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z' },
+    '/repos/acme/widgets/issues/51': { number: 51, created_at: '2026-01-06T09:30:00Z', pull_request: {} }
+  };
+  const fetch = async (url) => {
+    const reply = replies[new URL(url).pathname];
+    return new Response(JSON.stringify(reply ?? { message: 'Not Found' }), { status: reply ? 200 : 404, headers: { 'content-type': 'application/json' } });
+  };
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  const nine = {
+    number: 9, title: 'Fix it', body: null, author: 'dev9', labels: ['bug'], mergedAt: '2026-04-01T00:00:00Z',
+    baseRef: 'main', baseSha: 'b'.repeat(40), headRef: 'fix-9', headSha: 'c'.repeat(40), mergeSha: 'a'.repeat(40),
+    url: 'https://github.com/acme/widgets/pull/9'
+  };
+  assert.deepEqual(await forge.pullsForCommit('abc'), [nine, { ...nine, number: 10, author: null, mergedAt: null, mergeSha: null }]);
+  assert.deepEqual(await forge.pull(9), nine);
+  assert.deepEqual(await forge.issue(50), { createdAt: '2026-01-05T09:30:00Z', isPull: false });
+  assert.deepEqual(await forge.issue(51), { createdAt: '2026-01-06T09:30:00Z', isPull: true });
+  assert.equal(await forge.issue(52), null);
+});
+
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {
   const fetch = await widgets();
   const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
   await forge.mergedPulls();
   // The fixture has 2 items on a page. PR 7 has 3 files, 4 reviews, 4 comments and 3 check runs.
-  assert.deepEqual((await forge.pullFiles(7)).map((file) => file.filename), ['src/cache.js', 'src/widget.js', 'test/cache.test.js']);
+  assert.deepEqual((await forge.pullFiles(7)).map((file) => file.path), ['src/cache.js', 'src/widget.js', 'test/cache.test.js']);
   assert.deepEqual((await forge.pullReviews(7)).map((review) => review.state), ['CHANGES_REQUESTED', 'COMMENTED', 'CHANGES_REQUESTED', 'APPROVED']);
   assert.equal((await forge.pullComments(7)).length, 4);
   // GraphQL lists check runs oldest first. The REST API lists them newest first, and so does the forge.
