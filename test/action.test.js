@@ -15,7 +15,9 @@ import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 dropGitEnv();
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const action = parse(readFileSync(join(root, 'action.yml'), 'utf8'));
-const workflow = parse(readFileSync(join(root, 'examples', 'pull-request.yml'), 'utf8'));
+// The example that another repo copies, and Exhibit's own workflow, which runs on Exhibit's PRs.
+const WORKFLOWS = ['examples/pull-request.yml', '.github/workflows/exhibit.yml'];
+const readWorkflow = (path) => parse(readFileSync(join(root, path), 'utf8'));
 const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
 const runStep = action.runs.steps.find((step) => step.name.startsWith('Run exhibit'));
 const summaryStep = action.runs.steps.find((step) => step.name === 'Show the summary');
@@ -200,43 +202,59 @@ test('enforce mode: needs_person and error both fail the step, and the job summa
   assert.match(error.summary, /^# Exhibit check: Exhibit failed\n\nVerdict: \*\*error\*\* \(exit code 2\)\.\n\nExhibit could not finish/);
 });
 
-// The example workflow: two jobs, split by trust (spec 10).
-test('the workflow runs on pull_request only, never pull_request_target, and grants nothing by default', () => {
-  assert.deepEqual(Object.keys(workflow.on), ['pull_request']);
-  assert.deepEqual(workflow.permissions, {});
-  assert.deepEqual(Object.keys(workflow.jobs), ['check', 'publish']);
-});
+// The workflows: two jobs, split by trust (spec 10).
+for (const path of WORKFLOWS) {
+  const workflow = readWorkflow(path);
 
-test('the check job can only read', () => {
-  const { check } = workflow.jobs;
-  assert.deepEqual(check.permissions, { contents: 'read' });
-  const checkout = check.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
-  assert.equal(checkout.with['persist-credentials'], false);
-  assert.deepEqual(exhibitStep(check).with, { command: 'check', enforce: false });
-});
+  test(`${path}: the workflow runs on pull_request only, never pull_request_target, and grants nothing by default`, () => {
+    assert.deepEqual(Object.keys(workflow.on), ['pull_request']);
+    assert.deepEqual(workflow.permissions, {});
+    assert.deepEqual(Object.keys(workflow.jobs), ['check', 'publish']);
+  });
 
-test('the publish job writes, but never checks out or runs the PR head, and is skipped for a fork', () => {
-  const { publish } = workflow.jobs;
-  assert.deepEqual(publish.permissions, { contents: 'write', 'pull-requests': 'write' });
-  assert.deepEqual(publish.needs, 'check');
-  assert.equal(publish.if, '${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}');
-  // Only three steps, none of them a script: the base commit, the artifact, and the released Exhibit.
-  assert.deepEqual(publish.steps.map((step) => step.uses.replace(/@.*/, '')), ['actions/checkout', 'actions/download-artifact', 'bfalkowski/exhibit']);
-  assert.ok(publish.steps.every((step) => step.run === undefined));
-  assert.deepEqual(publish.steps[0].with, { ref: '${{ github.event.pull_request.base.sha }}' });
-  assert.deepEqual(publish.steps[1].with, { name: 'exhibit', path: '.exhibit' });
-  assert.deepEqual(exhibitStep(publish).with, { command: 'publish', comment: true, enforce: false });
-  // The same released Exhibit in both jobs, and never ./, which is the PR's own copy.
-  assert.equal(exhibitStep(publish).uses, exhibitStep(workflow.jobs.check).uses);
-  // The same mode in both jobs, or a failed check comes with a comment that says shadow mode.
-  assert.equal(exhibitStep(publish).with.enforce, exhibitStep(workflow.jobs.check).with.enforce);
-});
+  test(`${path}: the check job can only read`, () => {
+    const { check } = workflow.jobs;
+    assert.deepEqual(check.permissions, { contents: 'read' });
+    const checkout = check.steps.find((step) => step.uses?.startsWith('actions/checkout@'));
+    assert.equal(checkout.with['persist-credentials'], false);
+    assert.deepEqual(exhibitStep(check).with, { command: 'check', enforce: false });
+  });
 
-test('for a PR from a fork, the check job summary says why the publish job is skipped', () => {
-  const note = workflow.jobs.check.steps.find((step) => step.name === 'Say why the publish job is skipped');
-  assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
-  assert.match(note.run, /This PR comes from a fork\..*publish job is skipped/);
-  assert.match(note.run, />> "\$GITHUB_STEP_SUMMARY"/);
+  test(`${path}: the publish job writes, but never checks out or runs the PR head, and is skipped for a fork`, () => {
+    const { publish } = workflow.jobs;
+    assert.deepEqual(publish.permissions, { contents: 'write', 'pull-requests': 'write' });
+    assert.deepEqual(publish.needs, 'check');
+    assert.equal(publish.if, '${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}');
+    // Only three steps, none of them a script: the base commit, the artifact, and the released Exhibit.
+    assert.deepEqual(publish.steps.map((step) => step.uses.replace(/@.*/, '')), ['actions/checkout', 'actions/download-artifact', 'bfalkowski/exhibit']);
+    assert.ok(publish.steps.every((step) => step.run === undefined));
+    assert.deepEqual(publish.steps[0].with, { ref: '${{ github.event.pull_request.base.sha }}' });
+    assert.deepEqual(publish.steps[1].with, { name: 'exhibit', path: '.exhibit' });
+    assert.deepEqual(exhibitStep(publish).with, { command: 'publish', comment: true, enforce: false });
+    // The same released Exhibit in both jobs, and never ./, which is the PR's own copy.
+    assert.equal(exhibitStep(publish).uses, exhibitStep(workflow.jobs.check).uses);
+    // The same mode in both jobs, or a failed check comes with a comment that says shadow mode.
+    assert.equal(exhibitStep(publish).with.enforce, exhibitStep(workflow.jobs.check).with.enforce);
+  });
+
+  test(`${path}: for a PR from a fork, the check job summary says why the publish job is skipped`, () => {
+    const note = workflow.jobs.check.steps.find((step) => step.name === 'Say why the publish job is skipped');
+    assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
+    assert.match(note.run, /This PR comes from a fork\..*publish job is skipped/);
+    assert.match(note.run, />> "\$GITHUB_STEP_SUMMARY"/);
+  });
+
+  test(`${path}: both jobs run Exhibit from a fixed commit SHA or a release tag, never a branch or ./`, () => {
+    for (const job of Object.values(workflow.jobs)) {
+      assert.match(exhibitStep(job).uses, /^bfalkowski\/exhibit@([0-9a-f]{40}|v\d+\.\d+\.\d+)$/);
+      for (const step of job.steps) assert.ok(!step.uses?.startsWith('./'), step.uses);
+    }
+  });
+}
+
+test('the example pins the same Exhibit as Exhibit\'s own workflow, so a copy gets a commit that runs here', () => {
+  const [example, own] = WORKFLOWS.map(readWorkflow);
+  assert.equal(exhibitStep(example.jobs.check).uses, exhibitStep(own.jobs.check).uses);
 });
 
 function exhibitStep(job) {
