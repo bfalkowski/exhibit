@@ -286,7 +286,7 @@ One labeled escaped defect per line, with these fields:
 - `code`: a short description of what went wrong. One line of at most 200 characters.
 - `category`: one line of at most 60 characters.
 - `would_have_caught`: the evidence that would have caught it. One line of at most 500 characters.
-- `labeled_by`: `person`, or `claude_draft_confirmed`, or `claude_draft_edited`. It is `person` when the person typed the label: with no draft, or after throwing the draft away. It is `claude_draft_confirmed` when the label has the code and the category of Claude's draft, and `claude_draft_edited` when the person changed either one.
+- `labeled_by`: `person`, or `claude_draft_confirmed`, or `claude_draft_edited`. It is `person` when the person typed the label: with no draft, or after throwing the draft away with `t`. After `t` it stays `person` even when the person types the draft's code and category again, because they did not accept the draft. Otherwise it is `claude_draft_confirmed` when the label has the code and the category of Claude's draft, and `claude_draft_edited` when the person changed either one.
 - `claude_draft`: the draft that `exhibit label --claude` showed, with its `code`, its `category`, and the `model` that wrote it. It is kept with all three values of `labeled_by`, so a change from the draft can be seen later. It is absent when no draft was shown: without `--claude`, or when the draft failed.
 - `szz_link_rejected`: true when the person rejected at least one link of the defect, and false when they kept every link. A defect can have more than one link, so `rejected_prs` says which links. `exhibit label` checks that `szz_link_rejected` is true exactly when `rejected_prs` is not empty.
 - `labeled_at`: the time of the label, in UTC.
@@ -457,7 +457,7 @@ Exhibit only reports these numbers. It never changes a rung.
 - It needs `ANTHROPIC_API_KEY`. Every command works without it. `exhibit label --claude` with no key exits 2 before it shows anything, with a message that says to set the key or run without `--claude`.
 - The model is `claude-opus-5-5` by default. Set `EXHIBIT_CLAUDE_MODEL` to use another one. Each draft keeps the name of the model that wrote it.
 - For each defect, Claude reads what the person reads: the fix PR's title and body, and the defect text with the changed lines and the SZZ links with their evidence. It also gets the categories used so far, so it can reuse one. It answers with a code and a category in a fixed JSON form. A draft that does not fit the labels schema counts as a failed draft.
-- The first time `--claude` runs in a repo, it says in one line that PR text and code lines are sent to Anthropic's API. It then writes `.exhibit/claude-notice-shown`, so the line does not show again.
+- The first time `--claude` runs in a repo, it says in one line what is sent to Anthropic's API: the fix PR's title and body, the changed lines, and what git blame says about them, which is the commit, the author's name and the commit message, and the titles of the linked PRs. It then writes `.exhibit/claude-notice-shown`, so the line does not show again.
 - Each draft is marked as a draft until the person acts on it. A draft is never written as a label by itself.
 - An API error, a refusal, or a draft that does not fit is shown as a plain message, and the person labels that defect by hand. The labels already written stay.
 - Exhibit records how often the person keeps Claude's draft unchanged: `labeled_by` and `claude_draft` in each line (section 8.4). That number measures the drafter.

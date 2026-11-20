@@ -290,3 +290,12 @@ test('the labels schema checks that a Claude label has its draft, and that a con
   assert.deepEqual(checkLabelLine({ ...line, code: 'other' }), ['/code: a claude_draft_confirmed label must have the code and category of its draft']);
   assert.deepEqual(checkLabelLine({ ...line, claude_draft: { ...DRAFT, model: '' } }).length, 1);
 });
+
+test('replacing the draft with the same words still gives person, because the person did not accept it', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ code: DRAFT.code, category: DRAFT.category, would_have_caught: 'A 10% discount test', draft: 'replaced' }, 'quit']);
+  await labelDefects({ cwd, ask, draft: drafter([DRAFT]).draft, now: () => NOW });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.labeled_by, line.code, line.claude_draft], ['person', DRAFT.code, DRAFT]);
+  assert.deepEqual(checkLabelLine(line), []);
+});

@@ -186,7 +186,7 @@ test('--claude shows a marked draft: the person confirms one and edits another',
   const typed = ['k', 'k', 'c', 'A test that buys 3 of one item', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', 'k', 'q'].join('\n') + '\n';
   const run = labelWithClaude(cwd, typed);
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /^exhibit label --claude sends each defect's PR title, PR body and code lines to Anthropic's API\./);
+  assert.match(run.stdout, /^exhibit label --claude sends each defect's fix PR title and body, its changed lines, and what git blame says about them \(commit, author and message, and the titles of the linked PRs\) to Anthropic's API\./);
   assert.match(run.stdout, /Claude's draft, not saved yet:\n {2}Code: Count ignored the quantity\n {2}Category: arithmetic\n/);
   const lines = readLabels(cwd);
   assert.deepEqual(lines.map((l) => [l.id, l.labeled_by, l.code, l.category, l.claude_draft.code]), [

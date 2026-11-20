@@ -55,7 +55,7 @@ function withNotice(draft, { cwd, screen }) {
       checked = true;
       const marker = join(cwd, NOTICE_SHOWN);
       if (!existsSync(marker)) {
-        screen.write('exhibit label --claude sends each defect\'s PR title, PR body and code lines to Anthropic\'s API. This note shows once in each repo.\n');
+        screen.write('exhibit label --claude sends each defect\'s fix PR title and body, its changed lines, and what git blame says about them (commit, author and message, and the titles of the linked PRs) to Anthropic\'s API. This note shows once in each repo.\n');
         writeFileSync(marker, 'exhibit label --claude showed its note about Anthropic\'s API in this repo.\n');
       }
     }

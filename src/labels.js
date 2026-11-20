@@ -50,9 +50,9 @@ export function checkLabelLine(line) {
  * returns { code, category, model } before the defect is shown, and the answer source gets it in
  * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
  * holds the message, so the person labels that defect by hand. With a draft, the reply also says
- * `draft: 'confirmed' | 'edited' | 'replaced'`. A reply with the draft's code and category is
- * claude_draft_confirmed; a replaced draft is the person's own label; any other change is
- * claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
+ * `draft: 'confirmed' | 'edited' | 'replaced'`. A replaced draft is always the person's own label,
+ * even when they type the draft's words again. Otherwise a reply with the draft's code and
+ * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
  *
  * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
  */
@@ -119,9 +119,9 @@ async function askForDraft(draft, input) {
 }
 
 function labeledBy(drafted, reply) {
-  if (drafted === null) return 'person';
-  if (reply.code === drafted.code && reply.category === drafted.category) return 'claude_draft_confirmed';
-  return reply.draft === 'replaced' ? 'person' : 'claude_draft_edited';
+  // The person threw the draft away, so they did not accept it, even if they typed the same words.
+  if (drafted === null || reply.draft === 'replaced') return 'person';
+  return reply.code === drafted.code && reply.category === drafted.category ? 'claude_draft_confirmed' : 'claude_draft_edited';
 }
 
 async function readHistory(cwd) {
