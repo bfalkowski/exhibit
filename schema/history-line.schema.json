@@ -75,8 +75,8 @@
       "properties": {
         "kinds": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^.+$" },
-          "description": "The kinds in evidence.yml whose globs match a path in files, sorted by name, as exhibit check gives them (spec 8.2). An empty list means no kind matched, so default applies. exhibit history always writes it. A line from a file written before history had kinds may lack it, and the next run fills it in."
+          "items": { "type": "string" },
+          "description": "The kinds in evidence.yml whose globs match a path in files, sorted by name, as exhibit check gives them (spec 8.2). A name is any name the policy schema takes. An empty list means no kind matched, so default applies. exhibit history always writes it. A line from a file written before history had kinds may lack it, and the next run fills it in."
         },
         "fix": { "type": "boolean" },
         "fix_signal": {

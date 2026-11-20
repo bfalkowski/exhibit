@@ -536,3 +536,41 @@ test('a changed policy matches every kept line again from its stored files, says
   assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
   assert.match(changed.stderr, /exhibit: note: the kinds in evidence\.yml now give 2 PRs in \.exhibit\/history\.jsonl other kinds: PR 4 from api, docs to api; PR 1 from default to config\.\n/);
 });
+
+test('a file written before history had kinds is kept, and the next run fills in kinds with no note', async () => {
+  const cwd = newFolder();
+  const gh = repoWithKinds();
+  await run(cwd, gh);
+  // Take kinds out of every line, as in a file from before S4. Such a file still passes the schema.
+  const old = readLines(cwd).map((line) => {
+    const classification = { ...line.classification };
+    delete classification.kinds;
+    return { ...line, classification };
+  });
+  for (const line of old) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), old.map((line) => JSON.stringify(line) + '\n').join(''));
+
+  writeFileSync(join(cwd, 'evidence.yml'), THREE_KINDS);
+  const next = await run(cwd, gh, ['--json']);
+  const summary = JSON.parse(next.stdout);
+  // PRs 1 and 2 are kept, not read again, and still get their kinds from their stored files.
+  assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
+  assert.deepEqual(readLines(cwd).map((line) => [line.number, line.classification.kinds]), [
+    [4, ['api', 'docs']],
+    [3, ['docs']],
+    [2, ['tests']],
+    [1, []]
+  ]);
+  assert.doesNotMatch(next.stderr, /kinds/);
+});
+
+test('a kind whose name the policy schema takes, even the empty name, is written, and the line passes the schema', async () => {
+  const cwd = newFolder();
+  writeFileSync(join(cwd, 'evidence.yml'), 'kinds:\n  "":\n    match: ["**"]\n    risk: low\n    needs: []\n');
+  await run(cwd, repo());
+  for (const line of readLines(cwd)) {
+    assert.deepEqual(line.classification.kinds, [''], `PR ${line.number}`);
+    assert.deepEqual(line.classification.kinds, await checkKinds(cwd, line.files.map((file) => file.path)), `PR ${line.number}`);
+    assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  }
+});
