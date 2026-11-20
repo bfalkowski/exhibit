@@ -2,7 +2,7 @@
 
 Every pull request brings its own evidence. Exhibit decides what evidence a PR needs, checks that the evidence is strong, and learns from each bug that gets through.
 
-**Status:** in development, with no release yet. The project setup exists: `npm ci`, then `npm test` and `npm run lint`. CI runs both, and a secret scan, on every pull request and on every push to `main`. A red run on `main` means two merges clashed: each passed on its own, but not together. The fix is a PR that makes `main` green again.
+**Status:** in development. A person makes a release by pushing a version tag such as `v0.1.0`, and the release workflow does the rest (docs/spec.md section 10, "Releases"). The project setup exists: `npm ci`, then `npm test` and `npm run lint`. CI runs both, and a secret scan, on every pull request and on every push to `main`. A red run on `main` means two merges clashed: each passed on its own, but not together. The fix is a PR that makes `main` green again.
 
 What works today:
 
@@ -34,6 +34,8 @@ Exhibit starts in shadow mode: it shows a verdict on each PR, and nothing waits 
 3. Copy [`examples/pull-request.yml`](examples/pull-request.yml) to `.github/workflows/exhibit.yml`. Keep the same Exhibit commit SHA in both jobs. If your tests need a certain Node, add `actions/setup-node` before the check step.
 4. Open a PR. The check job writes the verdict to the job summary. The publish job stores the exhibit on the `exhibit-data` branch and posts one comment on the PR.
 5. When shadow mode has run long enough to trust it, a person sets `enforce: true` in both jobs.
+
+The two field-test repos have setup notes of their own, with a workflow that pins a release and a first policy: [Building58](examples/building58/README.md) and [edd-platform](examples/edd-platform/README.md).
 
 ## Commands
 

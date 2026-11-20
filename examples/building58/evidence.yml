@@ -1,0 +1,45 @@
+# A first policy for Building58 (Exhibit's docs/spec.md section 8.1). Copy it to evidence.yml at
+# the top of Building58. It is a start: phase A of the field test (spec 12) finds the escaped
+# defects, and the kinds and their needs come from them later. A change to this file always needs
+# a person (spec 9.8).
+version: 3
+
+settings:
+  # All of relay/test/*.test.js as JUnit, six files at a time, as relay/test/run.js runs them.
+  # run.js writes no JUnit, so this does what it does with node --test: each file gets a new empty
+  # HOME of its own, so no test reads a room's files under ~/.office-world or another file's, and
+  # writes its own JUnit file. Then the files are joined into one. --ignore-scripts skips
+  # "prepare", which only sets git hooks. The browser tests in relay/test/browser/ are not in it.
+  test_command: >-
+    npm ci --ignore-scripts --no-audit --no-fund &&
+    mkdir -p .exhibit/junit &&
+    { ls relay/test/*.test.js | xargs -P 6 -n 1 sh -c 'HOME="$(mktemp -d)" node --test --test-timeout=120000 --test-reporter=junit --test-reporter-destination=".exhibit/junit/${1##*/}.xml" "$1" > /dev/null 2>&1' sh; code=$?;
+    { echo '<?xml version="1.0" encoding="utf-8"?>'; echo '<testsuites>'; sed -e '/^<?xml/d' -e '/^<\/*testsuites>$/d' .exhibit/junit/*.xml; echo '</testsuites>'; } > .exhibit/junit.xml;
+    exit $code; }
+  test_results: .exhibit/junit.xml
+  # Titles start with a ticket key, such as "T-401: ...", so title_after_key skips it (spec 9.1).
+  fix_signals: [label:bug, title_after_key:fix, branch:fix/]
+
+kinds:
+  # The code that runs: the relay, the office page, and what they share, with the packages, the
+  # git hooks and CI.
+  code:
+    match: ["relay/**", "office/**", "shared/**", "index.html", "package.json", "package-lock.json", ".githooks/**", ".github/**", "eslint.config.js", "eslint-local.js", "eslint-suppressions.json"]
+    risk: medium
+    needs:
+      - tests-before-after
+      - failing-before: { when: [fix] }
+
+  # The manual and the other Markdown files. The probe is the manual's checks that CI runs for a
+  # docs-only change: links, anchors and no em dashes.
+  docs:
+    match: ["docs/**", "**/*.md"]
+    risk: low
+    needs:
+      - probe: { name: manual, run: "npm ci --ignore-scripts --no-audit --no-fund && node relay/test/run.js relay/test/manual.test.js" }
+
+# Any other file.
+default:
+  risk: medium
+  needs:
+    - tests-before-after
