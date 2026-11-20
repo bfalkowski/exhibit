@@ -1,6 +1,8 @@
 # Exhibit checks its own pull requests, in shadow mode (docs/spec.md sections 10 and 13, S5).
-# This is examples/pull-request.yml with one more step: the check job sets up Node 20, as the CI
-# workflow does, because evidence.yml runs this repo's tests.
+# This is examples/pull-request.yml with three changes. The check job sets up Node 20, as the CI
+# workflow does, because evidence.yml runs this repo's tests. The check job has a time limit of 30
+# minutes, and the publish job one of 10 minutes, so a run that hangs does not take a runner for
+# 6 hours, GitHub's limit. The example leaves the limits out: each repo's tests take their own time.
 #
 # Both jobs run Exhibit from a fixed commit on main, never ./ from the PR. With ./, a PR could
 # change the code that the publish job runs with its write token. To move to a newer Exhibit,

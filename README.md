@@ -35,17 +35,25 @@ Exhibit starts in shadow mode: it shows a verdict on each PR, and nothing waits 
 4. Open a PR. The check job writes the verdict to the job summary. The publish job stores the exhibit on the `exhibit-data` branch and posts one comment on the PR.
 5. When shadow mode has run long enough to trust it, a person sets `enforce: true` in both jobs.
 
-## Planned commands
+## Commands
+
+These commands work today:
 
 ```
 exhibit history     # read past PRs and find the bugs that got through
 exhibit label       # error analysis, with optional Claude drafts
-exhibit backtest    # test the policy on past PRs
 exhibit check       # check one PR against the policy
+exhibit publish     # store the exhibit and post a comment on the PR
+```
+
+These are still planned:
+
+```
+exhibit backtest    # test the policy on past PRs
 exhibit trace       # after a merge, find policy misses
 ```
 
-Exhibit will be a CLI and a GitHub Action. It needs no server.
+Exhibit is a CLI and a GitHub Action. It needs no server.
 
 ## How it is built
 
