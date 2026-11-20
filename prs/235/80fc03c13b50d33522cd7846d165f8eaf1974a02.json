@@ -1,0 +1,111 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "f69c1b452930c5cc6454f99a03c8a0c226b763ecb3f0aca13d692286e8c1f5bc"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 235,
+  "base": "da90d65fa7bdcdeb28b0d765e92d418fe2a6487a",
+  "head": "80fc03c13b50d33522cd7846d165f8eaf1974a02",
+  "classification": {
+    "kinds": [
+      "docs",
+      "source",
+      "tooling"
+    ],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "failed",
+      "details": {
+        "exit_code": 1,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 53
+    },
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "source",
+        "tooling"
+      ],
+      "status": "met",
+      "details": {
+        "base": {
+          "passed": 540,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 543,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": []
+      },
+      "author": "builder",
+      "duration_ms": 103451
+    },
+    {
+      "type": "failing-before",
+      "params": {
+        "when": [
+          "fix"
+        ]
+      },
+      "kinds": [
+        "source"
+      ],
+      "status": "skipped",
+      "details": {
+        "reason": "The policy asks for it only on a fix, and this change is not classified as one, so it is not needed. This does not stop meets_policy."
+      },
+      "author": "builder",
+      "duration_ms": 0
+    }
+  ],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "probe",
+      "name": "links",
+      "status": "failed",
+      "how_to_fix": "The probe links ran \"node scripts/check-links.js README.md CLAUDE.md docs\" in the head worktree and exited with code 1. Read its output in .exhibit/probes/links/output.log. Fix the change, and run exhibit check again."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 2,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-20T19:57:22.024Z"
+}
