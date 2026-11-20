@@ -680,7 +680,9 @@ const squash = (text, path, level) => {
 // In JavaScript a regex literal is code, as in stripComments, so a quote or a { in one, such as
 // /'/ or /{/, opens nothing. Each line is read alone, so the next line of a string that spans
 // lines reads as code. A quote mark that opens no string, such as an apostrophe in JSX text,
-// keeps the whitespace after it on that line.
+// opens one that the next quote mark ends, so the whitespace of a later real string can go. A
+// division that reads as a regex, such as "x++ / 2", can do the same when a later string on the
+// line has a "/" in it: the regex then ends inside that string.
 function squashCode(text, style) {
   const quotes = style === 'slash' ? ['"', "'", '`'] : ['"', "'"];
   const comment = style === 'slash' ? '//' : '#';

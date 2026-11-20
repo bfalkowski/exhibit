@@ -227,6 +227,22 @@ test('whitespace: a quote mark in a regex opens no string, so the whitespace in 
   // Whitespace outside the strings is still whitespace.
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  x = /'/.test(s) ? 'a b' : c;"], added: ["  x=/'/.test(s)?'a b':c;"] }] }));
   assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']]);
+  // A space inside a regex is part of the regex, so it counts.
+  const regex = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ['  r = / a/;'], added: ['  r = /a/;'] }] }));
+  assert.deepEqual(counted(regex), [['a.js', [3]]]);
+});
+
+test('whitespace: a division that reads as a regex can drop a change in a later string that has a "/" in it', () => {
+  // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
+  // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round.
+  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';"]) {
+    const after = before.replace("'c d'", "'cd'");
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']], before);
+  }
+  // A plain division reads right, so the change counts.
+  const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  y = a / 2 + 'c d';"], added: ["  y = a / 2 + 'cd';"] }] }));
+  assert.deepEqual(counted(plain), [['a.js', [3]]]);
 });
 
 test('whitespace: in a file of another kind, a space inside quotes is whitespace, as before', () => {
