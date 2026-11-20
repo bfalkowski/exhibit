@@ -620,7 +620,7 @@ On GitHub, the history methods (`mergedPulls`, `pullFiles`, `pullReviews`, `pull
 Exhibit is built by an office room (Room C), and two other rooms use it on their own repos: the Building58 room on Building58, and Room B on edd-platform.
 
 - **Users install published releases only.** They never run Exhibit from its source.
-- **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that.
+- **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that. The first runs and their numbers are in [field/phase-a-history.md](field/phase-a-history.md).
 - **Phase B: shadow mode.** The Action runs on every PR in both repos with `enforce: false`. The session briefs add one step: run `exhibit check` before you open a PR.
 - **Phase C: compare.** Room B sets `enforce: true` while Building58 stays in shadow mode. Compare tokens per merged PR, review rounds and stuck runs between the two rooms.
 - **Planted faults.** A hidden job opens PRs on a sandbox branch. Each one has a planted bug that the tests miss. They are labeled `exhibit-canary`, closed automatically, and never merged. Exhibit must give `needs_person` on each one.
