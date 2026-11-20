@@ -296,7 +296,7 @@ test('a record that fails the schema gives exit 2, names the PR, and writes no f
 test('a missing GITHUB_TOKEN gives exit 2 and says to set it', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { token: null });
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /GITHUB_TOKEN/);
+  assert.equal(run.stderr, 'exhibit: GITHUB_TOKEN is not set. Set it to a GitHub token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).\n');
   assert.ok(!existsSync(run.historyPath));
 });
 

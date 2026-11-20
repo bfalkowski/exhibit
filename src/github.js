@@ -301,10 +301,29 @@ function permissionWords(permission) {
 // A GitHub repo name is owner/name, and each part uses only letters, digits, _, . and -.
 const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-// Returns true when `text` is a GitHub repo name, such as bfalkowski/Building58.
-export function isRepoName(text) {
-  return REPO_NAME.test(text);
-}
+// The GitHub forge module's static rules: what a command asks before it has a forge. A command
+// picks the module first, then asks it everything: whether --repo is a repo name, which env
+// variable holds the token, and how to connect. Another forge, such as GitLab, gives an object
+// with the same fields.
+export const GITHUB_FORGE = {
+  // The forge's name in a history line's forge field.
+  name: 'github',
+  // The forge's name in messages for people.
+  displayName: 'GitHub',
+  // The env variable that holds the token, and an example of how to set it.
+  tokenEnv: 'GITHUB_TOKEN',
+  tokenExample: 'GITHUB_TOKEN=$(gh auth token)',
+
+  // Returns true when `text` is a GitHub repo name, such as bfalkowski/Building58.
+  isRepoName(text) {
+    return REPO_NAME.test(text);
+  },
+
+  // Makes the forge for the repo `repo` ("owner/name"). See createGitHubForge.
+  connect(options) {
+    return createGitHubForge(options);
+  }
+};
 
 // How many merged PRs one GraphQL query reads, with the first page of each PR's lists.
 const PULLS_PER_QUERY = 50;
@@ -428,8 +447,8 @@ export function createGitHubForge({ repo, ...client }) {
   }
 
   return {
-    // The forge's name in a history line's forge field.
-    name: 'github',
+    name: GITHUB_FORGE.name,
+    displayName: GITHUB_FORGE.displayName,
     repo,
 
     // How many REST requests went to GitHub so far, how many of them got a 304 from the cache, how
