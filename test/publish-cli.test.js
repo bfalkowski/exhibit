@@ -244,3 +244,24 @@ test('--comment with no GITHUB_TOKEN gives exit 2 and stores nothing', (t) => {
   assert.match(run.stderr, /^exhibit: GITHUB_TOKEN is not set\. --comment posts on the PR in GitHub/);
   assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
 });
+
+test('--policy reads the storage settings from that file', (t) => {
+  const fixture = buildFixture(t);
+  mkdirSync(join(fixture.repo, 'ci'));
+  writeFileSync(join(fixture.repo, 'ci', 'policy.yml'), 'settings:\n  storage: local\n  local_path: ../from-ci\n');
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  const run = runPublish(fixture, fixture.repo, file, ['--policy', 'ci/policy.yml']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, `Wrote ../from-ci/prs/12/${HEAD_1}.json.\n`);
+  assert.match(runPublish(fixture, fixture.repo, file, ['--policy', '../x.yml']).stderr, /--policy must be the path of a file in the repo/);
+});
+
+// The GitHub Action passes enforce to publish on its own, whether or not it posts a comment.
+test('--enforce without --comment is allowed, and posts nothing', (t) => {
+  const fixture = buildFixture(t);
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'settings:\n  storage: local\n');
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  const run = runPublish(fixture, fixture.repo, file, ['--enforce']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, `Wrote .exhibit/out/prs/12/${HEAD_1}.json.\n`);
+});
