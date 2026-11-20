@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DraftError } from './claude.js';
+import { draftAgreement } from './draft-agreement.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
 import { defectText, escapedDefects } from './report.js';
@@ -55,6 +56,9 @@ export function checkLabelLine(line) {
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
  *
  * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
+ * With a drafter it also returns `drafts`: { run, file }, how often the person kept Claude's draft
+ * in the lines this run wrote and in the whole file (spec 9.11). A skipped defect has no line, so
+ * its draft is not counted.
  */
 export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
   const history = await readHistory(cwd);
@@ -68,6 +72,7 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   let labeled = 0;
   let skipped = 0;
   let needsBreak = !endsWithBreak;
+  const written = [];
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
@@ -101,10 +106,13 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
     }
     await appendLine(cwd, `${needsBreak ? '\n' : ''}${JSON.stringify(line)}\n`);
     needsBreak = false;
+    written.push(line);
     labeled += 1;
     if (!categories.includes(line.category)) categories.push(line.category);
   }
-  return { shown, labeled, skipped, open: open.length - labeled };
+  const summary = { shown, labeled, skipped, open: open.length - labeled };
+  if (draft === undefined) return summary;
+  return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
 // Returns { drafted, draftError }. Both are null when there is no drafter.
