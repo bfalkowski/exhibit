@@ -187,12 +187,12 @@ A probe can set `author: hidden`. Exhibit then counts it as a check the builder 
 
 The fields:
 
-- `policy`: the policy file and the SHA-256 of its bytes. `sha256` is null when there is no `evidence.yml`.
+- `policy`: the policy file and the SHA-256 of its bytes. `path` is the policy file, which is `evidence.yml` unless `--policy` names another file. `sha256` is null when that file is not there.
 - `repo` is `owner/name` from `--repo`, or null. `pr` is the number from `--pr`, or null.
 - `base` and `head` are full commit SHAs. The changed files are the files that differ between the merge base of the two and `head`. A renamed file counts under its old path and its new path.
-- `classification` (section 9.1): `kinds` holds the matched kinds, sorted by name. `fix_signal` is the first fix signal that matched, or null. `signals_from` is `pr` when the forge gave the title, body, labels and branch, or `branch` when only the local branch name was known. `used_default` is true when no kind matched. `policy_changed` is true when the change touches the policy file, `evidence.yml` or the file `--policy` names. `policy.path` names that file.
+- `classification` (section 9.1): `kinds` holds the matched kinds, sorted by name. `fix_signal` is the first fix signal that matched, or null. `signals_from` is `pr` when the forge gave the title, body, labels and branch, or `branch` when only the local branch name was known. `used_default` is true when no kind matched. `policy_changed` is true when the change touches the policy file, which is `evidence.yml` unless `--policy` names another file.
 - `requirements`: one for each evidence item the change needs, in order: the matched kinds by name, then each kind's own order. A need that two kinds share is one requirement, and its `kinds` names both. `params` holds the item's fields, without `author`. `author` is `hidden` for a probe with `author: hidden`, and `builder` for every other item.
-- `gaps`: one for each requirement that is not `met`, plus a gap of type `policy-change` when the change touches `evidence.yml`, and a gap of type `no-rule` when no kind matched and the policy has no `default`. Each gap says how to fix it in plain words.
+- `gaps`: one for each requirement that is not `met`, plus a gap of type `policy-change` when the change touches the policy file, and a gap of type `no-rule` when no kind matched and the policy has no `default`. Each gap says how to fix it in plain words.
 - `duration_ms` and `created_at` are the timing fields. Two runs on the same base and head, with the same policy, give the same file apart from them.
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).

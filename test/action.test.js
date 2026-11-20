@@ -228,6 +228,8 @@ test('the publish job writes, but never checks out or runs the PR head, and is s
   assert.deepEqual(exhibitStep(publish).with, { command: 'publish', comment: true, enforce: false });
   // The same released Exhibit in both jobs, and never ./, which is the PR's own copy.
   assert.equal(exhibitStep(publish).uses, exhibitStep(workflow.jobs.check).uses);
+  // The same mode in both jobs, or a failed check comes with a comment that says shadow mode.
+  assert.equal(exhibitStep(publish).with.enforce, exhibitStep(workflow.jobs.check).with.enforce);
 });
 
 test('for a PR from a fork, the check job summary says why the publish job is skipped', () => {

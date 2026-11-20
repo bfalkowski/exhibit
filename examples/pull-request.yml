@@ -4,8 +4,14 @@
 # - The publish job has write access, so it never checks out or runs the PR's code. It runs only
 #   the released Exhibit, on the exhibit that the check job uploaded.
 #
-# Copy this file to .github/workflows/exhibit.yml. Pin bfalkowski/exhibit to a release tag or a
-# commit SHA, the same one in both jobs.
+# Copy this file to .github/workflows/exhibit.yml. Then replace bfalkowski/exhibit@main in both
+# jobs with a release tag or a commit SHA, the same one in both. This example says main only
+# because Exhibit has no release yet. Do not keep main: it moves, so in one run the check job and
+# the publish job could run different Exhibit code, and the job with the write token would run
+# whatever main is at that time.
+#
+# Set enforce to the same value in both jobs. If only the check job has enforce: true, the check
+# fails, but the PR comment still says shadow mode.
 name: Exhibit
 
 # Never pull_request_target: that runs with a write token and the base repo's secrets, on a run
@@ -40,7 +46,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # enforce: false is shadow mode. The step succeeds whatever the verdict, and the job summary
-      # shows the verdict. Set it to true to fail the step on needs_person and on error.
+      # shows the verdict. Set it to true to fail the step on needs_person and on error, and set
+      # it to the same value in the publish job.
       - uses: bfalkowski/exhibit@main
         with:
           command: check
@@ -68,6 +75,7 @@ jobs:
           name: exhibit
           path: .exhibit
 
+      # enforce must be the same as in the check job, so the comment says the right mode.
       - uses: bfalkowski/exhibit@main
         with:
           command: publish
