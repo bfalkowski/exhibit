@@ -161,7 +161,8 @@ function createKeyboard({ input, output }) {
   // Returns k to keep the link, r to reject it, s to skip the defect, or null to quit.
   async function keepOrReject(link) {
     for (;;) {
-      const answer = await question(`Link to PR ${link.pr}, confidence ${Math.round(link.confidence * 100)}%: k to keep it, or r to reject it as a false link. Or s to skip this defect.`);
+      const evidence = link.found_by === 'revert' ? ', evidence: revert' : '';
+      const answer = await question(`Link to PR ${link.pr}, confidence ${Math.round(link.confidence * 100)}%${evidence}: k to keep it, or r to reject it as a false link. Or s to skip this defect.`);
       if (answer === null) return null;
       const choice = answer.toLowerCase();
       if (choice === 'k' || choice === 'r' || choice === 's') return choice;

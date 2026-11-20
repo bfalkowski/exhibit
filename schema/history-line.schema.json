@@ -76,8 +76,8 @@
         "fix": { "type": "boolean" },
         "fix_signal": {
           "type": ["string", "null"],
-          "pattern": "^(label|title|title_after_key|branch|pr):.+$",
-          "description": "The first fix signal that matched, such as label:bug or pr:96. null when the PR is not a fix."
+          "pattern": "^((label|title|title_after_key|branch|pr):.+|revert)$",
+          "description": "The first fix signal that matched, such as label:bug, pr:96 or revert. null when the PR is not a fix."
         }
       }
     },
@@ -98,9 +98,9 @@
       "additionalProperties": false,
       "properties": {
         "blamed_commit": {
-          "type": "string",
+          "type": ["string", "null"],
           "pattern": "^[0-9a-f]{40}$",
-          "description": "The commit that git blame ran on: the parent of the fix's first commit on the main branch, the main branch just before the fix. For a merge commit or a squash merge, that is the first parent of merge_sha."
+          "description": "The commit that git blame ran on: the parent of the fix's first commit on the main branch, the main branch just before the fix. For a merge commit or a squash merge, that is the first parent of merge_sha. null for a revert, because SZZ runs no blame on it."
         },
         "links": {
           "type": "array",
@@ -123,7 +123,11 @@
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1,
-                "description": "The share of the fix's counted lines that point to this PR. Dropped lines are not in the count."
+                "description": "The share of the fix's counted lines that point to this PR. Dropped lines are not in the count. For a link found by revert, an even share of the PRs the revert names."
+              },
+              "found_by": {
+                "enum": ["revert"],
+                "description": "How SZZ found the link, when it ran no blame: revert means the fix is a revert that names this PR. Absent for a link found by git blame, so older files read as before."
               },
               "lines": {
                 "type": "array",
@@ -293,8 +297,8 @@
         },
         "no_link_reason": {
           "type": ["string", "null"],
-          "pattern": "^(whitespace|comments|moved lines|lines newer than the bug report)((, | and )(comments|moved lines|lines newer than the bug report))* only$",
-          "description": "Why a fix has no links when SZZ dropped every line it deleted or changed, such as \"whitespace only\" or \"comments and moved lines only\". null when some lines are left, or when the fix deleted or changed no lines."
+          "pattern": "^((whitespace|comments|moved lines|lines newer than the bug report)((, | and )(comments|moved lines|lines newer than the bug report))* only|reverted change not found)$",
+          "description": "Why a fix has no links when SZZ dropped every line it deleted or changed, such as \"whitespace only\" or \"comments and moved lines only\", or \"reverted change not found\" for a revert whose reverted PR neither the history nor the forge knows. null when some lines are left, or when the fix deleted or changed no lines."
         }
       }
     },

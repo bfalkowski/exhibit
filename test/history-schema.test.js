@@ -37,14 +37,14 @@ test('the fields later tickets fill may be absent or null', () => {
 test('classification must say whether the PR is a fix and which signal matched', () => {
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'title:fix' } }), []);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'pr:96' } }), []);
-  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'issue:96' } }), ['/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr):.+$']);
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'issue:96' } }), ['/classification/fix_signal: does not match ^((label|title|title_after_key|branch|pr):.+|revert)$']);
   const { classification, ...without } = good();
   assert.ok(classification);
   assert.deepEqual(checkHistoryLine(without), ['/: misses the field classification']);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: null }), ['/classification: must be object, not null']);
   assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: 'yes', fix_signal: 'bug' } }).sort(), [
     '/classification/fix: must be boolean, not string',
-    '/classification/fix_signal: does not match ^(label|title|title_after_key|branch|pr):.+$'
+    '/classification/fix_signal: does not match ^((label|title|title_after_key|branch|pr):.+|revert)$'
   ]);
 });
 
@@ -140,6 +140,18 @@ test('szz lists the dropped lines with a reason, and says why a fix has no links
   const noDropped = { ...szz };
   delete noDropped.dropped_lines;
   assert.deepEqual(checkHistoryLine({ ...good(), szz: noDropped }), ['/szz: misses the field dropped_lines']);
+});
+
+test('a revert link has found_by revert and no lines, and an older line with no found_by reads as before', () => {
+  const revert = { blamed_commit: null, links: [{ pr: 4, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null };
+  const fix = { ...good(), classification: { fix: true, fix_signal: 'revert' } };
+  assert.deepEqual(checkHistoryLine({ ...fix, szz: revert }), []);
+  assert.deepEqual(checkHistoryLine({ ...fix, szz: { ...revert, links: [], no_link_reason: 'reverted change not found' } }), []);
+  assert.deepEqual(checkHistoryLine({ ...fix, szz: { ...revert, links: [{ pr: 4, confidence: 1, found_by: 'guess', lines: [] }] } }), ['/szz/links/0/found_by: must be revert, not "guess"']);
+  // A line written before revert links has no found_by on its links and a blamed_commit. It still passes.
+  const line = { path: 'src/a.js', line: 3, text: 'x', blame: { commit: 'e'.repeat(40), original_path: 'src/a.js', original_line: 3, author: 'ana', author_time: '2026-01-01T00:00:00Z', summary: 'Add a' } };
+  const older = { blamed_commit: 'd'.repeat(40), links: [{ pr: 4, confidence: 1, lines: [line] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null };
+  assert.deepEqual(checkHistoryLine({ ...good(), classification: { fix: true, fix_signal: 'label:bug' }, szz: older }), []);
 });
 
 test('every line has szz, and the schema describes a line the same way in links and unlinked_lines', () => {

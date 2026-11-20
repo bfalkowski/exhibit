@@ -217,3 +217,30 @@ test('escapedDefects lists the fix PRs with a link, newest first, as the report 
   assert.deepEqual(escapedDefects(lines).map((line) => line.number), inReport);
   assert.ok(inReport.length >= 3);
 });
+
+test('a revert link shows "revert" as its evidence, in place of blame lines, in both files', () => {
+  const revert = {
+    number: 15,
+    title: 'Revert "Add the shop entry point"',
+    merged_at: '2026-02-01T09:00:00Z',
+    classification: { fix: true, fix_signal: 'revert' },
+    szz: { blamed_commit: null, links: [{ pr: 5, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null }
+  };
+  const notFound = {
+    number: 16,
+    title: 'Revert "Add a page"',
+    merged_at: '2026-02-02T09:00:00Z',
+    classification: { fix: true, fix_signal: 'revert' },
+    szz: { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: 'reverted change not found' }
+  };
+  const { markdown, html } = report([...shopLines(), revert, notFound]);
+  for (const text of [markdownText(markdown), htmlText(html)]) {
+    assert.ok(text.includes('Fix PR 15: Revert "Add the shop entry point"'), text);
+    assert.ok(text.includes('Merged on 2026-02-01. It is a revert, so SZZ ran no git blame: the revert names the PR it takes back.'), text);
+    assert.ok(text.includes('Introducing PR 5: Add the shop entry point, confidence 100%, evidence: revert. PR 15 reverts it.'), text);
+    assert.ok(text.includes('PR 16 (Revert "Add a page"): It is a revert, but neither the history nor the forge knows the change it reverts.'), text);
+  }
+  assert.deepEqual(factsIn(markdownText(markdown)).defects, [15, 14, 12, 7, 6]);
+  // A revert link is strong: it holds the whole fix.
+  assert.match(markdown, /SZZ linked 5 of them/);
+});

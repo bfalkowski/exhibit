@@ -1,0 +1,20 @@
+{
+  "/repos/timonrieger/homelab/issues/99999": {
+    "status": 404,
+    "headers": {},
+    "body": {
+      "message": "Not Found",
+      "documentation_url": "https://docs.github.com/rest/issues/issues#get-an-issue",
+      "status": "404"
+    }
+  },
+  "/repos/timonrieger/homelab/commits/0000000000000000000000000000000000000001/pulls?per_page=100": {
+    "status": 422,
+    "headers": {},
+    "body": {
+      "message": "No commit found for SHA: 0000000000000000000000000000000000000001",
+      "documentation_url": "https://docs.github.com/rest/commits/commits#list-pull-requests-associated-with-a-commit",
+      "status": "422"
+    }
+  }
+}
