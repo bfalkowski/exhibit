@@ -87,7 +87,7 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
   assert.equal(evidence.classification.fix, true);
   assert.equal(evidence.classification.fix_signal, 'branch:fix/');
   assert.equal(evidence.classification.signals_from, 'branch');
-  assert.deepEqual(evidence.requirements.map((item) => [item.type, item.status]), [['tests-before-after', 'skipped'], ['mutation', 'skipped']]);
+  assert.deepEqual(evidence.requirements.map((item) => [item.type, item.status]), [['tests-before-after', 'missing'], ['mutation', 'skipped']]);
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
