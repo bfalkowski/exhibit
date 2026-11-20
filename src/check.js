@@ -26,7 +26,7 @@ export const COLLECTORS = Object.freeze({
 // Builds the exhibit, the content of evidence.json (spec 8.2), for one change.
 //
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
-// changed paths `files`, what is known of the PR (`pr`: title, labels, branch), where the fix
+// changed paths `files`, what is known of the PR (`pr`: title, body, labels, branch, repo), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
 // `head` SHAs, and `cwd`, the clone, and `env` for the test command.
 //
@@ -174,7 +174,7 @@ function currentEnvironment() {
   return { node: `${process.versions.node.split('.')[0]}.x`, os: process.platform };
 }
 
-const VERDICT_WORDS = {
+export const VERDICT_WORDS = {
   meets_policy: 'meets the policy',
   needs_person: 'needs a person',
   error: 'Exhibit failed'
@@ -197,7 +197,7 @@ export function renderSummary(exhibit) {
   lines.push(`- Risk: ${c.risk}.`);
   lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
   if (c.signals_from === 'branch') {
-    lines.push('- Exhibit knew only the branch name, not the PR\'s title or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
+    lines.push('- Exhibit knew only the branch name, not the PR\'s title, body or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
   }
   lines.push(`- Merge without reading: ${c.merge_without_reading}.`, '');
 

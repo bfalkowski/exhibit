@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DraftError } from './claude.js';
+import { draftAgreement } from './draft-agreement.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
 import { defectText, escapedDefects } from './report.js';
@@ -40,8 +41,8 @@ export function checkLabelLine(line) {
  *
  * `ask(defect, { categories, text, position, open })` is the answer source: a person at a
  * keyboard, or a script in a test. `defect` has `id`, `fix_pr`, `introducing_prs` and `links`,
- * which holds `pr` and `confidence` for each SZZ link. `text` shows the defect with its SZZ
- * evidence. `categories` are the categories used so far. It returns
+ * which holds `pr` and `confidence` for each SZZ link, and `found_by: 'revert'` for a link that
+ * SZZ found from a revert with no blame. `text` shows the defect with its SZZ evidence. `categories` are the categories used so far. It returns
  * { code, category, would_have_caught, rejected_prs }, or 'skip', or 'quit'. `rejected_prs` names
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
@@ -55,19 +56,23 @@ export function checkLabelLine(line) {
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
  *
  * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
+ * With a drafter it also returns `drafts`: { run, file }, how often the person kept Claude's draft
+ * in the lines this run wrote and in the whole file (spec 9.11). A skipped defect has no line, so
+ * its draft is not counted.
  */
 export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
   const history = await readHistory(cwd);
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
   const categories = [...new Set(labels.map((label) => label.category))];
-  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence }) => ({ pr, confidence })), fix }));
+  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence, found_by: foundBy }) => ({ pr, confidence, ...(foundBy ? { found_by: foundBy } : {}) })), fix }));
   const open = defects.filter((defect) => !done.has(defect.id));
 
   let shown = 0;
   let labeled = 0;
   let skipped = 0;
   let needsBreak = !endsWithBreak;
+  const written = [];
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
@@ -101,10 +106,13 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
     }
     await appendLine(cwd, `${needsBreak ? '\n' : ''}${JSON.stringify(line)}\n`);
     needsBreak = false;
+    written.push(line);
     labeled += 1;
     if (!categories.includes(line.category)) categories.push(line.category);
   }
-  return { shown, labeled, skipped, open: open.length - labeled };
+  const summary = { shown, labeled, skipped, open: open.length - labeled };
+  if (draft === undefined) return summary;
+  return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
 // Returns { drafted, draftError }. Both are null when there is no drafter.

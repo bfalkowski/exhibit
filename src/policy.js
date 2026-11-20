@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { DEFAULT_FIX_SIGNALS } from './fix-signals.js';
+import { DEFAULT_FIX_SIGNALS, REVERT_SIGNAL } from './fix-signals.js';
 import { schemaProblems } from './json-schema.js';
 import { ToolError } from './tool-error.js';
 
@@ -105,8 +105,10 @@ function checkSignals(signals) {
   signals.forEach((signal, i) => {
     const at = `${where}[${i}]`;
     if (typeof signal !== 'string') throw new ToolError(`${at} must be text like label:bug, not ${JSON.stringify(signal)}.${spaceHint(signal)}`);
+    // The revert signal is one word with no value (spec 9.1).
+    if (signal === REVERT_SIGNAL) return;
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch:, pr: or tracker:.`);
+    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch:, pr: or tracker:, or be the word revert.`);
     const value = signal.slice(type.length + 1);
     if (/[\r\n]/.test(value)) throw new ToolError(`${at} is ${JSON.stringify(signal)}. A signal must be on one line.`);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);

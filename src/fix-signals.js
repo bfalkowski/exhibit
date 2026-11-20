@@ -18,9 +18,12 @@ const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
 // A key at the start of a branch name, such as PAY-482-fix-crash or PAY-482/crash.
 const BRANCH_KEY = /^([a-z][a-z0-9_]*-\d+)(?![a-z0-9_])/;
 
+// The signal for a revert PR (spec 9.1). It has no value: it is the one word.
+export const REVERT_SIGNAL = 'revert';
+
 // Says whether a PR is a fix, and which signal shows it. `pr` holds the PR's number, its title,
-// its label names and its branch name. The first signal in the list that matches is recorded, so a person
-// can see why the PR counts as a fix. Matching ignores case.
+// its body, its label names, its branch name and its repo ("owner/name", or absent when unknown). The first signal in the list that matches is
+// recorded, so a person can see why the PR counts as a fix. Matching ignores case.
 // `ticket` is the tracker's answer for the PR's ticket, as classifyWithTracker gets it: { signal,
 // bug, escaped }, or null. A tracker signal, such as tracker:jira, matches only when the ticket
 // is a bug, and then fix_signal is the ticket's own signal, such as jira:PAY-482. With a ticket
@@ -70,9 +73,11 @@ export function ticketKey(pr) {
   return fromBranch ? fromBranch.toUpperCase() : null;
 }
 
-const signalType = (signal) => signal.slice(0, signal.indexOf(':'));
+// The part before the colon, such as tracker in tracker:jira. revert has no colon, so it is ''.
+const signalType = (signal) => (signal.includes(':') ? signal.slice(0, signal.indexOf(':')) : '');
 
 function matches(pr, signal, ticket) {
+  if (signal === REVERT_SIGNAL) return isRevert(pr);
   const colon = signal.indexOf(':');
   const type = signal.slice(0, colon);
   const value = signal.slice(colon + 1).toLowerCase();
@@ -92,4 +97,38 @@ function startsWithWord(title, prefix) {
   if (!title.startsWith(prefix)) return false;
   const next = title.charAt(prefix.length);
   return !(WORD_CHARACTER.test(prefix.at(-1)) && WORD_CHARACTER.test(next));
+}
+
+// GitHub's Revert button writes the title 'Revert "<title>"' and the body "Reverts owner/name#N".
+// `git revert` writes the same title, and "This reverts commit <sha>." in the body.
+const REVERTS_PR = /^[ \t]*reverts[ \t]+([\w.-]+\/[\w.-]+)#(\d+)\b/gim;
+const REVERTS_COMMIT = /^[ \t]*this reverts commit ([0-9a-f]{7,40})\b/gim;
+
+// Says whether a PR reverts earlier work: its title starts with 'Revert "', or its body names
+// a reverted PR in the PR's own repo, or a reverted commit. A line that names another repo's PR,
+// as in copied release notes, does not count. When `pr.repo` is unknown, any repo counts. A
+// revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's button
+// and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
+export function isRevert(pr) {
+  const title = (pr.title ?? '').trim().toLowerCase();
+  if (title.startsWith('revert "revert "') || title.startsWith('reapply "')) return false;
+  if (title.startsWith('revert "')) return true;
+  const { prs, commits } = revertedWork(pr.body, pr.repo ?? null);
+  return prs.length + commits.length > 0;
+}
+
+// Returns the work that a revert PR's body names: the numbers of the reverted PRs in `repo`
+// ("owner/name", any case), and the reverted commits, each once, in the order of the body.
+// With `repo` null, every named PR counts.
+export function revertedWork(body, repo) {
+  const prs = [];
+  const commits = [];
+  for (const [, name, number] of (body ?? '').matchAll(REVERTS_PR)) {
+    if (repo !== null && name.toLowerCase() !== repo.toLowerCase()) continue;
+    if (!prs.includes(Number(number))) prs.push(Number(number));
+  }
+  for (const [, sha] of (body ?? '').matchAll(REVERTS_COMMIT)) {
+    if (!commits.includes(sha.toLowerCase())) commits.push(sha.toLowerCase());
+  }
+  return { prs, commits };
 }

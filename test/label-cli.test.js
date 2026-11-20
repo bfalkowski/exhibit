@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkLabelLine } from '../src/labels.js';
+import { draftAgreementText } from '../src/draft-agreement.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { writeHistoryReplay } from './fixtures/github/szz-replies.js';
 import { gitEnv } from './fixtures/git-env.js';
@@ -77,6 +78,33 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
     ['D-006', [1], [], false, 'Tax rounded too early', 'arithmetic', 'A rounding test', 'person']
   ]);
   for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
+});
+
+test('a revert link shows revert as its evidence, and the person can keep it or reject it', (t) => {
+  const shop = shopText().trimEnd().split('\n').map((line) => JSON.parse(line));
+  const base = shop.find((line) => line.number === 7);
+  // Two reverts, newer than every fix in the shop: PR 16 reverts PR 2 and PR 15 reverts PR 5.
+  const revert = (number, of, title) => ({
+    ...base, number, title, body: `Reverts fixture/shop#${of}`, url: `https://github.com/fixture/shop/pull/${number}`, merged_at: `2026-02-0${number - 14}T10:00:00Z`,
+    classification: { fix: true, fix_signal: 'revert' },
+    szz: { blamed_commit: null, links: [{ pr: of, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null }
+  });
+  const lines = [...shop, revert(15, 5, 'Revert "Add the shop entry point"'), revert(16, 2, 'Revert "Add discounts"')];
+  const cwd = withHistory(t, lines.map((line) => JSON.stringify(line) + '\n').join(''));
+  // D-016: reject its link. D-015: keep its link. Then the input ends, which quits.
+  const typed = ['r', 'Not a bug: the revert was a rollback for a launch date', 'rollback', 'Nothing', 'k', 'The entry point broke checkout', 'wiring', 'An end-to-end test of checkout'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Fix PR 16: Revert "Add discounts"\n.*It is a revert, so SZZ ran no git blame/);
+  assert.match(run.stdout, /- Introducing PR 2: Add discounts, confidence 100%, evidence: revert\. PR 16 reverts it\./);
+  assert.match(run.stdout, /Link to PR 2, confidence 100%, evidence: revert: k to keep it, or r to reject it as a false link\./);
+  assert.match(run.stdout, /Link to PR 5, confidence 100%, evidence: revert: k to keep it/);
+  const saved = readLabels(cwd);
+  assert.deepEqual(saved.map((l) => [l.id, l.introducing_prs, l.rejected_prs, l.szz_link_rejected]), [
+    ['D-016', [], [2], true],
+    ['D-015', [5], [], false]
+  ]);
+  for (const line of saved) assert.deepEqual(checkLabelLine(line), [], line.id);
 });
 
 test('the end of the typed input quits and keeps the labels given so far', (t) => {
@@ -175,7 +203,7 @@ test('without --claude, label needs no ANTHROPIC_API_KEY', (t) => {
 
 // Runs exhibit label --claude with the recorded Anthropic reply in test/fixtures/anthropic/draft.json.
 const anthropicFixture = fileURLToPath(new URL('./fixtures/anthropic/draft.json', import.meta.url));
-const labelWithClaude = (cwd, input) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude'], {
+const labelWithClaude = (cwd, input, args = []) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude', ...args], {
   cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: anthropicFixture }
 });
 
@@ -207,4 +235,47 @@ test('--claude: t throws the draft away and the person types their own', (t) => 
   assert.equal(run.status, 0, run.stderr);
   const [line] = readLabels(cwd);
   assert.deepEqual([line.labeled_by, line.code, line.category, line.claude_draft.code], ['person', 'Stock check ran before the count', 'state', 'Count ignored the quantity']);
+});
+
+// D-012: confirm the draft. D-007: edit the draft's code. Then quit at D-006.
+const CONFIRM_THEN_EDIT = ['k', 'k', 'c', 'A test that buys 3 of one item', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', 'q'].join('\n') + '\n';
+
+test('--claude: after a second run, the run numbers count only that run, and the file numbers count every draft', (t) => {
+  const cwd = withHistory(t, shopText());
+  const first = labelWithClaude(cwd, CONFIRM_THEN_EDIT);
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /Claude's drafts in this run: 2 shown\. 1 kept unchanged, 1 edited, 0 replaced\. The person kept 50% of the drafts unchanged \(1 of 2, 95% interval 1% to 99%\)\. With fewer than 10 drafts, this number is weak\.\n/);
+  assert.match(first.stdout, /Claude's drafts in the whole labels file: 2 shown\. 1 kept unchanged, 1 edited, 0 replaced\./);
+
+  // D-006: keep its link, throw the draft away and type a label.
+  const second = labelWithClaude(cwd, ['k', 't', 'Tax rounded too early', 'arithmetic', 'A rounding test'].join('\n') + '\n');
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Claude's drafts in this run: 1 shown\. 0 kept unchanged, 0 edited, 1 replaced\. The person kept 0% of the drafts unchanged \(0 of 1, 95% interval 0% to 98%\)\./);
+  assert.match(second.stdout, /Claude's drafts in the whole labels file: 3 shown\. 1 kept unchanged, 1 edited, 1 replaced\. The person kept 33% of the drafts unchanged \(1 of 3, 95% interval 0% to 91%\)\./);
+
+  // A third run has nothing left to label, so it has no drafts, but it still counts the file.
+  const third = labelWithClaude(cwd, '');
+  assert.equal(third.status, 0, third.stderr);
+  assert.match(third.stdout, /Every escaped defect has a code already\./);
+  assert.match(third.stdout, /Claude's drafts in this run: none, so there is no kept share yet\./);
+  assert.match(third.stdout, /Claude's drafts in the whole labels file: 3 shown\./);
+});
+
+test('--claude --json holds the same draft numbers as the printed text', (t) => {
+  const printed = labelWithClaude(withHistory(t, shopText()), CONFIRM_THEN_EDIT);
+  const json = labelWithClaude(withHistory(t, shopText()), CONFIRM_THEN_EDIT, ['--json']);
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.equal(json.status, 0, json.stderr);
+  const { drafts } = JSON.parse(json.stdout);
+  assert.deepEqual([drafts.run.shown, drafts.run.kept, drafts.run.edited, drafts.run.replaced], [2, 1, 1, 0]);
+  assert.deepEqual([drafts.file.kept_share.kept, drafts.file.kept_share.n, drafts.file.kept_share.rate, drafts.file.kept_share.weak], [1, 2, 0.5, true]);
+  // The printed lines are made from exactly these numbers.
+  assert.ok(printed.stdout.includes(draftAgreementText(drafts.run, 'in this run')), printed.stdout);
+  assert.ok(printed.stdout.includes(draftAgreementText(drafts.file, 'in the whole labels file')), printed.stdout);
+});
+
+test('without --claude, label prints no draft numbers and its --json has no drafts', (t) => {
+  const run = label(withHistory(t, shopText()), ['--json'], 'q\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(JSON.parse(run.stdout).drafts, undefined);
 });

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { DEFAULT_MODEL, createDrafter } from '../claude.js';
+import { draftAgreementText } from '../draft-agreement.js';
 import { LABELS, labelDefects } from '../labels.js';
 import { ToolError } from '../tool-error.js';
 
@@ -38,13 +39,19 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
     return;
   }
   if (summary.shown === 0) {
-    stdout.write(`Every escaped defect has a code already. The labels are in ${LABELS}.\n`);
+    stdout.write(`Every escaped defect has a code already. The labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
     return;
   }
   const left = summary.open === 0
     ? 'Every escaped defect has a code now.'
     : `${summary.open} still ${summary.open === 1 ? 'has' : 'have'} no code. Run exhibit label again to label ${summary.open === 1 ? 'it' : 'them'}.`;
-  stdout.write(`\nLabeled ${summary.labeled} escaped ${summary.labeled === 1 ? 'defect' : 'defects'}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n`);
+  stdout.write(`\nLabeled ${summary.labeled} escaped ${summary.labeled === 1 ? 'defect' : 'defects'}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+}
+
+// With --claude, how often the person kept Claude's draft, in this run and in the whole file.
+function draftsText(drafts) {
+  if (drafts === undefined) return '';
+  return `${draftAgreementText(drafts.run, 'in this run')}\n${draftAgreementText(drafts.file, 'in the whole labels file')}\n`;
 }
 
 // Says once in each repo, before the first draft, what --claude sends to Anthropic.
@@ -161,7 +168,8 @@ function createKeyboard({ input, output }) {
   // Returns k to keep the link, r to reject it, s to skip the defect, or null to quit.
   async function keepOrReject(link) {
     for (;;) {
-      const answer = await question(`Link to PR ${link.pr}, confidence ${Math.round(link.confidence * 100)}%: k to keep it, or r to reject it as a false link. Or s to skip this defect.`);
+      const evidence = link.found_by === 'revert' ? ', evidence: revert' : '';
+      const answer = await question(`Link to PR ${link.pr}, confidence ${Math.round(link.confidence * 100)}%${evidence}: k to keep it, or r to reject it as a false link. Or s to skip this defect.`);
       if (answer === null) return null;
       const choice = answer.toLowerCase();
       if (choice === 'k' || choice === 'r' || choice === 's') return choice;

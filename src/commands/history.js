@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { REVERT_SIGNAL } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
@@ -180,16 +181,22 @@ async function readPrevious(cwd, forge, note) {
 // not run on it again. A PR merged once does not change its code, so its SZZ result stays true.
 // SZZ runs on a fix that the old file had as no fix, or with a null szz, as SZZ skipped it then.
 // A kept line that the fix signals no longer mark as a fix gets szz null, as every other PR
-// that is no fix has.
+// that is no fix has. An szz found by blame no longer fits a fix that the revert signal now
+// marks, and a revert's szz no longer fits a fix that another signal now marks, so SZZ runs
+// on that line again.
 function keepSzz(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line]));
   return lines.map((line) => {
     if (!line.classification.fix && line.szz) return { ...line, szz: null };
+    if (line.szz) return fitsSignal(line.szz, line) ? line : { ...line, szz: undefined };
     if (line.szz !== undefined) return line;
     const before = old.get(line.number);
-    return before?.szz && line.classification.fix ? { ...line, szz: before.szz } : line;
+    return before?.szz && line.classification.fix && fitsSignal(before.szz, line) ? { ...line, szz: before.szz } : line;
   });
 }
+
+// SZZ blames no commit for a revert (spec 9.2), so its blamed_commit is null.
+const fitsSignal = (szz, line) => (szz.blamed_commit === null) === (line.classification.fix_signal === REVERT_SIGNAL);
 
 // Returns one text that lists the PRs whose classification differs from their line in the old
 // file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so
