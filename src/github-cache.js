@@ -24,17 +24,34 @@ export function cacheFolder({ env = process.env, platform = process.platform, ho
 // file name or file holds the token.
 // read(url) returns { etag, body, headers } or null. A missing, broken or partly written entry
 // gives null, so the client asks GitHub again with no If-None-Match.
+// The first read or write makes the folder if it is not there, and sets its mode to 700. So a run
+// that only reads, where every request gets a 304, still narrows an old folder.
 // write(url, entry) saves an entry. It writes a temporary file and renames it, so a reader never
 // sees half a file. A write that fails is ignored: the cache only saves requests, so it never
 // stops a run.
 export function createReplyCache({ dir, token }) {
   const tokenKey = sha256(`exhibit token\n${token}`);
-  let folderMade = false;
   const pathOf = (url) => join(dir, `${sha256(`${tokenKey}\n${url}`)}.json`);
+
+  // Only this user can read the cache: it can hold replies about private repos. mkdir sets the
+  // mode only on a new folder, so chmod also narrows a folder that was there before. Reads and
+  // writes that start together share one try. A try that fails is made again by the next one.
+  let folderReady = null;
+  function makeFolder() {
+    folderReady ??= (async () => {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await chmod(dir, 0o700);
+    })().catch((error) => {
+      folderReady = null;
+      throw error;
+    });
+    return folderReady;
+  }
 
   async function read(url) {
     let entry;
     try {
+      await makeFolder().catch(() => {});
       entry = JSON.parse(await readFile(pathOf(url), 'utf8'));
     } catch {
       return null;
@@ -49,13 +66,7 @@ export function createReplyCache({ dir, token }) {
     const path = pathOf(url);
     const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     try {
-      // Only this user can read the cache: it can hold replies about private repos. mkdir sets the
-      // mode only on a new folder, so chmod also narrows a folder that was there before.
-      if (!folderMade) {
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        await chmod(dir, 0o700);
-        folderMade = true;
-      }
+      await makeFolder();
       await writeFile(temporary, JSON.stringify({ url, etag, headers, body }), { mode: 0o600 });
       await rename(temporary, path);
     } catch {

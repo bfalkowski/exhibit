@@ -43,8 +43,9 @@ const HTTP_DATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Ju
 // `cache` is a reply cache from src/github-cache.js, or undefined for none. With a cache, a
 // request for a URL that has an entry sends If-None-Match, and a 304 reply gives the saved body.
 // A 200 reply with an ETag replaces the entry. GitHub's ETag covers the body only, not the Link
-// header, so a full page from the cache with no next page is asked again (see `get`). GraphQL
-// queries are POST requests, which have no ETag, so they never use the cache.
+// header, so after a full page from the cache with no next page, the client asks for the next page
+// number too (see `get`).
+// GraphQL queries are POST requests, which have no ETag, so they never use the cache.
 // `counts()` returns how many REST requests went to GitHub, how many of them got a 304, how many
 // GraphQL queries went, and how many GraphQL points they used.
 export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise((done) => setTimeout(done, ms)), now = Date.now, random = Math.random }) {
@@ -71,9 +72,8 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
     }
   }
 
-  // `useSaved` false sends no If-None-Match. The reply still replaces the entry.
-  async function request(url, useSaved = true) {
-    const saved = cache && useSaved ? await cache.read(url) : null;
+  async function request(url) {
+    const saved = cache ? await cache.read(url) : null;
     const init = { headers: headers() };
     if (saved) init.headers['if-none-match'] = saved.etag;
     const response = await send(url, init, 'requests');
@@ -116,8 +116,8 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
   // (undefined when it is not JSON) and the response. A reply that is not OK throws a ToolError.
   // A reply that is still a rate limit when the waits end says so, and does not blame a missing
   // permission.
-  async function getJson(url, emptyOn = [], permission, useSaved = true) {
-    const { response, limited } = await withWaits(() => request(url, useSaved));
+  async function getJson(url, emptyOn = [], permission) {
+    const { response, limited } = await withWaits(() => request(url));
     if (emptyOn.includes(response.status)) return { reply: [], response };
     if (!response.ok) throw await apiError(response, url, permission, limited);
     try {
@@ -130,19 +130,16 @@ export function createGitHub({ token, fetch, cache, sleep = (ms) => new Promise(
   // Returns one page of a list: its items, and the URL of the next page or null.
   // A 304 says the body is the same, but not the Link header. When a full last page gets a new
   // page after it, the full page does not change, so it gets a 304, and its saved Link has no
-  // next page. So a full page from the cache with no next page is asked again, with no
-  // If-None-Match, to get the Link header as it is now. A page that is not full is the last one.
+  // next page. So after a full page from the cache with no next page, the next page is the same
+  // URL with the next page number. That request uses the cache as well: once its empty reply is
+  // saved, it gets a 304 until a new item comes. A page that is not full is the last one.
   async function get(url, listField, emptyOn, permission) {
-    const page = await getPage(url, listField, emptyOn, permission, true);
-    if (page.cached && page.next === null && page.items.length >= pageSize(url)) return getPage(url, listField, emptyOn, permission, false);
-    return page;
-  }
-
-  async function getPage(url, listField, emptyOn, permission, useSaved) {
-    const { reply, response } = await getJson(url, emptyOn, permission, useSaved);
+    const { reply, response } = await getJson(url, emptyOn, permission);
     const items = listField === undefined ? reply : reply?.[listField];
     if (!Array.isArray(items)) throw notShaped(url, 'a JSON list');
-    return { items, next: nextLink(response.headers.get('link')), cached: fromCache.has(response) };
+    const next = nextLink(response.headers.get('link'));
+    if (next === null && fromCache.has(response) && items.length > 0 && items.length >= pageSize(url)) return { items, next: pageAfter(url) };
+    return { items, next };
   }
 
   async function getAll(path, { listField, emptyOn, permission } = {}) {
@@ -265,6 +262,14 @@ async function messageOf(response) {
 function pageSize(url) {
   const perPage = new URL(url).searchParams.get('per_page');
   return perPage !== null && /^\d+$/.test(perPage) ? Number(perPage) : 30;
+}
+
+// The same URL with the next page number. A URL that names no page is page 1.
+function pageAfter(url) {
+  const next = new URL(url);
+  const page = next.searchParams.get('page');
+  next.searchParams.set('page', String((page !== null && /^\d+$/.test(page) ? Number(page) : 1) + 1));
+  return next.href;
 }
 
 function nextLink(header) {
