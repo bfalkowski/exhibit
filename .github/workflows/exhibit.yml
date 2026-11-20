@@ -1,0 +1,80 @@
+# Exhibit checks its own pull requests, in shadow mode (docs/spec.md sections 10 and 13, S5).
+# This is examples/pull-request.yml with one more step: the check job sets up Node 20, as the CI
+# workflow does, because evidence.yml runs this repo's tests.
+#
+# Both jobs run Exhibit from a fixed commit on main, never ./ from the PR. With ./, a PR could
+# change the code that the publish job runs with its write token. To move to a newer Exhibit,
+# change the SHA in both jobs, in a PR of its own.
+name: Exhibit
+
+# Never pull_request_target: that runs with a write token and the base repo's secrets, on a run
+# that can be made to execute code from the PR.
+on:
+  pull_request:
+
+# No job gets a permission that it does not name below.
+permissions: {}
+
+jobs:
+  check:
+    name: Exhibit check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Read the code and the PR. The check runs the PR's code, so it gets nothing more.
+      contents: read
+    steps:
+      # The whole history, so the PR's base and head commits are both in the clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Say why the publish job is skipped
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          {
+            echo '> [!NOTE]'
+            echo '> This PR comes from a fork. GitHub gives it a token that cannot write, so the publish job is skipped: the exhibit is not stored on the data branch, and no comment is posted. The exhibit is in the workflow artifact named exhibit.'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Shadow mode: the step succeeds whatever the verdict. enforce: true is the person's decision.
+      # 6f6de5a is main after #220, the PR that added the Action.
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+        with:
+          command: check
+          enforce: false
+
+  publish:
+    name: Exhibit publish
+    needs: check
+    if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # Push the exhibit to the exhibit-data branch.
+      contents: write
+      # Post the summary comment on the PR, or update it.
+      pull-requests: write
+    steps:
+      # The base commit, never the PR's head.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exhibit
+          path: .exhibit
+
+      # The same commit of Exhibit as the check job, and the same enforce.
+      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+        with:
+          command: publish
+          comment: true
+          enforce: false

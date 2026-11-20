@@ -568,6 +568,8 @@ The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo,
   - The publish job runs after the check job, even when the check step failed in enforce mode, so the comment shows why. Its permissions are `contents: write`, for the data branch, and `pull-requests: write`, for the comment. It checks out the PR's base commit, never its head, downloads the artifact, and runs the released Exhibit with `command: publish`. It runs no script and no code from the PR.
   - For a PR from a fork, GitHub gives a token that cannot write, so the publish job is skipped. A step in the check job says why in the job summary, and the exhibit is still in the artifact.
   - Both jobs use the same released Exhibit, pinned to a release tag or a commit SHA, never `./`, which is the PR's own copy.
+- `examples/` holds the workflows that another repo copies. `examples/pull-request.yml` is the one above, with a comment on each permission that says why the job needs it. The README gives the steps to add Exhibit to a repo.
+- Exhibit checks its own PRs with `.github/workflows/exhibit.yml`, in shadow mode. It is `examples/pull-request.yml` with one more step, which sets up Node 20 for Exhibit's own tests. It runs the Action from a fixed commit on `main`, the same one the example names, so a PR cannot change the code that the publish job runs with its write token. Exhibit's own `evidence.yml` is the policy for its PRs. `test/action.test.js` reads both workflows, and `test/own-policy.test.js` reads the policy.
 - The hidden suite runs only on trusted events.
 - Later example workflows in `examples/`:
   - On push to the main branch: run `trace`.
