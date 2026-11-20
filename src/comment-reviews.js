@@ -21,7 +21,11 @@ const VERDICT = new RegExp(
 // right after a quote line in the quote (a "lazy" line). Only plain text goes on a quote this
 // way: a blank line, a heading, a code fence, a list item or a thematic break ("---") ends it.
 // And a lazy line goes on a quote only when the quote's last line is text: after a blank quote
-// line (">"), a heading, a code fence or a thematic break in the quote, the next line is not in it.
+// line (">"), a heading, a code fence, a line of code, a thematic break or an empty list item in
+// the quote, the next line is not in it. A heading may be a line of "=" or "-" under a line of
+// text, with the same count of ">" as the quote that holds the paragraph (a setext heading).
+// With fewer ">", that line is lazy text. A lazy line does not change that count. A line of
+// code is in a fence, or is indented by four spaces, not a tab, after a line that is not text.
 // A backtick fence has no backtick after its marks, so "```x``` said" is text with inline code.
 const QUOTE = /^\s*>/;
 const THEMATIC_BREAK = String.raw`(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`;
@@ -29,6 +33,9 @@ const NOT_TEXT = String.raw`#{1,6}(?:\s|$)|\`{3,}[^\`]*$|~~~|${THEMATIC_BREAK}`;
 const ENDS_QUOTE = new RegExp(String.raw`^ {0,3}(?:${NOT_TEXT}|[-+*][ \t]|\d+[.)][ \t])`);
 const ENDS_TEXT = new RegExp(String.raw`^\s*$|^ {0,3}(?:${NOT_TEXT})`);
 const QUOTE_MARKS = /^(?:\s*> ?)+/;
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+const INDENTED_CODE = /^ {4}/;
+const EMPTY_LIST_ITEM = /^ {0,3}(?:[-+*]|\d+[.)])[ \t]*$/;
 
 // A GitHub alert box, such as "> [!IMPORTANT]", is a quote in markdown, but it holds the
 // comment's own text. So the lines of an alert box are not quoted lines. A quote nested in an
@@ -40,7 +47,7 @@ const ALERT_LINE = /^\s*> ?/;
 const ALERT = /^\s*>\s*\[!(?:note|tip|important|warning|caution)\]\s*$/i;
 
 // A line in a code fence is code, not a quote, even when it starts with ">".
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 
 // The room marks its own notes, and the Dev's replies to a review, with an HTML comment such as
 // <!-- office:dev --> at the start. A Dev's reply often repeats the verdict ("Verdict merge, so I
@@ -54,6 +61,10 @@ function splitQuotes(body) {
   let fence = null;
   let quote = null;
   let text = false;
+  // The count of ">" of the quote that holds the open paragraph.
+  let paragraphDepth = 0;
+  // A code fence in the quote: its marks and the count of ">" before them.
+  let quoteFence = null;
   for (const line of body.split('\n')) {
     if (fence) {
       own.push(line);
@@ -62,11 +73,31 @@ function splitQuotes(body) {
     }
     if (QUOTE.test(line)) {
       quote ??= ALERT.test(line) ? 'alert' : 'quote';
-      if (quote !== 'quote' && NESTED_QUOTE.test(line)) quote = 'nested';
-      else if (quote === 'nested' && (!text || endsQuote(line.replace(ALERT_LINE, '')))) quote = 'alert';
-      text = !ENDS_TEXT.test(line.replace(QUOTE_MARKS, ''));
+      const depth = quoteDepth(line);
+      if (quoteFence && depth < quoteFence.depth) quoteFence = null;
+      if (quoteFence) {
+        // A line of code. It may start with ">", but it does not start a nested quote.
+        if (closesFence(stripQuoteMarks(line, quoteFence.depth), quoteFence.marks)) quoteFence = null;
+        text = false;
+      } else {
+        if (quote !== 'quote' && NESTED_QUOTE.test(line)) quote = 'nested';
+        else if (quote === 'nested' && (!text || endsQuote(line.replace(ALERT_LINE, '')))) quote = 'alert';
+        const content = line.replace(QUOTE_MARKS, '');
+        const marks = content.match(FENCE)?.[1];
+        if (marks) quoteFence = { marks, depth };
+        // A deeper quote starts a new block, so it has no open paragraph yet. A line with fewer
+        // ">" after text is lazy: it goes on the paragraph unless it starts a block, and the
+        // paragraph stays in its quote.
+        let after = 'none';
+        if (text && depth === paragraphDepth) after = 'same';
+        else if (text && depth < paragraphDepth) after = 'lazy';
+        text = isText(content, after);
+        if (after !== 'lazy') paragraphDepth = depth;
+      }
     } else if (quote && (!text || endsQuote(line))) {
       quote = null;
+      quoteFence = null;
+      paragraphDepth = 0;
     }
     if (quote === 'quote' || quote === 'nested') {
       quoted.push(line);
@@ -76,6 +107,24 @@ function splitQuotes(body) {
     own.push(line);
   }
   return { own: own.join('\n'), quoted: quoted.join('\n') };
+}
+
+// Says whether a quoted line, without its ">" marks, is text that a lazy line can go on.
+// after says what comes before it: 'same' is a paragraph in a quote with the same count of ">",
+// 'lazy' is a paragraph in a quote with more ">", and 'none' is no paragraph.
+function isText(content, after) {
+  if (ENDS_TEXT.test(content)) return false;
+  if (after === 'same') return !SETEXT_UNDERLINE.test(content);
+  if (after === 'lazy') return !EMPTY_LIST_ITEM.test(content);
+  return !INDENTED_CODE.test(content) && !EMPTY_LIST_ITEM.test(content);
+}
+
+function quoteDepth(line) {
+  return line.match(QUOTE_MARKS)[0].split('>').length - 1;
+}
+
+function stripQuoteMarks(line, count) {
+  return line.replace(new RegExp(String.raw`^(?:\s*> ?){${count}}`), '');
 }
 
 function endsQuote(line) {
