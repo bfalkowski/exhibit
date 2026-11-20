@@ -532,6 +532,13 @@ test('comments: a * row before a "*/" that comes before a new "/*" is still a co
   assert.deepEqual(counted(result), []);
 });
 
+test('comments: a later comment row that only names "/*" does not stop the look for the block end', () => {
+  for (const named of [" * Use '/*' to open.", '// Use /* to open.']) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', named, ' */'] }] }));
+    assert.deepEqual(counted(result), [], named);
+  }
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);

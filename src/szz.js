@@ -918,14 +918,20 @@ const closesBlock = (text) => {
 // Says whether one of these rows closes a block comment that opened before the first of them.
 // The look stops at the first row that opens a block with "/*": a "*/" after that row closes the
 // new block, not the earlier one. So in " * qty;", "/* a", " * b */" the last row does not make
-// " * qty;" a comment.
+// " * qty;" a comment. A row that starts with "*" or "//" opens no block, even when its text
+// names "/*", such as " * Use '/*' to open.": it is comment text or a block end.
 function closesEarlierBlock(texts) {
   for (const text of texts) {
     if (closesBlock(text)) return true;
-    if (text.includes('/*')) return false;
+    if (opensBlock(text)) return false;
   }
   return false;
 }
+
+const opensBlock = (text) => {
+  const rest = text.trim();
+  return !rest.startsWith('*') && !rest.startsWith('//') && rest.includes('/*');
+};
 
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. `starts` says for each row whether
