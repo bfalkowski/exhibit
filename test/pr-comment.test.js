@@ -107,7 +107,7 @@ test('a second run updates the same comment, and a run with nothing new leaves i
   const third = await run(github, ['--comment', '--enforce']);
   assert.equal(third.code, 0);
   assert.deepEqual(github.calls.slice(4), ['POST /graphql']);
-  assert.match(third.out, /\nLeft unchanged the comment on PR 7: /);
+  assert.match(third.out, /\nThe comment already says this\. Nothing changed on PR 7: /);
 });
 
 test('a comment by someone else that starts with the marker is left alone, and so is our own comment without it', async (t) => {

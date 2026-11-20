@@ -77,8 +77,8 @@ export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   }
   if (forge !== null) {
     const comment = await postComment(forge, exhibit, options, storage, path, result, cwd);
-    const done = { created: 'Posted', updated: 'Updated', unchanged: 'Left unchanged' }[comment.action];
-    stdout.write(`${done} the comment on PR ${exhibit.pr}: ${comment.url}\n`);
+    const done = { created: 'Posted the comment', updated: 'Updated the comment', unchanged: 'The comment already says this. Nothing changed' }[comment.action];
+    stdout.write(`${done} on PR ${exhibit.pr}: ${comment.url}\n`);
   }
   return 0;
 }
