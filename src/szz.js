@@ -690,7 +690,9 @@ const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').rep
 // And a "//" in JSX text, with a closing tag after it on the line, such as
 // "<p>Price // 10 USD</p>", is text. Other text that only looks like a comment, such as a "#"
 // in a docstring or a "//" in a template literal that spans lines, is still read as a comment.
-// The whitespace before a comment that comes off goes too, so it cannot stop a match.
+// The whitespace right before a comment that comes off goes too, so it cannot stop a match.
+// Other whitespace at the end of the line stays: it can be text in a string that goes on to
+// the next line.
 function stripComments(text, path) {
   const style = commentStyle(path);
   if (style === null) return text;
@@ -714,16 +716,17 @@ function stripComments(text, path) {
     if (quotes.includes(ch)) quote = ch;
     const spaced = i === 0 || /\s/.test(text[i - 1]);
     const lineComment = style === 'hash' ? ch === '#' : text.startsWith('//', i) && !closingTag.test(text.slice(i + 2));
-    if (spaced && lineComment) break;
+    if (spaced && lineComment) return out.trimEnd();
     if (spaced && style === 'slash' && text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2);
-      if (end === -1) break;
+      if (end === -1) return out.trimEnd();
+      out = out.trimEnd();
       i = end + 1;
       continue;
     }
     out += ch;
   }
-  return out.trimEnd();
+  return out;
 }
 
 // A JSX closing tag, such as "</p>", "</Foo.Bar>" or "</>".

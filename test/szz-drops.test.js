@@ -443,6 +443,16 @@ test('comments: a quote inside a regex literal does not hide the comment after i
   assert.deepEqual(counted(result), [['a.js', [4]]]);
 });
 
+test('comments: trailing whitespace inside a string that goes on to the next line counts', () => {
+  // No comment comes off these lines, so their end is string text, and its spaces are code.
+  const result = countedLines(diff(
+    { path: 'a.js', hunks: [{ at: 1, deleted: ['s = `abc  '], added: ['s = `abc '] }] },
+    { path: 'a.py', hunks: [{ at: 1, deleted: ['s = """abc  '], added: ['s = """abc '] }] }
+  ));
+  assert.deepEqual(counted(result), [['a.js', [1]], ['a.py', [1]]]);
+  assert.deepEqual(result.dropped, []);
+});
+
 test('comments: a rename that changes the language reads each side with its own comments', () => {
   // The old line is Python and the new line is JavaScript, so "// why" is a comment only on
   // the new side, and "# old" only on the old side, so "# new" is code.
