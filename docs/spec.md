@@ -66,7 +66,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`. Neither takes `--repo`. `exhibit publish` needs no repo name, because it pushes to `--remote`. With `--comment`, it reads the repo from the exhibit. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -76,7 +76,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, body, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
-| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. |
+| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment [--enforce]]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. With `--comment`, it then posts a short summary of the exhibit as one comment on the PR, or updates the comment it posted before (section 9.12). It reads the PR from the exhibit's `repo` and `pr`, and `GITHUB_TOKEN` must be set. Without `--enforce`, the comment says that it is shadow mode. Without `--comment`, nothing is posted. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -319,6 +319,7 @@ How `exhibit label` works:
 - It checks the label against the schema, then adds it to the end of the file at once. So quitting halfway keeps the labels given so far. A label that fails the schema is not written: `exhibit label` exits 2 and names the problem, and the file keeps its earlier lines.
 - `s` at a link question, at the draft question or at the code question skips a defect. `q` at any question, or the end of the input, quits. The defect it was on is not written, even with a draft on screen. The next run shows the skipped defects and the defects it did not reach, and no defect that has a line.
 - At the end it says how many defects it labeled and skipped, and how many still have no code. With `--json`, it shows the defects and the questions on stderr, and prints one summary line on stdout: `{ "shown": 3, "labeled": 2, "skipped": 1, "open": 1, "output": ".exhibit/labels.jsonl" }`. `shown` counts the defects it showed, and `open` counts the defects still with no line in the file.
+- With `--claude`, the end of the run also says how often the person kept Claude's draft unchanged, once for this run and once for the whole file (section 9.11). With `--json`, the summary line has the same numbers in `drafts`, with `run` and `file`. Each holds `shown`, `kept`, `edited`, `replaced` and `kept_share`, which is null when there are no drafts, and otherwise holds `kept`, `n`, `rate`, `low`, `high` and `weak`.
 - It exits 2 with a message that says to run `exhibit history` first when there is no `.exhibit/history.jsonl`, or when the history has no SZZ links. It exits 2 too when a history line fails the history schema, or a labels line is not JSON or fails the labels schema. It then names the line, and writes nothing.
 - A line for a defect that is no longer in the history, for example after a run of `exhibit history` with a smaller `--limit`, stays in the file.
 - `exhibit history` never changes this file. So when it runs again and SZZ links the fix to the same PRs, a rejected link stays rejected: the line keeps its `rejected_prs`, and `exhibit label` does not ask about the defect again.
@@ -513,7 +514,13 @@ Exhibit only reports these numbers. It never changes a rung.
 - The first time `--claude` runs in a repo, it says in one line what is sent to Anthropic's API: the fix PR's title and body, the changed lines, and what git blame says about them, which is the commit, the author's name and the commit message, and the titles of the linked PRs. It then writes `.exhibit/claude-notice-shown`, so the line does not show again.
 - Each draft is marked as a draft until the person acts on it. A draft is never written as a label by itself.
 - An API error, a refusal, or a draft that does not fit is shown as a plain message, and the person labels that defect by hand. The labels already written stay.
-- Exhibit records how often the person keeps Claude's draft unchanged: `labeled_by` and `claude_draft` in each line (section 8.4). That number measures the drafter.
+- Exhibit records how often the person keeps Claude's draft unchanged: `labeled_by` and `claude_draft` in each line (section 8.4). That number measures the drafter, so the person can decide how far to trust the drafts.
+- At the end of each `exhibit label --claude` run, it shows that number, from the labels lines alone, so it is the same each time it is worked out. It counts it twice: for the lines this run wrote, and for every line in `.exhibit/labels.jsonl`.
+  - Drafts shown: the lines with `claude_draft`. A skipped defect, or a defect left when the person quit, has no line, so its draft is not counted. Nor is a draft that failed.
+  - Kept unchanged: `claude_draft_confirmed`. Edited: `claude_draft_edited`, a change to the code, the category or both. Replaced: `person` with `claude_draft`, after `t`. A draft counts as kept only when both its code and its category are unchanged.
+  - The kept share is kept divided by drafts shown, with its n and the exact 95% Clopper-Pearson interval, as in section 9.10. So 7 kept of 10 shown is 70%, with an interval of 34% to 94%. The text rounds the low end down and the high end up, so it never shows an interval narrower than the real one. The 2.5% tail sits on each side; with 0 kept the low end is 0, and with every draft kept the high end is 1.
+  - With fewer than 10 drafts, it says the number is weak. With 9 it is weak, and with 10 it is not.
+  - With no drafts, it says there are none and shows no share, not 0%.
 
 ### 9.12 Storage
 
@@ -529,9 +536,17 @@ The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wi
   - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`. An identity variable that is set but empty, such as `GIT_AUTHOR_NAME=`, counts as not set. When git still cannot make the commit, publish exits 2 with git's reason.
 - `local` writes the file to a folder, `settings.local_path` or `--local-path`, by default `.exhibit/out`, relative to the repo. It makes no git change. When the file already holds the same bytes, it writes nothing.
 
+**The PR comment.** With `--comment`, publish posts a short summary of the exhibit as one comment on the PR, so a reviewer reads the verdict and the gaps without opening CI. Posting is a forge method, `upsertComment`, beside the others in the forge module.
+
+- The comment starts with a hidden marker, `<!-- exhibit:pr-summary -->`. On each later run, publish updates the first comment that starts with the marker and that the token's own account wrote. It never changes a comment by anyone else, even one that starts with the marker. With no such comment, it posts a new one. When the comment already holds the same text, it changes nothing.
+- The comment shows the verdict, the head commit, the kinds and the risk, and each gap with how to fix it. It shows at most the first 10 gaps, then says how many more there are. Without `--enforce`, it says "Shadow mode: nothing waits on this."
+- It ends with a link to the full exhibit, on the data branch at the commit that holds it, when the remote is the PR's repo on GitHub. Otherwise it names the stored file.
+- Publish checks for the repo, the PR number and `GITHUB_TOKEN` before it stores the exhibit, and a missing one gives exit 2 and stores nothing. It stores the exhibit before it posts the comment. A failure to post, such as a 403 from a token with no write permission, gives exit 2 and a message that says the exhibit is stored, and the stored exhibit stays. A fine-grained token needs the permission "Pull requests: write".
+- A PR from a fork gets a token that cannot write, so the GitHub Action ticket handles comments for those PRs.
+
 Later tickets add the rest of storage:
 
-- In CI, the exhibit is uploaded as a workflow artifact. A short summary is posted as one PR comment, which is updated on each run.
+- In CI, the exhibit is uploaded as a workflow artifact.
 - The history cache and reports live on the data branch too.
 
 ## 10. GitHub Action

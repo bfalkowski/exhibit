@@ -174,7 +174,7 @@ function currentEnvironment() {
   return { node: `${process.versions.node.split('.')[0]}.x`, os: process.platform };
 }
 
-const VERDICT_WORDS = {
+export const VERDICT_WORDS = {
   meets_policy: 'meets the policy',
   needs_person: 'needs a person',
   error: 'Exhibit failed'

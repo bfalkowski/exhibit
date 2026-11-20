@@ -79,6 +79,17 @@ test('it stops after three waits and says the rate limit is used up', async () =
   assert.equal(s.waits.length, 3);
 });
 
+test('a write that is still a secondary rate limit after three waits says the rate limit is used up, not to check the token', async () => {
+  const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
+  const s = scripted([limited, limited, limited, limited]);
+  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
+  await assert.rejects(github.write('POST', '/x', { body: 'text' }, { permission: 'Pull requests: write' }), (error) => {
+    assert.equal(error.message, 'GitHub answered 403 (You have exceeded a secondary rate limit.) for /x. GitHub\'s rate limit is used up: wait and try again.');
+    return true;
+  });
+  assert.deepEqual(s.waits, [60_000, 120_000, 240_000]);
+});
+
 test('it does not wait longer than 15 minutes for a reset', async () => {
   const s = scripted([{ status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '5000' }, body: {} }]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, now: () => 0 });
