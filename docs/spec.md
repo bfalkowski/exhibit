@@ -75,8 +75,8 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit label [--json] [--claude]` | Shows each escaped defect that has no code yet, one at a time, with its SZZ evidence. The person types a code, a category and the evidence that would have caught it, or skips the defect. Each label goes to `.exhibit/labels.jsonl` at once (section 8.4). With `--claude`, Claude drafts a code and a category first, and the person confirms the draft, edits it, or throws it away (section 9.11). |
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
-| `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, body, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
-| `exhibit publish --evidence FILE [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment [--enforce]]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. With `--comment`, it then posts a short summary of the exhibit as one comment on the PR, or updates the comment it posted before (section 9.12). It reads the PR from the exhibit's `repo` and `pr`, and `GITHUB_TOKEN` must be set. Without `--enforce`, the comment says that it is shadow mode. Without `--comment`, nothing is posted. |
+| `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name`, each with `[--policy FILE] [--shadow]` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. When it fails before it has a verdict, such as on a bad argument, a bad policy or a commit that is not in the clone, it writes no `evidence.json`, and `summary.md` says that the verdict is `error` and why. `--policy` reads the policy from that path in the repo in place of `evidence.yml`, and a change to that file is then the policy change (section 8.2). `--shadow` is shadow mode: the run and the files are the same, but the exit code is 0 for every verdict, `error` too, and `summary.md` says so (section 10). `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, body, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
+| `exhibit publish --evidence FILE [--policy FILE] [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment] [--enforce]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--policy` reads the settings from that path in the repo in place of `evidence.yml`. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. With `--comment`, it then posts a short summary of the exhibit as one comment on the PR, or updates the comment it posted before (section 9.12). It reads the PR from the exhibit's `repo` and `pr`, and `GITHUB_TOKEN` must be set. Without `--enforce`, the comment says that it is shadow mode. Without `--comment`, nothing is posted, and `--enforce` changes nothing. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -187,12 +187,12 @@ A probe can set `author: hidden`. Exhibit then counts it as a check the builder 
 
 The fields:
 
-- `policy`: the policy file and the SHA-256 of its bytes. `sha256` is null when there is no `evidence.yml`.
+- `policy`: the policy file and the SHA-256 of its bytes. `path` is the policy file, which is `evidence.yml` unless `--policy` names another file. `sha256` is null when that file is not there.
 - `repo` is `owner/name` from `--repo`, or null. `pr` is the number from `--pr`, or null.
 - `base` and `head` are full commit SHAs. The changed files are the files that differ between the merge base of the two and `head`. A renamed file counts under its old path and its new path.
-- `classification` (section 9.1): `kinds` holds the matched kinds, sorted by name. `fix_signal` is the first fix signal that matched, or null. `signals_from` is `pr` when the forge gave the title, body, labels and branch, or `branch` when only the local branch name was known. `used_default` is true when no kind matched. `policy_changed` is true when the change touches `evidence.yml`.
+- `classification` (section 9.1): `kinds` holds the matched kinds, sorted by name. `fix_signal` is the first fix signal that matched, or null. `signals_from` is `pr` when the forge gave the title, body, labels and branch, or `branch` when only the local branch name was known. `used_default` is true when no kind matched. `policy_changed` is true when the change touches the policy file, which is `evidence.yml` unless `--policy` names another file.
 - `requirements`: one for each evidence item the change needs, in order: the matched kinds by name, then each kind's own order. A need that two kinds share is one requirement, and its `kinds` names both. `params` holds the item's fields, without `author`. `author` is `hidden` for a probe with `author: hidden`, and `builder` for every other item.
-- `gaps`: one for each requirement that is not `met`, plus a gap of type `policy-change` when the change touches `evidence.yml`, and a gap of type `no-rule` when no kind matched and the policy has no `default`. Each gap says how to fix it in plain words.
+- `gaps`: one for each requirement that is not `met`, plus a gap of type `policy-change` when the change touches the policy file, and a gap of type `no-rule` when no kind matched and the policy has no `default`. Each gap says how to fix it in plain words.
 - `duration_ms` and `created_at` are the timing fields. Two runs on the same base and head, with the same policy, give the same file apart from them.
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
@@ -478,7 +478,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 ### 9.8 Verdict
 
 - `meets_policy` when every requirement is `met`, and there is no other gap. Exit code 0.
-- `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches `evidence.yml` (section 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
+- `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches the policy file (sections 8.2 and 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
 - One `skipped` does not count: a `failing-before` whose `when` limits it to a fix or a feature, on a change that is neither. The policy does not need it for that change, so it is no gap, and the change can still get `meets_policy`. Its line in `summary.md` gives the reason.
 - `error` when Exhibit itself failed: a collector threw, or gave back no valid status, so its requirement is `error`. Exit code 2. An error never becomes `meets_policy`, and it wins over `needs_person`.
 - A failure before Exhibit can build the exhibit, such as a bad policy, a ref that is not in the clone, or any unexpected throw, also exits 2. `exhibit check` removes the old `evidence.json` and `summary.md` when it starts, so no old verdict is left behind, and it prints `verdict: error` on stderr.
@@ -542,28 +542,36 @@ The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wi
 - The comment shows the verdict, the head commit, the kinds and the risk, and each gap with how to fix it. It shows at most the first 10 gaps, then says how many more there are. Without `--enforce`, it says "Shadow mode: nothing waits on this."
 - It ends with a link to the full exhibit, on the data branch at the commit that holds it, when the remote is the PR's repo on GitHub. Otherwise it names the stored file.
 - Publish checks for the repo, the PR number and `GITHUB_TOKEN` before it stores the exhibit, and a missing one gives exit 2 and stores nothing. It stores the exhibit before it posts the comment. A failure to post, such as a 403 from a token with no write permission, gives exit 2 and a message that says the exhibit is stored, and the stored exhibit stays. A fine-grained token needs the permission "Pull requests: write".
-- A PR from a fork gets a token that cannot write, so the GitHub Action ticket handles comments for those PRs.
+- A PR from a fork gets a token that cannot write, so the GitHub Action skips the publish job for it (section 10).
 
 Later tickets add the rest of storage:
 
-- In CI, the exhibit is uploaded as a workflow artifact.
 - The history cache and reports live on the data branch too.
 
 ## 10. GitHub Action
 
-- `action.yml` uses the Node 20 runtime.
-- Inputs:
-  - `command`: `check`, `trace` or `history`.
-  - `policy`: the path to the policy file.
-  - `data-branch`.
-  - `comment`: true or false.
-  - `enforce`: false means shadow mode, and the check always succeeds. True means the check fails on `needs_person`.
-- Example workflows in `examples/`:
-  - On `pull_request`: run `check`.
+The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo, only maps its inputs to CLI flags, and the CLI's exit code is the step's exit code. Every decision, shadow mode too, is in the CLI, so a GitLab CI job can later be a second thin wrapper. `test/action.test.js` reads `action.yml` and runs its script to check this.
+
+- `action.yml` is a composite action. It installs Exhibit's own packages with `npm ci`, then runs the CLI with the `node` on the job's PATH, which must be Node 20 or later, as on GitHub's runners. It does not set up Node itself: `exhibit check` runs the repo's own tests, and they must run on the Node that the repo set up.
+- Inputs, each passed to the script as an environment variable, never pasted into it:
+  - `command`: `check` (the default) or `publish`. `trace` and `history` come with slices S7 and S8.
+  - `policy`: the path of the policy file in the repo, by default `evidence.yml`. It goes to `--policy`.
+  - `data-branch`: for `publish`, it goes to `--data-branch`. Empty, the default, means `settings.data_branch`, or `exhibit-data`.
+  - `comment`: true or false, by default false. For `publish`, true gives `--comment`.
+  - `enforce`: true or false, by default false. False is shadow mode: `check` gets `--shadow`, so the step succeeds whatever the verdict. True fails the check step on `needs_person` and on `error`, and `publish` gets `--enforce`, so the comment does not say shadow mode.
+  - `token`: the token for `GITHUB_TOKEN`, by default the job's own token.
+  - A `command`, `comment` or `enforce` that is not one of its values fails the step with exit 2, and runs nothing.
+- `check` runs `exhibit check --pr N --repo owner/name`, with the PR from the event. Then, whatever its exit code, the step writes `summary.md` to the job summary, and uploads `evidence.json`, `summary.md` and `.exhibit/probes/` as the workflow artifact `exhibit`. `summary.md` is there for a run that failed before it had a verdict too, so an error shows in shadow mode, and a broken setup is not hidden.
+- `publish` runs `exhibit publish --evidence .exhibit/evidence.json`, where the publish job downloads the artifact. When the check failed before it had a verdict, there is no `evidence.json`, so the publish step fails with exit 2 and posts no comment. The job then shows on the PR as failed, in shadow mode too, and the check job's summary says why.
+- Two jobs, by trust. `examples/pull-request.yml` holds them:
+  - The check job runs on `pull_request`, never on `pull_request_target`, so code from a PR never runs with a write token. Its only permission is `contents: read`. It checks out the PR with its whole history, so the base and head commits are both in the clone, and runs the Action with `command: check`.
+  - The publish job runs after the check job, even when the check step failed in enforce mode, so the comment shows why. Its permissions are `contents: write`, for the data branch, and `pull-requests: write`, for the comment. It checks out the PR's base commit, never its head, downloads the artifact, and runs the released Exhibit with `command: publish`. It runs no script and no code from the PR.
+  - For a PR from a fork, GitHub gives a token that cannot write, so the publish job is skipped. A step in the check job says why in the job summary, and the exhibit is still in the artifact.
+  - Both jobs use the same released Exhibit, pinned to a release tag or a commit SHA, never `./`, which is the PR's own copy.
+- The hidden suite runs only on trusted events.
+- Later example workflows in `examples/`:
   - On push to the main branch: run `trace`.
   - Weekly on a schedule: run `history` and `backtest`, then publish the report.
-- Permissions: `contents: read` for the check. `contents: write` only for the job that writes the data branch. `pull-requests: write` for the comment.
-- Security: the check runs on `pull_request`, never on `pull_request_target`, so code from a PR never runs with a write token. The hidden suite runs only on trusted events.
 
 ## 11. Technical decisions
 
@@ -642,7 +650,7 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 | Mutation testing is slow. | It runs on the changed lines only, under a time budget. |
 | A policy learned in one repo may not fit another. | There is one policy per repo, and two field-test repos from the start. |
 | One model writes the code and the fixes. | Hidden checks and the blind sample are the defense. |
-| The builder edits the policy to pass its own PR. | A change to `evidence.yml` always gives `needs_person`, and the maintainer reviews it. |
+| The builder edits the policy to pass its own PR. | A change to the policy file always gives `needs_person`, and the maintainer reviews it. |
 
 ## 16. Open questions
 

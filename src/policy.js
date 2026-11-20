@@ -1,47 +1,48 @@
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, posix } from 'node:path';
 import { parse } from 'yaml';
 import { DEFAULT_FIX_SIGNALS, REVERT_SIGNAL } from './fix-signals.js';
 import { schemaProblems } from './json-schema.js';
 import { ToolError } from './tool-error.js';
 
-const POLICY = 'evidence.yml';
+// The policy's path in the repo when --policy does not give another one.
+export const DEFAULT_POLICY = 'evidence.yml';
 const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
 const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'probe'];
 const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr'];
 // A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
 const PR_NUMBER = /^[1-9]\d*$/;
 
-// Reads the policy, evidence.yml, in `cwd` and checks it against schema/evidence.schema.json
+// Reads the policy, evidence.yml or the repo path `path`, in `cwd` and checks it against schema/evidence.schema.json
 // (spec 8.1). Every command reads the policy with this one function, so they all see it the same
 // way. It returns the policy with settings.fix_signals filled in: the defaults when there is no
 // file, or when the file does not set them. A file that is not valid YAML, or that breaks a rule
 // of the schema, is a ToolError, so the run exits 2. The message names each bad field.
-export async function readPolicy(cwd) {
+export async function readPolicy(cwd, path = DEFAULT_POLICY) {
   let text;
   try {
-    text = await readFile(join(cwd, POLICY), 'utf8');
+    text = await readFile(join(cwd, path), 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return withDefaults({});
-    throw new ToolError(`could not read ${POLICY}: ${error.message}`);
+    throw new ToolError(`could not read ${path}: ${error.message}`);
   }
 
   let policy;
   try {
     policy = parse(text);
   } catch (error) {
-    throw new ToolError(`${POLICY} is not valid YAML: ${error.message}`);
+    throw new ToolError(`${path} is not valid YAML: ${error.message}`);
   }
   // An empty file, or one with only comments, is an empty policy.
   if (policy === null || policy === undefined) policy = {};
 
   // fix_signals keep the messages they had before the rest of the file was checked.
   const signals = isMapping(policy) && isMapping(policy.settings) ? policy.settings.fix_signals : undefined;
-  if (signals !== undefined && signals !== null) checkSignals(signals);
+  if (signals !== undefined && signals !== null) checkSignals(signals, path);
 
   const problems = schemaProblems(schema, policy);
-  if (problems.length > 0) throw new ToolError(problems.map(describe).join('\n'));
+  if (problems.length > 0) throw new ToolError(problems.map((problem) => describe(problem, path)).join('\n'));
   return withDefaults(policy);
 }
 
@@ -71,8 +72,8 @@ function bareWhenEmpty(item) {
 
 // Turns one schema problem into a sentence that names the field, such as
 // "evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".".
-function describe({ path, what }) {
-  return `${POLICY}${path.length === 0 ? '' : ` ${fieldName(path)}`} ${needsItemMessage(path, what) ?? what}.`;
+function describe({ path, what }, file) {
+  return `${file}${path.length === 0 ? '' : ` ${fieldName(path)}`} ${needsItemMessage(path, what) ?? what}.`;
 }
 
 // ['kinds', 'relay-core', 'needs', 2, 'probe'] → "kinds.relay-core.needs[2].probe".
@@ -95,8 +96,8 @@ function needsItemMessage(path, what) {
   return null;
 }
 
-function checkSignals(signals) {
-  const where = `${POLICY} settings.fix_signals`;
+function checkSignals(signals, file) {
+  const where = `${file} settings.fix_signals`;
   if (!Array.isArray(signals)) throw new ToolError(`${where} must be a list like [label:bug, title:fix, branch:fix/], not ${JSON.stringify(signals)}.`);
   if (signals.length === 0) throw new ToolError(`${where} needs at least one signal. Leave it out to use the defaults [${DEFAULT_FIX_SIGNALS.join(', ')}].`);
   signals.forEach((signal, i) => {
@@ -130,4 +131,15 @@ function spaceHint(value) {
 
 function isMapping(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The value of --policy as a path in the repo, with "/" between folders and no "./" at the start,
+// so it can be compared with the changed paths from git. A path outside the repo is refused: the
+// exhibit records the policy as a repo path, and a change to it must show as a policy change.
+export function policyPath(value) {
+  const path = posix.normalize(String(value).replaceAll('\\', '/'));
+  if (value === '' || isAbsolute(value) || path === '.' || path === '..' || path.startsWith('../') || path.endsWith('/')) {
+    throw new ToolError(`--policy must be the path of a file in the repo, such as evidence.yml or .github/evidence.yml, not "${value}".`);
+  }
+  return path;
 }

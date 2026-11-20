@@ -1,0 +1,99 @@
+# The Exhibit GitHub Action (docs/spec.md section 10).
+#
+# This file only maps the inputs to flags of the exhibit CLI, and the CLI's exit code is the step's
+# exit code. Every decision, shadow mode too, is in the CLI, so a GitLab CI job can later be a
+# second thin wrapper. test/action.test.js checks that this file stays that way.
+#
+# It runs the CLI with the node on the job's PATH, which must be Node 20 or later. GitHub's
+# runners have it. It does not set up Node itself: exhibit check runs the repo's own tests, and
+# they must run on the Node that the repo set up.
+name: Exhibit
+description: Every pull request brings its own evidence. Runs exhibit check or exhibit publish.
+author: bfalkowski
+branding:
+  icon: check-square
+  color: gray-dark
+
+inputs:
+  command:
+    description: The command to run, check or publish.
+    required: false
+    default: check
+  policy:
+    description: The path of the policy file in the repo. It goes to --policy.
+    required: false
+    default: evidence.yml
+  data-branch:
+    description: For publish, the branch that stores the exhibits. It goes to --data-branch. Empty means settings.data_branch in the policy, or exhibit-data.
+    required: false
+    default: ''
+  comment:
+    description: For publish, true posts or updates the summary comment on the PR. It goes to --comment.
+    required: false
+    default: 'false'
+  enforce:
+    description: false is shadow mode, and the check step succeeds whatever the verdict (check --shadow). true fails the check step on needs_person and on error, and publish says so in the comment (publish --enforce).
+    required: false
+    default: 'false'
+  token:
+    description: The token that reads the PR and posts the comment. It goes to GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Exhibit
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+    - name: Run exhibit ${{ inputs.command }}
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_POLICY: ${{ inputs.policy }}
+        INPUT_DATA_BRANCH: ${{ inputs.data-branch }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_ENFORCE: ${{ inputs.enforce }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        bad() { echo "::error::The input $1 must be $2, not \"$3\"."; exit 2; }
+        case "$INPUT_COMMENT" in true | false) ;; *) bad comment 'true or false' "$INPUT_COMMENT" ;; esac
+        case "$INPUT_ENFORCE" in true | false) ;; *) bad enforce 'true or false' "$INPUT_ENFORCE" ;; esac
+        case "$INPUT_COMMAND" in
+          check)
+            args=(check --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --policy "$INPUT_POLICY")
+            if [ "$INPUT_ENFORCE" = false ]; then args+=(--shadow); fi
+            ;;
+          publish)
+            args=(publish --evidence .exhibit/evidence.json --policy "$INPUT_POLICY")
+            if [ -n "$INPUT_DATA_BRANCH" ]; then args+=(--data-branch "$INPUT_DATA_BRANCH"); fi
+            if [ "$INPUT_COMMENT" = true ]; then args+=(--comment); fi
+            if [ "$INPUT_ENFORCE" = true ]; then args+=(--enforce); fi
+            ;;
+          *) bad command 'check or publish' "$INPUT_COMMAND" ;;
+        esac
+        exec node "$GITHUB_ACTION_PATH/bin/exhibit.js" "${args[@]}"
+
+    # exhibit check writes summary.md for every verdict, and for a run that failed before it had
+    # one, so the job summary shows an error in shadow mode too.
+    - name: Show the summary
+      if: ${{ !cancelled() && inputs.command == 'check' }}
+      shell: bash
+      run: cat .exhibit/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload the exhibit
+      if: ${{ !cancelled() && inputs.command == 'check' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: exhibit
+        path: |
+          .exhibit/evidence.json
+          .exhibit/summary.md
+          .exhibit/probes/
+        include-hidden-files: true
+        if-no-files-found: warn
+        overwrite: true

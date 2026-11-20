@@ -3,19 +3,19 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
-import { buildExhibit, COLLECTORS, EXIT_CODES, renderSummary } from '../check.js';
+import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
-import { readPolicy } from '../policy.js';
+import { DEFAULT_POLICY, policyPath, readPolicy } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
-import { ToolError } from '../tool-error.js';
+import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
 
 const run = promisify(execFile);
 const OUTPUT = { evidence: '.exhibit/evidence.json', summary: '.exhibit/summary.md' };
 // The folder for each probe's output and artifacts (spec 9.6).
 const PROBES = '.exhibit/probes';
-const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] [--json], or exhibit check --pr N --repo owner/name [--json]';
+const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] [--policy FILE] [--shadow] [--json], or exhibit check --pr N --repo owner/name [--policy FILE] [--shadow] [--json]';
 
 // `exhibit check --base REF [--head REF]`, or `exhibit check --pr N --repo owner/name`
 // Classifies the change from base to head, works out what the policy needs, collects the evidence,
@@ -26,18 +26,43 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, body,
 // labels and branch for the fix signals. Without it, only the local branch name is known.
 //
+// --policy FILE reads the policy from that path in the repo, in place of evidence.yml.
+//
 // It removes the old evidence.json, summary.md and probe files first. So when the run fails before
-// it can write them, no old file is left to be read as this run's verdict.
-// Any failure that is not a verdict throws. The CLI then prints it and exits 2.
-export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
+// it can write them, no old file is left to be read as this run's verdict. Any failure that is not
+// a verdict then writes a summary.md that says the verdict is error and why, and throws. The CLI
+// prints it and exits 2.
+//
+// --shadow is shadow mode (spec 10): the run is the same, and the files say the same verdict, but
+// the exit code is 0 for every verdict, error too. A failure that is not a verdict is printed here
+// and gives 0 as well. So a CI step in shadow mode never fails on Exhibit, and summary.md shows
+// what went wrong.
+export async function check(argv, { env, cwd, fetch, stdout, stderr = process.stderr, collectors }) {
   // Remove the old files before anything can fail, a bad argument too.
   await Promise.all([...Object.values(OUTPUT), PROBES].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
+  // Read before the other arguments, so a bad argument in shadow mode gives 0 too.
+  const shadow = argv.includes('--shadow');
+  try {
+    return await runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow });
+  } catch (error) {
+    const message = describeError(error);
+    await mkdir(join(cwd, '.exhibit'), { recursive: true })
+      .then(() => writeFile(join(cwd, OUTPUT.summary), renderErrorSummary(message, { shadow })))
+      // The error that stopped the run says more than one about the summary, so it wins.
+      .catch(() => {});
+    if (!shadow) throw error;
+    stderr.write(`exhibit: ${message}\nexhibit: verdict: error\nexhibit: shadow mode, so the exit code is 0. ${OUTPUT.summary} says why.\n`);
+    return 0;
+  }
+}
+
+async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
   const options = parseOptions(argv, forgeModule);
 
-  const policy = await readPolicy(cwd);
-  const policyFile = { path: 'evidence.yml', sha256: await fileHash(join(cwd, 'evidence.yml')) };
+  const policy = await readPolicy(cwd, options.policy);
+  const policyFile = { path: options.policy, sha256: await fileHash(join(cwd, options.policy)) };
 
   let refs;
   if (options.pr !== null) {
@@ -75,15 +100,16 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
 
   await writeTogether(cwd, [
     [OUTPUT.evidence, JSON.stringify(exhibit, null, 2) + '\n'],
-    [OUTPUT.summary, renderSummary(exhibit)]
+    [OUTPUT.summary, renderSummary(exhibit, { shadow })]
   ]);
 
-  const code = EXIT_CODES[exhibit.verdict];
+  const code = shadow ? 0 : EXIT_CODES[exhibit.verdict];
   if (options.json) {
     stdout.write(JSON.stringify({ verdict: exhibit.verdict, exit_code: code, gaps: exhibit.gaps.length, evidence: OUTPUT.evidence, summary: OUTPUT.summary }) + '\n');
   } else {
     const gaps = exhibit.gaps.length === 0 ? 'No gaps.' : `${exhibit.gaps.length} ${exhibit.gaps.length === 1 ? 'gap' : 'gaps'}, listed with how to fix ${exhibit.gaps.length === 1 ? 'it' : 'them'} in ${OUTPUT.summary}.`;
     stdout.write(`Verdict: ${exhibit.verdict}. ${gaps}\nWrote ${OUTPUT.evidence} and ${OUTPUT.summary}.\n`);
+    if (shadow) stdout.write('Shadow mode: nothing waits on this verdict, so the exit code is 0.\n');
   }
   return code;
 }
@@ -178,7 +204,7 @@ function parseOptions(argv, forgeModule) {
   try {
     ({ values } = parseArgs({
       args: argv,
-      options: { base: { type: 'string' }, head: { type: 'string' }, pr: { type: 'string' }, repo: { type: 'string' }, json: { type: 'boolean' } },
+      options: { base: { type: 'string' }, head: { type: 'string' }, pr: { type: 'string' }, repo: { type: 'string' }, policy: { type: 'string' }, shadow: { type: 'boolean' }, json: { type: 'boolean' } },
       strict: true,
       allowPositionals: false
     }));
@@ -195,5 +221,5 @@ function parseOptions(argv, forgeModule) {
   } else if (values.base === undefined) {
     throw new ToolError(`give --base REF, the commit the change starts from, such as main, or --pr N. ${USAGE}`);
   }
-  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, json: values.json === true };
+  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, policy: policyPath(values.policy ?? DEFAULT_POLICY), json: values.json === true };
 }
