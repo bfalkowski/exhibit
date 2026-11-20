@@ -1,5 +1,5 @@
 {
-  "/repos/acme/widgets/pulls?state=closed&per_page=100": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null}": {
     "status": 500,
     "headers": {},
     "body": {

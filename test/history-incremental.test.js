@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { history } from '../src/commands/history.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
+import { graphqlReplies } from './fixtures/github/graphql-replies.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { writeHistoryReplay } from './fixtures/github/szz-replies.js';
 import { gitEnv } from './fixtures/git-env.js';
@@ -56,16 +57,27 @@ function repo() {
 }
 
 // Writes the recorded replies for `gh` to a new file, and returns a fetch that replays it.
+// Each PR has two files, and a page holds one item, so history asks for the second page of a
+// PR's files when it reads that PR, and only then. So a test sees which PRs a run read.
 function replies(gh) {
-  const base = `/repos/${REPO}`;
-  const recorded = { [`${base}/pulls?state=closed&per_page=100`]: { status: 200, headers: {}, body: gh.pulls } };
-  for (const pr of gh.pulls) {
-    recorded[`${base}/pulls/${pr.number}/files?per_page=100`] = { status: 200, headers: {}, body: [{ filename: `src/f${pr.number}.js`, additions: 1, deletions: 0 }] };
-    recorded[`${base}/pulls/${pr.number}/reviews?per_page=100`] = { status: 200, headers: {}, body: gh.reviews[pr.number] ?? [] };
-    recorded[`${base}/issues/${pr.number}/comments?per_page=100`] = { status: 200, headers: {}, body: [] };
-    recorded[`${base}/commits/${pr.head.sha}/check-runs?per_page=100`] = { status: 200, headers: {}, body: { total_count: 0, check_runs: [] } };
-    recorded[`${base}/commits/${pr.head.sha}/status?per_page=100`] = { status: 200, headers: {}, body: { state: 'pending', statuses: [], total_count: 0 } };
-  }
+  const recorded = graphqlReplies(REPO, gh.pulls.map((pr) => ({
+    number: pr.number,
+    url: pr.html_url,
+    title: pr.title,
+    body: pr.body,
+    author: { __typename: 'User', login: pr.user.login },
+    mergedAt: pr.merged_at,
+    mergeSha: pr.merge_commit_sha,
+    baseRef: pr.base.ref,
+    baseSha: pr.base.sha,
+    headRef: pr.head.ref,
+    headSha: pr.head.sha,
+    labels: [],
+    files: [{ path: `src/f${pr.number}.js`, additions: 1, deletions: 0 }, { path: `test/f${pr.number}.test.js`, additions: 2, deletions: 0 }],
+    reviews: (gh.reviews[pr.number] ?? []).map((review) => ({ state: review.state, submittedAt: review.submitted_at, author: { __typename: 'User', login: review.user.login } })),
+    comments: [],
+    ci: []
+  })), { itemsPerPage: 1 });
   const path = join(newFolder(), 'replies.json');
   writeFileSync(path, JSON.stringify(recorded));
   return replayFetch(path);
@@ -90,11 +102,11 @@ async function run(cwd, gh, args = []) {
 
 const readLines = (cwd) => readFileSync(join(cwd, '.exhibit', 'history.jsonl'), 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
-// The PR numbers that a list of URL paths asks about, one each, smallest first.
+// The PR numbers whose files a run asked for, one each, smallest first: the PRs it read.
 function prsAsked(asked) {
   const numbers = new Set();
   for (const key of asked) {
-    const match = key.match(/\/(?:pulls|issues)\/(\d+)\//) ?? key.match(/\/commits\/c+(\d+)\//);
+    const match = key.match(/^graphql Pull\w+ .*"number":(\d+),/);
     if (match) numbers.add(Number(match[1]));
   }
   return [...numbers].sort((a, b) => a - b);
@@ -108,31 +120,24 @@ test('a second run with no new merges asks only about the PRs in the look-back w
 
   const second = await run(cwd, gh);
   // The newest merge is November 14, so the window starts on November 7: PRs 3 and 4.
-  assert.deepEqual([...second.asked].sort(), [
-    `/repos/${REPO}/pulls?state=closed&per_page=100`,
-    ...[4, 3].flatMap((n) => [
-      `/repos/${REPO}/pulls/${n}/files?per_page=100`,
-      `/repos/${REPO}/pulls/${n}/reviews?per_page=100`,
-      `/repos/${REPO}/issues/${n}/comments?per_page=100`,
-      `/repos/${REPO}/commits/${'c'.repeat(38)}0${n}/check-runs?per_page=100`,
-      `/repos/${REPO}/commits/${'c'.repeat(38)}0${n}/status?per_page=100`
-    ])
-  ].sort());
+  // One query reads every merged PR. Then one asks for the rest of each read PR's files.
+  assert.deepEqual(prsAsked(second.asked), [3, 4]);
+  assert.equal(second.asked.length, 3);
   assert.deepEqual(readLines(cwd).map((line) => line.number), [4, 3, 2, 1]);
 });
 
-test('every run prints how many GitHub requests it made, in text and in --json', async () => {
+test('every run prints how many GitHub requests and GraphQL queries it made, in text and in --json', async () => {
   const cwd = newFolder();
   const gh = repo();
   const first = await run(cwd, gh);
-  // 1 for the list, then 5 for each of the 4 PRs.
-  assert.match(first.stdout, /Made 21 GitHub requests\./);
+  // 1 query for the list, then 1 for the second page of files of each of the 4 PRs. Each costs 1 point.
+  assert.match(first.stdout, /\nMade 0 GitHub REST requests\. 0 got a 304 and came from the cache in .*\nMade 5 GitHub GraphQL queries, which used 5 points of the GraphQL rate limit\.\n$/);
   assert.match(first.stdout, /Read all 4 merged PRs/);
 
   const second = await run(cwd, gh, ['--json']);
   const summary = JSON.parse(second.stdout);
-  assert.equal(summary.github.requests, 11);
-  assert.equal(summary.github.requests, second.asked.length);
+  assert.deepEqual([summary.github.requests, summary.github.graphql], [0, { queries: 3, points: 3 }]);
+  assert.equal(summary.github.graphql.queries, second.asked.length);
   assert.deepEqual({ mode: summary.mode, prs: summary.prs, read: summary.read }, { mode: 'incremental', prs: 4, read: 2 });
 });
 
@@ -280,9 +285,11 @@ test('a changed fix_signals classifies every kept line again, with no extra GitH
     [1, { fix: true, fix_signal: 'pr:1' }]
   ]);
   for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
-  // The same 11 requests as the run with no change: the list, and 5 for each of PRs 3 and 4.
+  // The same cost as the run with no change: no REST request, and the same 3 GraphQL queries,
+  // the list and one query each for PRs 3 and 4.
   const summary = JSON.parse(changed.stdout);
-  assert.equal(summary.github.requests, 11);
+  assert.deepEqual([summary.github.requests, summary.github.graphql], [0, { queries: 3, points: 3 }]);
+  assert.deepEqual(summary.github.graphql, JSON.parse(unchanged.stdout).github.graphql);
   assert.deepEqual([...changed.asked].sort(), [...unchanged.asked].sort());
   assert.deepEqual({ mode: summary.mode, read: summary.read }, { mode: 'incremental', read: 2 });
   assert.match(changed.stderr, /exhibit: note: the fix signals now classify 3 PRs in \.exhibit\/history\.jsonl another way: PR 4 is now a fix \(pr:4\), PR 2 is now a fix \(branch:topic-2\), PR 1 is now a fix \(pr:1\)\.\n/);

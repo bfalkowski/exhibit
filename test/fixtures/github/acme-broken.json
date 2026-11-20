@@ -1,138 +1,149 @@
 {
-  "/repos/acme/broken/pulls?state=closed&per_page=100": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"broken\",\"after\":null}": {
     "status": 200,
     "headers": {},
-    "body": [
-      {
-        "number": 2,
-        "html_url": "https://github.com/acme/broken/pull/2",
-        "state": "closed",
-        "title": "Good one",
-        "body": "Body of #2.",
-        "user": {
-          "login": "dev2",
-          "type": "User"
+    "body": {
+      "data": {
+        "rateLimit": {
+          "cost": 1
         },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-03-02T00:00:00Z",
-        "merged_at": "2026-03-02T00:00:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2"
-        },
-        "head": {
-          "ref": "topic-2",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc2"
+        "repository": {
+          "pullRequests": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "pulls-1"
+            },
+            "nodes": [
+              {
+                "number": 2,
+                "url": "https://github.com/acme/broken/pull/2",
+                "title": "Good one",
+                "body": "Body of #2.",
+                "mergedAt": "2026-03-02T00:00:00Z",
+                "changedFiles": 1,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev2"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2",
+                "headRefName": "topic-2",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc2",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-2-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "a.js",
+                      "additions": 1,
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc2",
+                        "statusCheckRollup": null
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "number": 1,
+                "url": "https://github.com/acme/broken/pull/1",
+                "title": "Bad one",
+                "body": "Body of #1.",
+                "mergedAt": "2026-03-01T00:00:00Z",
+                "changedFiles": 1,
+                "author": {
+                  "__typename": "User",
+                  "login": "dev1"
+                },
+                "mergeCommit": {
+                  "oid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+                },
+                "baseRefName": "main",
+                "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1",
+                "headRefName": "topic-1",
+                "headRefOid": "ccccccccccccccccccccccccccccccccccccccc1",
+                "labels": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "files": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": "files-1-1"
+                  },
+                  "nodes": [
+                    {
+                      "path": "b.js",
+                      "additions": "lots",
+                      "deletions": 0
+                    }
+                  ]
+                },
+                "reviews": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "comments": {
+                  "pageInfo": {
+                    "hasNextPage": false,
+                    "endCursor": null
+                  },
+                  "nodes": []
+                },
+                "commits": {
+                  "nodes": [
+                    {
+                      "commit": {
+                        "oid": "ccccccccccccccccccccccccccccccccccccccc1",
+                        "statusCheckRollup": null
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
         }
-      },
-      {
-        "number": 1,
-        "html_url": "https://github.com/acme/broken/pull/1",
-        "state": "closed",
-        "title": "Bad one",
-        "body": "Body of #1.",
-        "user": {
-          "login": "dev1",
-          "type": "User"
-        },
-        "labels": [],
-        "created_at": "2026-01-01T00:00:00Z",
-        "closed_at": "2026-03-01T00:00:00Z",
-        "merged_at": "2026-03-01T00:00:00Z",
-        "merge_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
-        "base": {
-          "ref": "main",
-          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1"
-        },
-        "head": {
-          "ref": "topic-1",
-          "sha": "ccccccccccccccccccccccccccccccccccccccc1"
-        }
       }
-    ]
-  },
-  "/repos/acme/broken/pulls/2/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "a.js",
-        "status": "modified",
-        "additions": 1,
-        "deletions": 0,
-        "changes": 1
-      }
-    ]
-  },
-  "/repos/acme/broken/pulls/1/files?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": [
-      {
-        "sha": "ffffffffffffffffffffffffffffffffffffffff",
-        "filename": "b.js",
-        "status": "modified",
-        "additions": "lots",
-        "deletions": 0,
-        "changes": 1
-      }
-    ]
-  },
-  "/repos/acme/broken/pulls/1/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc1/check-runs?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "total_count": 0,
-      "check_runs": []
     }
-  },
-  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc1/status?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
-    }
-  },
-  "/repos/acme/broken/pulls/2/reviews?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc2/check-runs?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "total_count": 0,
-      "check_runs": []
-    }
-  },
-  "/repos/acme/broken/commits/ccccccccccccccccccccccccccccccccccccccc2/status?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": {
-      "state": "pending",
-      "statuses": [],
-      "total_count": 0
-    }
-  },
-  "/repos/acme/broken/issues/1/comments?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
-  },
-  "/repos/acme/broken/issues/2/comments?per_page=100": {
-    "status": 200,
-    "headers": {},
-    "body": []
   }
 }

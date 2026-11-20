@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge } from '../src/github.js';
 import { readHistory } from '../src/history.js';
-import { replayFetch } from '../test-support/replay-fetch.js';
+import { graphqlKey, replayFetch } from '../test-support/replay-fetch.js';
 
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/github/${name}.json`, import.meta.url));
 
@@ -91,7 +91,7 @@ test('comment reviews come from every page, in time order with the reviews, and 
     { state: 'APPROVED', author: 'rev3', source: 'comment' }
   ]);
   assert.equal(pr7.change_request_rounds, 3);
-  assert.ok(fetch.calls.some((c) => c.key === '/repositories/4242/issues/7/comments?per_page=100&page=2'));
+  assert.ok(fetch.calls.some((c) => c.key === graphqlKey('PullComments', { owner: 'acme', name: 'widgets', number: 7, after: 'comments-7-1' })));
 });
 
 test('a dismissed change request is not a round, and a deleted reviewer is null', async () => {
@@ -109,7 +109,7 @@ test('ci has the check runs from every page, read from the head commit', async (
   const fetch = replayFetch(fixture('acme-widgets'));
   const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't0ken', fetch }) });
   assert.deepEqual(lines.find((l) => l.number === 7).ci.map((c) => c.name), ['lint', 'test', 'Secret scan']);
-  assert.ok(fetch.calls.some((c) => c.key === `/repos/acme/widgets/commits/${'c'.repeat(39)}7/check-runs?per_page=100`));
+  assert.ok(fetch.calls.some((c) => c.key === graphqlKey('CommitCi', { owner: 'acme', name: 'widgets', oid: `${'c'.repeat(39)}7`, after: 'ci-7-1' })));
 });
 
 test('ci also has the commit statuses on the head commit, after the check runs', async () => {
@@ -121,7 +121,7 @@ test('ci also has the commit statuses on the head commit, after the check runs',
     { name: 'deploy/preview', conclusion: 'error' },
     { name: 'ci/legacy', conclusion: null }
   ]);
-  assert.ok(fetch.calls.some((c) => c.key === `/repos/acme/widgets/commits/${'c'.repeat(39)}4/status?per_page=100`));
+  assert.ok(fetch.calls.some((c) => c.key === graphqlKey('CommitCi', { owner: 'acme', name: 'widgets', oid: `${'c'.repeat(39)}4`, after: 'ci-4-1' })));
 });
 
 test('a check run that has not finished has a null conclusion', async () => {
@@ -142,14 +142,14 @@ test('readHistory sends the token on every request', async () => {
   for (const call of fetch.calls) assert.equal(call.headers.authorization, 'Bearer t0ken');
 });
 
-test('readHistory with since and limit asks for the files of the kept PRs only', async () => {
+test('readHistory with since and limit asks for more pages of the kept PRs only', async () => {
   const fetch = replayFetch(fixture('acme-widgets'));
   const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't0ken', fetch }), since: new Date('2026-03-01T00:00:00Z'), limit: 2 });
   assert.deepEqual(lines.map((l) => l.number), [7, 4]);
-  const fileCalls = fetch.calls.filter((c) => c.key.includes('/files'));
-  assert.deepEqual(fileCalls.map((c) => c.key.match(/pulls\/(\d+)/)[1]).sort(), ['4', '7', '7']);
-  const otherCalls = fetch.calls.filter((c) => c.key.includes('/reviews') || c.key.includes('/comments') || c.key.includes('/check-runs'));
-  assert.ok(otherCalls.every((c) => /(pulls\/|issues\/|c{39})[47]\b/.test(c.key)), otherCalls.map((c) => c.key).join(', '));
+  // The two pages of merged PRs, then the second pages of PR 7's lists and of PR 4's CI results.
+  const later = fetch.calls.filter((c) => !c.key.startsWith('graphql MergedPulls '));
+  assert.ok(later.length > 0);
+  assert.ok(later.every((c) => /"number":[47],|c{39}[47]"/.test(c.key)), later.map((c) => c.key).join(', '));
 });
 
 test('readHistory keeps a PR merged at exactly the since time', async () => {
@@ -158,12 +158,15 @@ test('readHistory keeps a PR merged at exactly the since time', async () => {
   assert.deepEqual(lines.map((l) => l.number), [7, 4, 5]);
 });
 
-test('readHistory turns a GitHub reply that is not a list into a tool error', async () => {
+test('readHistory turns a GitHub reply that is not a GraphQL reply into a tool error', async () => {
   const { ToolError } = await import('../src/tool-error.js');
-  const notJson = async () => new Response('<html>oops</html>', { status: 200 });
-  const notList = async () => new Response('{"message":"hi"}', { status: 200 });
-  for (const fetch of [notJson, notList]) {
-    await assert.rejects(readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't', fetch }) }), (error) => error instanceof ToolError && /not a JSON list/.test(error.message));
+  for (const [text, shape] of [
+    ['<html>oops</html>', /not a GraphQL reply with data/],
+    ['{"message":"hi"}', /not a GraphQL reply with data/],
+    ['{"data":{"rateLimit":{"cost":1},"repository":{"pullRequests":{"nodes":"no"}}}}', /not a list of PRs/]
+  ]) {
+    const fetch = async () => new Response(text, { status: 200 });
+    await assert.rejects(readHistory({ forge: createGitHubForge({ repo: 'acme/widgets', token: 't', fetch }) }), (error) => error instanceof ToolError && shape.test(error.message), text);
   }
 });
 
@@ -187,7 +190,7 @@ test('readHistory matches a branch signal against the PR head branch', async () 
   ]);
 });
 
-test('readHistory warns when a PR changed more files than GitHub listed, and only then asks for the PR', async (t) => {
+test('readHistory warns when a PR changed more files than GitHub listed, from the count that comes with the PR', async (t) => {
   const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
   const big = writeBigFixture();
   t.after(big.cleanup);
@@ -197,59 +200,26 @@ test('readHistory warns when a PR changed more files than GitHub listed, and onl
 
   assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
   assert.deepEqual(warnings, ['PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.']);
-  const prCalls = fetch.calls.filter((c) => /\/pulls\/\d+$/.test(c.key)).map((c) => c.key);
-  assert.deepEqual(prCalls.sort(), ['/repos/acme/big/pulls/8', '/repos/acme/big/pulls/9']);
+  // One query for the PRs, and 29 more pages of 100 files for each of PRs 9 and 8. No query asks for one PR.
+  assert.equal(fetch.calls.length, 1 + 29 + 29);
+  assert.ok(!fetch.calls.some((c) => c.key.startsWith('graphql Pull {')));
 });
 
-test('readHistory warns that the count is unknown, and goes on, when the request for one PR fails', async (t) => {
+test('readHistory warns that the count is unknown, and goes on, when the forge cannot give it', async (t) => {
   const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
-  const big = writeBigFixture({ unreadable: [9] });
+  const { GitHubReplyError } = await import('../src/github.js');
+  const big = writeBigFixture();
   t.after(big.cleanup);
+  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch: replayFetch(big.path) });
+  const failing = { ...forge, pullFileCount: async () => { throw new GitHubReplyError('GitHub answered 500 (Server Error) for /graphql. GitHub had a problem: try again later.', 500); } };
   const warnings = [];
-  const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/big', token: 't', fetch: replayFetch(big.path) }), warn: (text) => warnings.push(text) });
+  const lines = await readHistory({ forge: failing, warn: (text) => warnings.push(text) });
 
   assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
   assert.deepEqual(warnings, [
-    'PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 500 (Server Error) for /repos/acme/big/pulls/9. GitHub had a problem: try again later.'
+    'PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 500 (Server Error) for /graphql. GitHub had a problem: try again later.',
+    'PR 8 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered 500 (Server Error) for /graphql. GitHub had a problem: try again later.'
   ]);
-});
-
-// The warning when the request for PR 9's count hits a rate limit that history does not wait out.
-const COUNT_LIMITED = (status) =>
-  `PR 9 has 3000 files listed, the most GitHub lists, so its files field may be cut short. Exhibit could not read how many files it changed: GitHub answered ${status} (API rate limit exceeded) for /repos/acme/big/pulls/9. The token may lack access, or the rate limit is used up: check the token, or wait and try again.`;
-const RATE_LIMITED = { message: 'API rate limit exceeded' };
-
-test('readHistory warns that the count is unknown, and does not wait, when GitHub asks for a wait longer than 15 minutes', async (t) => {
-  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
-  const big = writeBigFixture({ countReplies: { 9: { status: 403, headers: { 'retry-after': '3600' }, body: RATE_LIMITED } } });
-  t.after(big.cleanup);
-  const fetch = replayFetch(big.path);
-  const waits = [];
-  const warnings = [];
-  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch, sleep: async (ms) => { waits.push(ms); } });
-  const lines = await readHistory({ forge, warn: (text) => warnings.push(text) });
-
-  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
-  assert.deepEqual(warnings, [COUNT_LIMITED(403)]);
-  assert.deepEqual(waits, []);
-  assert.equal(fetch.calls.filter((c) => c.key === '/repos/acme/big/pulls/9').length, 1);
-});
-
-test('readHistory warns that the count is unknown, and goes on, when the count request gets a 429 four times', async (t) => {
-  const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
-  // The replay gives the same 429 each time, so the three waits all end in another 429.
-  const big = writeBigFixture({ countReplies: { 9: { status: 429, headers: { 'retry-after': '1' }, body: RATE_LIMITED } } });
-  t.after(big.cleanup);
-  const fetch = replayFetch(big.path);
-  const waits = [];
-  const warnings = [];
-  const forge = createGitHubForge({ repo: 'acme/big', token: 't', fetch, sleep: async (ms) => { waits.push(ms); } });
-  const lines = await readHistory({ forge, warn: (text) => warnings.push(text) });
-
-  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
-  assert.deepEqual(warnings, [COUNT_LIMITED(429)]);
-  assert.deepEqual(waits, [1000, 1000, 1000]);
-  assert.equal(fetch.calls.filter((c) => c.key === '/repos/acme/big/pulls/9').length, 4);
 });
 
 test('getOne turns a reply that is not a JSON object into a tool error', async () => {
