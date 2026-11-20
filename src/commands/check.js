@@ -54,7 +54,7 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   const head = await commitSha(cwd, refs.head, refs.hint);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
 
-  const exhibit = await buildExhibit({ policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors });
+  const exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors });
   const problems = checkExhibit(exhibit);
   if (problems.length > 0) throw new ToolError(`the exhibit does not fit its schema, so ${OUTPUT.evidence} was not written:\n  ${problems.join('\n  ')}\nReport this as an Exhibit issue.`);
 

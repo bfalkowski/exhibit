@@ -85,7 +85,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 ```yaml
 version: 3
 settings:
-  test_command: "npm test -- --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml"
+  test_command: "npm ci && node --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml test/*.test.js"
   test_results: ".exhibit/junit.xml"
   fix_signals: [label:bug, title:fix, branch:fix/]
   mutation_budget_seconds: 300
@@ -192,7 +192,9 @@ The fields:
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
 
-Until the evidence collectors are built, `exhibit check` gives every `tests-before-after`, `failing-before` and `probe` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then.
+Until the evidence collectors are built, `exhibit check` gives every `failing-before` and `probe` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then. The `tests-before-after` collector is built (section 9.3).
+
+`flaky_tests` lists each test that failed and then passed on its second run, on the base or the head (section 9.3). A test's name is its file, relative to the repo, its classname and its name, joined by ` > `, for example `test/math.test.js > test > add sums two numbers`. A part that the JUnit file leaves out is left out of the name too. Node 20's reporter gives no file, for example.
 
 ### 8.3 `.exhibit/history.jsonl`
 
@@ -388,9 +390,13 @@ Every link is shown with its lines and blame output. In `exhibit label`, the per
 
 ### 9.3 Tests on the base and the head
 
-- Exhibit makes two clean git worktrees, one for the base and one for the head, and runs the test command in each.
-- Test results come from JUnit XML. Most runners can write it, including `node:test`, Jest, Vitest and pytest. TAP is a later option.
-- Exhibit runs a failing test one more time. A test that fails, then passes, is marked flaky. It is reported, and it never counts as evidence in either direction.
+- Exhibit makes two clean git worktrees in the temp folder, one for the base and one for the head, and runs `settings.test_command` in each, in a shell, with the worktree as its folder. A worktree holds only the files of its commit, so the base run does not see the head, and neither run sees edits in the checkout that are not committed. Files that git ignores, such as `node_modules`, are not there either, so the command must install what the tests need, for example `npm ci && node --test ...`.
+- Test results come from the JUnit XML file at `settings.test_results`, a path in the worktree. Exhibit removes the file before each run and makes its folder. Most runners can write JUnit, including `node:test`, Jest, Vitest and pytest. TAP is a later option.
+- When a test fails, Exhibit runs the test command once more. A test whose two runs disagree, for example it fails and then passes, is flaky. It is listed in `flaky_tests`, and it never counts as evidence in either direction.
+- The requirement is `met` when every test passes on the head, apart from flaky and skipped ones. It is `failed` when any test fails on the head on both runs, and the gap names those tests. It is `missing` when the policy has no `test_command` or no `test_results`, or when no test passes on the head: the JUnit file lists no tests, or only skipped or flaky ones. It is `error`, and so is the verdict, when `test_results` is not a path inside the repo (an absolute path, or one that starts with `..`), when the command cannot run (the shell exits 127), when it writes no JUnit file, when the file is not JUnit XML, or when the command fails but the file names no failing test.
+- `details` gives the count of passed, failed, skipped and flaky tests on the base and on the head, and `failed_on_head`, the names of the tests that fail on the head.
+- Exhibit removes both worktrees after the run, also when the run fails.
+- Exhibit keeps the per-test results of the base and the head for the rest of the run. The tests run only once, and the failing-before check (section 9.4) uses the same results.
 
 ### 9.4 A test that failed before
 
