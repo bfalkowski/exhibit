@@ -257,7 +257,7 @@ kinds:
     risk: high
     needs:
       - tests-before-after
-      - probe: { name: restart-run, run: &quot;npm run restart-check&quot; }
+      - probe: { name: restart-run, run: &quot;npm run restart-check&quot;, artifacts: [&quot;.exhibit/restart.log&quot;] }
       - mutation: { min: 0.85 }
     merge_without_reading: never
   office-visual:
