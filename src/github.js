@@ -493,6 +493,9 @@ export function createGitHubForge({ repo, ...client }) {
       return [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     },
 
+    // One PR, for exhibit check --pr: GitHub's PR object, with title, labels, base and head.
+    pull: (number) => github.getOne(`${base}/pulls/${number}`, pullRequests),
+
     async defaultBranch() {
       return (await github.getOne(base)).default_branch;
     },

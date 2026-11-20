@@ -65,7 +65,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files and takes no `--repo`. Each command exits 0 on success and 2 on a tool error.
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files and takes no `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -74,7 +74,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit label [--json]` | Shows each escaped defect that has no code yet, one at a time, with its SZZ evidence. The person types a code, a category and the evidence that would have caught it, or skips the defect. Each label goes to `.exhibit/labels.jsonl` at once (section 8.4). A later S3 ticket adds `--claude`: Claude drafts a code and a category, and the person confirms or edits each one. |
 | `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
-| `exhibit check [--base REF] [--head REF] [--pr N]` | Works out what the PR needs, collects the evidence, and writes `evidence.json` and `summary.md`. Exits 0 for `meets_policy` and 1 for `needs_person`. |
+| `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
 | `exhibit verify FILE` | Runs the claims in an `evidence.json` again and reports any that do not hold. |
 | `exhibit trace --pr N` | Runs after a merge. If the PR is a fix, it finds the introducing PRs and records any policy miss. |
 
@@ -146,6 +146,8 @@ A probe can set `author: hidden`. Exhibit then counts it as a check the builder 
 
 ### 8.2 `evidence.json`
 
+`exhibit check` writes the exhibit to `.exhibit/evidence.json`. The schema is `schema/exhibit.schema.json`, and `exhibit check` checks the exhibit against it before it writes the file.
+
 ```json
 {
   "exhibit_version": "0.1.0",
@@ -154,11 +156,15 @@ A probe can set `author: hidden`. Exhibit then counts it as a check the builder 
   "pr": 112,
   "base": "sha",
   "head": "sha",
-  "classification": { "kinds": ["relay-core"], "risk": "high", "fix": true },
+  "classification": {
+    "kinds": ["relay-core"], "risk": "high", "fix": true, "fix_signal": "label:bug", "feature": false,
+    "signals_from": "pr", "merge_without_reading": "never", "used_default": false, "policy_changed": false
+  },
   "requirements": [
     {
       "type": "mutation",
       "params": { "min": 0.85 },
+      "kinds": ["relay-core"],
       "status": "met",
       "details": { "killed": 23, "survived": 2, "timeout": 1, "no_coverage": 0, "catch_rate": 0.92, "interval_95": [0.75, 0.98] },
       "author": "builder",
@@ -174,7 +180,19 @@ A probe can set `author: hidden`. Exhibit then counts it as a check the builder 
 }
 ```
 
-`status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`.
+The fields:
+
+- `policy`: the policy file and the SHA-256 of its bytes. `sha256` is null when there is no `evidence.yml`.
+- `repo` is `owner/name` from `--repo`, or null. `pr` is the number from `--pr`, or null.
+- `base` and `head` are full commit SHAs. The changed files are the files that differ between the merge base of the two and `head`. A renamed file counts under its old path and its new path.
+- `classification` (section 9.1): `kinds` holds the matched kinds, sorted by name. `fix_signal` is the first fix signal that matched, or null. `signals_from` is `pr` when the forge gave the title, labels and branch, or `branch` when only the local branch name was known. `used_default` is true when no kind matched. `policy_changed` is true when the change touches `evidence.yml`.
+- `requirements`: one for each evidence item the change needs, in order: the matched kinds by name, then each kind's own order. A need that two kinds share is one requirement, and its `kinds` names both. `params` holds the item's fields, without `author`. `author` is `hidden` for a probe with `author: hidden`, and `builder` for every other item.
+- `gaps`: one for each requirement that is not `met`, plus a gap of type `policy-change` when the change touches `evidence.yml`, and a gap of type `no-rule` when no kind matched and the policy has no `default`. Each gap says how to fix it in plain words.
+- `duration_ms` and `created_at` are the timing fields. Two runs on the same base and head, with the same policy, give the same file apart from them.
+
+`status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
+
+Until the evidence collectors are built, `exhibit check` gives every `tests-before-after`, `failing-before` and `probe` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then.
 
 ### 8.3 `.exhibit/history.jsonl`
 
@@ -340,7 +358,10 @@ The cache does not remove old entries. Deleting the folder is always safe: the n
 - A `fix_signals` that is not a list, is empty, has a signal that does not start with `label:`, `title:`, `title_after_key:`, `branch:` or `pr:`, has a space before or after the value (such as "label: bug"), or has a `pr:` value that is not a PR number (such as `pr:`, `pr:abc` or `pr:-3`) makes `exhibit history` exit 2 with a message. A file that is not valid YAML does too. In a YAML list, `pr: 96` with no quotes is a mapping, not text, so the message says to write `pr:96`.
 - When `fix_signals` change, the next `exhibit history` run classifies every line again (section 8.3).
 - A linked issue with a bug label is a later signal type. The REST API does not give linked issues directly.
-- A PR counts as a feature when it adds files under a path the policy marks as source, or when a `feature` label is set.
+- A PR counts as a feature when a `feature` label is set. The name must match, and case does not matter. Today the policy has no field that marks source paths, so a later ticket adds the rule "adds files under a source path".
+- `exhibit check --pr N` gets the title, labels and branch from the forge. Without `--pr`, it knows only the local branch name: the `--head` ref when it names a local branch, or the checked-out branch when the head is `HEAD`. A fix or feature that only the title or a label shows is then not seen, and `summary.md` says so.
+- A change matches a kind when any changed path matches any glob in its `match`. In a glob, `*` matches any characters inside one folder name, `**` as a whole folder name matches any number of folders, and `?` matches one character that is not a slash. A glob matches the whole path, from the top of the repo.
+- When no kind matches and the policy has no `default`, the change has risk `high` and no requirements, and the verdict is `needs_person` with a gap of type `no-rule`. A change with no changed files, such as a base and head that are the same commit, matches no kind either. So the `default` needs apply to it, or, with no `default`, it gets the `no-rule` gap.
 
 ### 9.2 SZZ
 
@@ -395,9 +416,11 @@ A probe runs its command in the head worktree with a time limit. Its status come
 
 ### 9.8 Verdict
 
-- `meets_policy` when every requirement is `met`.
-- `needs_person` when any requirement is `missing` or `failed`. The summary lists each gap with how to fix it.
-- `error` when Exhibit itself failed. An error never becomes `meets_policy`.
+- `meets_policy` when every requirement is `met`, and there is no other gap. Exit code 0.
+- `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches `evidence.yml` (section 15), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
+- `error` when Exhibit itself failed: a collector threw, or gave back no valid status, so its requirement is `error`. Exit code 2. An error never becomes `meets_policy`, and it wins over `needs_person`.
+- A failure before Exhibit can build the exhibit, such as a bad policy, a ref that is not in the clone, or any unexpected throw, also exits 2. `exhibit check` removes the old `evidence.json` and `summary.md` when it starts, so no old verdict is left behind, and it prints `verdict: error` on stderr.
+- `summary.md` gives the verdict and the exit code, the kinds, the risk, fix and feature, each requirement with its status, and each gap with how to fix it, in plain words. It holds no time, so two runs on the same commits give the same file.
 
 ### 9.9 Backtest
 
