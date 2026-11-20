@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createGitHubForge } from '../src/github.js';
+import { createGitHubForge, GitHubReplyError } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { ToolError } from '../src/tool-error.js';
@@ -412,6 +412,42 @@ test('commit-to-PR mapping across base branches', async (t) => {
     await find('1'.repeat(40));
     await find('2'.repeat(40));
     assert.equal(fetch.calls.filter((call) => call.key === '/repos/fixture/release-flow').length, 1);
+  });
+
+  // A fake forge that fails its first request of one kind with a 502 and answers the next ones.
+  const flakyForge = () => {
+    const calls = { defaultBranch: 0, pullsForCommit: 0 };
+    const fail = () => new GitHubReplyError('GitHub answered 502 (Bad Gateway) for /repos/fixture/shop. GitHub had a problem: try again later.', 502);
+    const forge = {
+      defaultBranch: async () => {
+        calls.defaultBranch += 1;
+        if (calls.defaultBranch === 1) throw fail();
+        return 'main';
+      },
+      pullsForCommit: async () => {
+        calls.pullsForCommit += 1;
+        if (calls.pullsForCommit === 1) throw fail();
+        return [{ number: 7, baseRef: 'main', mergedAt: '2026-01-02T00:00:00Z' }];
+      }
+    };
+    return { calls, forge };
+  };
+
+  await t.test('a failed request for the default branch is not kept, so the next lookup asks again', async () => {
+    const { calls, forge } = flakyForge();
+    const find = createPrFinder({ lines: [{ number: 41, base_ref: 'main', merge_sha: 'a'.repeat(40) }], forge });
+    await assert.rejects(find('a'.repeat(40)), (error) => error instanceof GitHubReplyError && error.status === 502);
+    assert.equal(await find('a'.repeat(40)), 41);
+    assert.equal(calls.defaultBranch, 2);
+  });
+
+  await t.test('a failed request for the pulls of a commit is not kept, so the next lookup asks again', async () => {
+    const { calls, forge } = flakyForge();
+    const find = createPrFinder({ lines: [], forge });
+    await assert.rejects(find('b'.repeat(40)), (error) => error instanceof GitHubReplyError && error.status === 502);
+    assert.equal(await find('b'.repeat(40)), 7);
+    assert.equal(await find('b'.repeat(40)), 7);
+    assert.equal(calls.pullsForCommit, 2, 'the answer that came is kept');
   });
 });
 
