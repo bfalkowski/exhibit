@@ -336,12 +336,16 @@ How `exhibit label` works:
 
 ### 8.5 Report
 
-`exhibit history` and `exhibit backtest` write `report.md` and a self-contained `report.html`. The first screen of the report shows:
+`exhibit history` and `exhibit backtest` each write a report as a markdown file and a self-contained HTML file. The first screen of the history report shows:
 - The number of PRs read and the number of fix PRs.
 - The escaped defects found, each with its SZZ evidence.
 - How sure Exhibit is, in plain words. With weak history, the report says so instead of guessing.
 
-`exhibit history` writes the report to `.exhibit/report.md` and `.exhibit/report.html`, together with `.exhibit/history.jsonl`. It writes all three to temporary files first, and renames them only when every write worked. So a run that fails, for example on a full disk, changes none of the three files, and they keep the same facts. Both files come from the same content, so they hold the same facts. `--json` names the two files in its `report` field. `exhibit backtest` must not write to these two paths, or it would write over the history report. Its report paths are not set yet: S8 sets them. The report has these parts, in this order:
+`exhibit history` writes the report to `.exhibit/report.md` and `.exhibit/report.html`, together with `.exhibit/history.jsonl`. It writes all three to temporary files first, and renames them only when every write worked. So a run that fails, for example on a full disk, changes none of the three files, and they keep the same facts. Both files come from the same content, so they hold the same facts. `--json` names the two files in its `report` field.
+
+`exhibit backtest` writes its own report, to `.exhibit/backtest.md` and `.exhibit/backtest.html`. It never writes to `.exhibit/report.md` or `.exhibit/report.html`, so a backtest run does not change the history report. Backtest writes all its files together in the same way as history: to temporary files first, renamed only when every write worked (`writeTogether` in src/write-together.js). So a backtest run that fails changes none of its files. Section 9.9 says what the backtest report holds.
+
+The history report has these parts, in this order:
 
 1. **The counts.** The number of merged PRs read, the number of fix PRs, and how many of the fix PRs SZZ linked to an introducing PR. Each fix PR with at least one link is an escaped defect. When SZZ skipped a fix PR (section 9.2), the count says so. With no fix PRs, the report says so in one sentence and has no list of defects. Outside a clone, SZZ did not run, and the report says it cannot show escaped defects.
 2. **How sure Exhibit is.** Whether the history is weak, and why, in plain words, then the rule below.
@@ -505,7 +509,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 - Caught: the introducing PR of a test-set defect would have been `needs_person`. Strong catch: the missing requirement matches the defect's category.
 - Missed: the introducing PR would have been `meets_policy`.
 - False demand: a PR with no escaped defect would have been `needs_person`.
-- The report gives these counts for each kind of change, with 95% intervals.
+- The report gives these counts for each kind of change, with 95% intervals. It goes to `.exhibit/backtest.md` and `.exhibit/backtest.html` (section 8.5).
 
 ### 9.10 Numbers for the trust ladder
 

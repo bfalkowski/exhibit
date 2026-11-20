@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { REVERT_SIGNAL } from '../fix-signals.js';
@@ -8,12 +8,12 @@ import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { JIRA_TRACKER } from '../jira.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { DEFAULT_POLICY, readPolicy } from '../policy.js';
-import { buildReport } from '../report.js';
+import { buildReport, HISTORY_REPORT } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
+import { writeTogether } from '../write-together.js';
 
 const OUTPUT = '.exhibit/history.jsonl';
-const REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/report.html' };
 const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
 // `exhibit history --repo owner/name [--since DATE] [--limit N] [--full] [--no-cache] [--json]`
@@ -121,8 +121,8 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
   const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals });
   await writeTogether(cwd, [
     [OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join('')],
-    [REPORT.markdown, report.markdown],
-    [REPORT.html, report.html]
+    [HISTORY_REPORT.markdown, report.markdown],
+    [HISTORY_REPORT.html, report.html]
   ]);
 
   // Inside a clone, a fix PR with szz: null is one that SZZ skipped, and warned about.
@@ -135,7 +135,7 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
   const usesJira = fixSignals.includes(`tracker:${JIRA_TRACKER.name}`);
   const jira = tracker ? tracker.counts() : null;
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: HISTORY_REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';
@@ -144,7 +144,7 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
     const readText = mode === 'full'
       ? `Read all ${updated.read} merged PRs from GitHub.`
       : `Read ${updated.read} of ${lines.length} merged PRs from GitHub: the PRs not in the old file, and the PRs merged in the ${days} days before its newest PR. Kept the other ${lines.length - updated.read} lines as they were.`;
-    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${REPORT.markdown} and ${REPORT.html}.\n` +
+    stdout.write(`Wrote ${lines.length} merged PRs from ${options.repo} to ${OUTPUT}.${found}\n${readText}\nWrote the report to ${HISTORY_REPORT.markdown} and ${HISTORY_REPORT.html}.\n` +
       `Made ${plural(requests, 'GitHub REST request')}. ${cached}\n` +
       `Made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')} of the GraphQL rate limit.\n` +
       (jira ? `Made ${plural(jira.requests, 'Jira request')}. ${jira.not_found} named an issue that Jira does not know.\n` : ''));
@@ -303,35 +303,3 @@ function parseSince(text) {
   return Number.isNaN(since.getTime()) ? null : since;
 }
 
-// Writes each [name, text] of `files` in `cwd`, so the files keep the same facts. It writes every
-// file to a temporary file first, and renames them only when all the writes worked. So a failed
-// write, as on a full disk, leaves all the older files as they were, and no temporary file.
-async function writeTogether(cwd, files) {
-  const temporaries = [];
-  try {
-    for (const [name, text] of files) {
-      const path = join(cwd, name);
-      const temporary = `${path}.${process.pid}.tmp`;
-      try {
-        await mkdir(join(path, '..'), { recursive: true });
-        temporaries.push(temporary);
-        await writeFile(temporary, text);
-      } catch (error) {
-        throw new ToolError(`could not write ${name}: ${error.message}`);
-      }
-    }
-    for (const [index, [name]] of files.entries()) {
-      try {
-        await rename(temporaries[index], join(cwd, name));
-      } catch (error) {
-        throw new ToolError(`could not write ${name}: ${error.message}`);
-      }
-    }
-  } catch (error) {
-    // A rename that fails after an earlier one worked still leaves a mix. A rename needs no free
-    // space, so this is rare. Best effort: when the folder itself is the problem, removing a
-    // temporary file fails too.
-    await Promise.all(temporaries.map((temporary) => rm(temporary, { force: true }).catch(() => {})));
-    throw error;
-  }
-}
