@@ -137,29 +137,72 @@ test('the cache folder is exhibit/github in the user\'s cache folder', () => {
 });
 
 // GitHub's ETag covers the body only, not the Link header. So when a full last page gets a new
-// page after it, the full page still answers 304, and its saved Link has no rel="next".
-test('a full last page served from the cache is asked again with no If-None-Match, so a new page after it is not missed', async () => {
+// page after it, the full page still answers 304, and its saved Link has no rel="next". The client
+// then asks for the next page number. That request uses the cache too, so it is free once saved.
+test('a full last page that does not grow costs no full request once the empty page after it is saved', async () => {
   const dir = newFolder();
-  const replies = { '/c?per_page=2': { etag: '"body-1-2"', body: [1, 2] } };
+  const github = recorded({
+    '/c?per_page=2': { etag: '"body-1-2"', body: [1, 2] },
+    '/c?per_page=2&page=2': { etag: '"empty"', body: [] }
+  });
+  assert.deepEqual(await client(github.fetch, dir).getAll('/c?per_page=2'), [1, 2], 'a 200 gives the Link as it is now, so the first run trusts it');
+
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getAll('/c?per_page=2'), [1, 2]);
+  assert.deepEqual(github.calls.slice(1).map((call) => [call.path, call.headers['if-none-match']]), [
+    ['/c?per_page=2', '"body-1-2"'],
+    ['/c?per_page=2&page=2', undefined]
+  ]);
+  assert.deepEqual(second.counts(), { requests: 2, not_modified: 1, queries: 0, points: 0 });
+
+  // From now on both requests get a 304, so the run uses none of the rate limit.
+  const third = client(github.fetch, dir);
+  assert.deepEqual(await third.getAll('/c?per_page=2'), [1, 2]);
+  assert.deepEqual(github.calls.slice(3).map((call) => [call.path, call.headers['if-none-match']]), [
+    ['/c?per_page=2', '"body-1-2"'],
+    ['/c?per_page=2&page=2', '"empty"']
+  ]);
+  assert.deepEqual(third.counts(), { requests: 2, not_modified: 2, queries: 0, points: 0 });
+});
+
+test('a full last page that grows: the request for the next page number finds the new item', async () => {
+  const dir = newFolder();
+  const replies = {
+    '/c?per_page=2': { etag: '"body-1-2"', body: [1, 2] },
+    '/c?per_page=2&page=2': { etag: '"empty"', body: [] }
+  };
   const github = recorded(replies);
-  assert.deepEqual(await client(github.fetch, dir).getAll('/c?per_page=2'), [1, 2]);
+  await client(github.fetch, dir).getAll('/c?per_page=2');
+  await client(github.fetch, dir).getAll('/c?per_page=2');
 
   // A third comment goes on page 2. Page 1 has the same body, so the same ETag, and a new Link.
   replies['/c?per_page=2'] = { etag: '"body-1-2"', body: [1, 2], link: '<https://api.github.com/c?per_page=2&page=2>; rel="next"' };
   replies['/c?per_page=2&page=2'] = { etag: '"body-3"', body: [3] };
-  const second = client(github.fetch, dir);
-  assert.deepEqual(await second.getAll('/c?per_page=2'), [1, 2, 3]);
-  assert.deepEqual(github.calls.slice(1).map((call) => [call.path, call.headers['if-none-match']]), [
+  const grown = client(github.fetch, dir);
+  assert.deepEqual(await grown.getAll('/c?per_page=2'), [1, 2, 3]);
+  assert.deepEqual(github.calls.slice(3).map((call) => [call.path, call.headers['if-none-match']]), [
     ['/c?per_page=2', '"body-1-2"'],
-    ['/c?per_page=2', undefined],
-    ['/c?per_page=2&page=2', undefined]
+    ['/c?per_page=2&page=2', '"empty"']
   ]);
-  assert.deepEqual(second.counts(), { requests: 3, not_modified: 1, queries: 0, points: 0 });
+  assert.deepEqual(grown.counts(), { requests: 2, not_modified: 1, queries: 0, points: 0 });
 
-  // Page 1 now has a saved rel="next", so the next run trusts its 304s.
-  const third = client(github.fetch, dir);
-  assert.deepEqual(await third.getAll('/c?per_page=2'), [1, 2, 3]);
-  assert.deepEqual(third.counts(), { requests: 2, not_modified: 2, queries: 0, points: 0 });
+  // Page 2 is not full, so the next run trusts its 304 and asks for no page 3.
+  const after = client(github.fetch, dir);
+  assert.deepEqual(await after.getAll('/c?per_page=2'), [1, 2, 3]);
+  assert.deepEqual(after.counts(), { requests: 2, not_modified: 2, queries: 0, points: 0 });
+});
+
+test('the next page number counts up from the page the URL names', async () => {
+  const dir = newFolder();
+  const github = recorded({
+    '/x?per_page=2&page=1': { etag: '"p1"', body: [1, 2], link: '<https://api.github.com/x?per_page=2&page=2>; rel="next"' },
+    '/x?per_page=2&page=2': { etag: '"p2"', body: [3, 4] },
+    '/x?per_page=2&page=3': { etag: '"p3"', body: [] }
+  });
+  await client(github.fetch, dir).getAll('/x?per_page=2&page=1');
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getAll('/x?per_page=2&page=1'), [1, 2, 3, 4]);
+  assert.equal(github.calls.at(-1).path, '/x?per_page=2&page=3');
 });
 
 test('a last page that is not full is trusted on a 304', async () => {
@@ -179,6 +222,33 @@ test('the cache narrows a folder that was there before to the user alone, and ea
   await client(github.fetch, dir).getOne('/repos/o/r');
   assert.equal(statSync(dir).mode & 0o777, 0o700);
   for (const name of readdirSync(dir)) assert.equal(statSync(join(dir, name)).mode & 0o777, 0o600, name);
+});
+
+test('a run that only reads, where every request gets a 304, still narrows the folder', { skip: process.platform === 'win32' }, async () => {
+  const dir = join(newFolder(), 'github');
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  await client(github.fetch, dir).getOne('/repos/o/r');
+  chmodSync(dir, 0o755);
+
+  const second = client(github.fetch, dir);
+  await second.getOne('/repos/o/r');
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 }, 'the run wrote nothing');
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+});
+
+test('a folder that cannot be made does not stop a run, and the next read makes it again', { skip: process.platform === 'win32' }, async () => {
+  const dir = join(newFolder(), 'github');
+  writeFileSync(dir, 'a plain file where the folder should be');
+  // A reply with no ETag is not saved, so no write makes the folder: only a read can.
+  const fetch = async () => new Response(JSON.stringify({ default_branch: 'main' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const one = client(fetch, dir);
+  assert.deepEqual(await one.getOne('/repos/o/r'), { default_branch: 'main' });
+  assert.ok(statSync(dir).isFile(), 'the folder could not be made');
+
+  rmSync(dir);
+  assert.deepEqual(await one.getOne('/repos/o/r'), { default_branch: 'main' });
+  assert.ok(statSync(dir).isDirectory());
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
 });
 
 test('a request that never reached GitHub is not counted', async () => {
