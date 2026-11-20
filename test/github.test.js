@@ -295,6 +295,33 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
   assert.equal(await forge.issue(52), null);
 });
 
+test('sameRepo says whether a repo name leads to this repo, as an old name does after a rename or a transfer', async () => {
+  // GitHub answers GET /repos/{old name} with a redirect to the repo, and fetch follows it, so the
+  // reply is the renamed repo. The id stays the same after a rename or a transfer.
+  const replies = {
+    '/repos/acme/widgets': { id: 7, full_name: 'acme/widgets', default_branch: 'main' },
+    '/repos/oldacme/widgets': { id: 7, full_name: 'acme/widgets' },
+    '/repos/acme/gadgets': { id: 8, full_name: 'acme/gadgets' }
+  };
+  const asked = [];
+  const fetch = async (url) => {
+    const path = new URL(url).pathname;
+    asked.push(path);
+    const reply = replies[path];
+    return new Response(JSON.stringify(reply ?? { message: 'Not Found' }), { status: reply ? 200 : 404, headers: { 'content-type': 'application/json' } });
+  };
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  assert.equal(await forge.sameRepo('oldacme/widgets'), true);
+  assert.equal(await forge.sameRepo('acme/gadgets'), false);
+  // A name GitHub does not know, or a private repo the token cannot read, is not this repo.
+  assert.equal(await forge.sameRepo('gone/widgets'), false);
+  // Each name costs one request at most, in any case, and this repo is read once, for defaultBranch too.
+  assert.equal(await forge.sameRepo('OldAcme/Widgets'), true);
+  assert.equal(await forge.sameRepo('acme/gadgets'), false);
+  assert.equal(await forge.defaultBranch(), 'main');
+  assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/acme/widgets', '/repos/acme/gadgets', '/repos/gone/widgets']);
+});
+
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {
   const fetch = widgets();
   const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });

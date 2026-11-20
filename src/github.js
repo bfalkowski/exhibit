@@ -440,7 +440,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // for each PR and each of those lists. mergedPulls keeps what it read, so pullFiles, pullReviews,
 // pullComments, pullFileCount and ciResults read from it, and send a query only for a list with
 // more than one page, or for a PR or commit that mergedPulls did not read.
-// SZZ's methods (defaultBranch, pullsForCommit and issue) use the REST API, with the reply cache.
+// SZZ's methods (defaultBranch, sameRepo, pullsForCommit and issue) use the REST API, with the reply cache.
 // The methods return small forge-neutral shapes, not GitHub's own objects, so history and SZZ
 // read the same fields from any forge, and a caller does not depend on which API gave them:
 // - mergedPulls, pullsForCommit and pull give PRs: { number, title, body, author, labels,
@@ -453,6 +453,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
 // - issue: { createdAt, isPull }, or null.
 // - defaultBranch: the branch name.
+// - sameRepo: true or false.
 // - upsertComment, for exhibit publish --comment: { action, url }.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
@@ -461,6 +462,20 @@ export function createGitHubForge({ repo, ...client }) {
   const pullRequests = { permission: PERMISSIONS.pullRequests };
   // The permissions that the GraphQL queries for history need.
   const forHistory = { permission: [PERMISSIONS.pullRequests, PERMISSIONS.checks, PERMISSIONS.commitStatuses] };
+
+  // Answers that need one request at most per run: this repo's own reply, and sameRepo's answer
+  // for each name, lower case. A request that fails is not kept, so the next call asks again.
+  const answers = new Map();
+  async function once(key, ask) {
+    if (!answers.has(key)) answers.set(key, ask());
+    try {
+      return await answers.get(key);
+    } catch (error) {
+      answers.delete(key);
+      throw error;
+    }
+  }
+  const thisRepo = () => once('repo', () => github.getOne(base));
 
   // What GraphQL gave for each PR, by number, and the first page of CI results for each commit.
   const pulls = new Map();
@@ -594,7 +609,22 @@ export function createGitHubForge({ repo, ...client }) {
     pull: async (number) => fromRestPull(await github.getOne(`${base}/pulls/${number}`, pullRequests)),
 
     async defaultBranch() {
-      return (await github.getOne(base)).default_branch;
+      return (await thisRepo()).default_branch;
+    },
+
+    // Returns true when the repo name `named` ("owner/name") leads to this repo, as the repo's
+    // old name does after a rename or a transfer. GitHub answers GET /repos/{old name} with a
+    // redirect to the repo, and fetch follows it. The id stays the same after a rename or a
+    // transfer, so the two replies are one repo when their ids match. A name that GitHub does not
+    // know, or a repo the token cannot read (404), is not this repo. Each name costs one request
+    // at most, in any case.
+    async sameRepo(named) {
+      const key = named.toLowerCase();
+      if (key === repo.toLowerCase()) return true;
+      return once(`same ${key}`, async () => {
+        const found = await github.getOne(`/repos/${named}`, { emptyOn: [404] });
+        return found !== null && found.id === (await thisRepo()).id;
+      });
     },
 
     // The PRs that hold the commit `sha`. GitHub answers 422 for a commit it does not know, such
