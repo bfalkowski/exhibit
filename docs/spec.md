@@ -89,6 +89,7 @@ settings:
   test_results: ".exhibit/junit.xml"
   fix_signals: [label:bug, title:fix, branch:fix/]
   mutation_budget_seconds: 300
+  probe_timeout_seconds: 600
 kinds:
   relay-core:
     match: ["relay/supervisor.js", "relay/session-host.js"]
@@ -122,7 +123,7 @@ Rules:
 - Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
   - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
   - `version` must be 3, the only format this Exhibit reads.
-  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) and `mutation_budget_seconds` (a whole number, 1 or more).
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1) `mutation_budget_seconds` (a whole number, 1 or more) and `probe_timeout_seconds` (a whole number, 1 or more, section 9.6).
   - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
   - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
@@ -192,7 +193,7 @@ The fields:
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
 
-Until the evidence collectors are built, `exhibit check` gives every `tests-before-after`, `failing-before` and `probe` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then.
+Until the test collectors are built, `exhibit check` gives every `tests-before-after` and `failing-before` requirement the status `skipped`, with a `how_to_fix` that says the collector is not built yet. Later S4 tickets build them. A `probe` requirement runs its command (section 9.6). A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then.
 
 ### 8.3 `.exhibit/history.jsonl`
 
@@ -408,10 +409,19 @@ A test qualifies when it is added or changed in the PR, fails on the base (or do
 
 A probe runs its command in the head worktree with a time limit. Its status comes from the exit code and the declared artifacts. Exhibit attaches the artifacts to the check and links them from `summary.md`.
 
+- The head worktree is a clean git worktree of the head commit in a temporary folder. Exhibit makes it only when the change needs a probe, and removes it at the end of the run. It has no files that git ignores, such as `node_modules`, so a probe that needs them installs them first, for example `npm ci && npm run lint`.
+- The command runs with `sh`, in a process group of its own. Its standard output and standard error go to `.exhibit/probes/NAME/output.log`, so a person can read why it failed. NAME is the probe's name, with each character that is not a letter, a digit, `.`, `-` or `_` changed to `-`. When two probes get the same NAME, the later one gets `-2`, `-3` and so on.
+- The time limit is `settings.probe_timeout_seconds` in `evidence.yml`. The default is 600 seconds (10 minutes). When the command runs past it, Exhibit kills the whole process group, so no process of the probe keeps running. Exhibit also kills the group when the command exits, so a server that the probe started and left behind stops too.
+- The probe is `met` when the command exits 0 and every declared artifact exists. It is `failed` when the command exits with another code, is stopped by a signal, runs past the time limit, or exits 0 without writing an artifact. The gap's `how_to_fix` says which: the exit code, the artifacts that are missing, or that it timed out.
+- An artifact path is relative to the root of the head worktree. A path that leads outside the worktree, by `..`, an absolute path or a symbolic link, counts as missing.
+- Exhibit copies each artifact that exists to `.exhibit/probes/NAME/artifacts/PATH`, also when the probe failed. `summary.md` links the output and each artifact on the probe's line.
+- `details` holds `exit_code` (null when a signal stopped it), `timed_out`, `timeout_seconds`, `output` (the path of output.log), `artifacts` (each with its `path` and the `copy` in the exhibit) and `missing_artifacts`.
+- `exhibit check` removes the old `.exhibit/probes` folder when it starts, so no file from an earlier run is read as this run's evidence.
+
 ### 9.7 Who wrote each check
 
 - Tests that the PR added or changed count as written by the builder.
-- Probes with `author: hidden` count as hidden.
+- Probes with `author: hidden` count as hidden in `checks_by_author`. Exhibit keeps only the status and the counts of a hidden probe. It does not save the command's output, and it does not copy its artifacts, so `details` has no `output` and no `artifacts`, and `summary.md` has no links for it.
 - A hidden suite lives outside the PR's repo. CI fetches it with a secret that a PR from a fork never gets. Exhibit only reads the counts. It never copies hidden tests into the exhibit.
 
 ### 9.8 Verdict

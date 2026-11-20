@@ -8,8 +8,9 @@ const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
 
 // A collector gets one requirement and gives back { status, details, how_to_fix }. These are the
-// built-in ones. The evidence collectors come in later tickets. Until each one lands, it says
-// `skipped`, so a requirement it cannot check never passes on its own.
+// built-in ones. The evidence collectors for tests come in later tickets. Until each one lands,
+// it says `skipped`, so a requirement it cannot check never passes on its own. The probe
+// collector needs the head worktree, so the check command adds it (src/probe.js).
 const notBuilt = (what) => async () => ({
   status: 'skipped',
   details: { reason: 'not built yet' },
@@ -19,7 +20,6 @@ const notBuilt = (what) => async () => ({
 export const COLLECTORS = Object.freeze({
   'tests-before-after': notBuilt('tests-before-after (the tests on the base and the head)'),
   'failing-before': notBuilt('failing-before (a test that fails on the base and passes on the head)'),
-  probe: notBuilt('probes'),
   mutation: async () => ({
     status: 'skipped',
     details: { reason: 'mutation comes in slice S6' },
@@ -174,7 +174,7 @@ export function renderSummary(exhibit) {
   for (const item of exhibit.requirements) {
     const name = item.type === 'probe' ? ` ${item.params.name}` : '';
     const hidden = item.author === 'hidden' ? ', hidden check' : '';
-    lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.`);
+    lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.${probeFiles(item)}`);
   }
   lines.push('');
 
@@ -188,4 +188,16 @@ export function renderSummary(exhibit) {
     lines.push('', 'A skipped requirement counts as not met: the verdict is meets_policy only when every requirement is met.');
   }
   return lines.join('\n') + '\n';
+}
+
+// The links to a probe's output and artifacts, for its line in summary.md. The files are under
+// .exhibit, beside summary.md, so each link is relative to that folder. A hidden probe has none.
+function probeFiles(item) {
+  if (item.type !== 'probe' || item.author === 'hidden') return '';
+  const link = (text, path) => `[${text}](${encodeURI(path.replace(/^\.exhibit\//, ''))})`;
+  const parts = [];
+  if (item.details.output) parts.push(` Output: ${link('output.log', item.details.output)}.`);
+  const artifacts = item.details.artifacts ?? [];
+  if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => link(artifact.path, artifact.copy)).join(', ')}.`);
+  return parts.join('');
 }

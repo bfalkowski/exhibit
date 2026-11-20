@@ -73,9 +73,9 @@ test('a change to evidence.yml gives needs_person, with a gap that says why', as
 });
 
 test('the built-in collectors skip what is not built yet, so mutation can never give meets_policy', async () => {
-  const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }, 'tests-before-after', 'failing-before', { probe: { name: 'p', run: 'x' } }])), { ...options(undefined), collectors: undefined });
+  const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }, 'tests-before-after', 'failing-before'])), { ...options(undefined), collectors: undefined });
   assert.equal(exhibit.verdict, 'needs_person');
-  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['skipped', 'skipped', 'skipped', 'skipped']);
+  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['skipped', 'skipped', 'skipped']);
   assert.match(exhibit.gaps[0].how_to_fix, /S6/);
   assert.match(exhibit.gaps[1].how_to_fix, /not built yet/);
 });
