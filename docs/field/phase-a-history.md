@@ -8,9 +8,10 @@ Exhibit had never run on the field repos. This page records the first full `exhi
 
 - Exhibit at `main` 6a3c549, run from source in its own checkout.
 - Each repo ran in a fresh clone, with the real repo as `origin`, so SZZ could run `git blame`. The clones are in `~/code/repo/exhibit-phase-a/building58` and `~/code/repo/exhibit-phase-a/edd-platform`. The main checkouts of the two repos were not used.
-- Each clone has an `evidence.yml` for the run only. It is listed in the clone's `.git/info/exclude`, as are `.exhibit/` and `run.log`, so nothing goes into the field repos. The two files are below.
+- Each clone has an `evidence.yml` for the run only. It is listed in the clone's `.git/info/exclude`, as are `.exhibit/`, `run.log` and the two rate-limit files, so nothing goes into the field repos. The two files are below, without their header comments.
 - The command: `GITHUB_TOKEN=$(gh auth token) exhibit history --repo bfalkowski/<name>`, with no `--limit`. The person allowed full history for Phase A on 2026-11-20.
 - `gh api rate_limit --jq '.resources.core, .resources.graphql'` ran before and after each run. The token is shared with other sessions, so the change in `used` can be a little more than the run's own count.
+- The ticket asked for the two runs to be at least an hour apart. They were not: the Building58 run ended at 22:44:38Z, and the edd-platform run started at 22:46:57Z. At 22:50 the person dropped the gap, through the Lead on the ticket chat, and asked to stop instead if fewer than 1,000 REST requests were left. The two runs used about 34 and 9 REST requests, and more than 4,200 were left before each one, so the short gap was safe.
 - Each clone keeps what the run wrote: `.exhibit/history.jsonl`, `.exhibit/report.md`, `.exhibit/report.html`, `run.log`, `rate-before.txt` and `rate-after.txt`.
 
 ## Results
@@ -57,14 +58,15 @@ edd-platform:
 
 ### Why fix PRs got no link
 
-- Building58: 12 of the 14 fix PRs blamed only lines from one commit, `9a7e34b` "Building58" of 2026-11-10. That commit brought in the code before the repo used PRs, so it is in no merged PR. All 249 unlinked lines of the fix PRs come from it. The other 2 (PR 95 and PR 69) deleted or changed no line, so there was nothing to blame.
+- Building58: 12 of the 14 fix PRs blamed only lines from one commit, `9a7e34b` "Building58" of 2026-11-10. That commit brought in the code before the repo used PRs, so it is in no merged PR. Their 81 unlinked lines all come from it. So do all 249 unlinked lines of the 34 fix PRs, the linked ones included. The other 2 (PR 95 and PR 69) deleted or changed no line, so there was nothing to blame.
 - edd-platform: PR 28 blamed 18 lines, all from commits in no merged PR. PR 108 deleted or changed no line.
 
 ## Fix signals
 
 The PRs in both repos have no labels, and their titles name a bug by its symptom after a key, such as "T-170: tasks.test.js can hang in CI". So the default fix signals find almost no fixes.
 
-- Building58 uses the person's list of 33 fix PRs from `~/code/repo/rooms/building58-fix-prs.md` (19 product bugs and 14 flaky or broken tests), as `pr:` signals. `title:fix` also matched PR 30, "Fix the manager's door and give him a keyboard", which is not on the list. That makes 34.
+- Building58 uses the person's list of 33 fix PRs from `~/code/repo/rooms/building58-fix-prs.md` (19 product bugs and 14 flaky or broken tests), as `pr:` signals. `title:fix` also matched PR 30, "Fix the manager's door and give him a keyboard". PR 30 is not one of the 33. The person's file lists it under "Still for the person to decide", so the person decides it in S3. That makes 34. PR 30 is one of the 20 escaped defects, with a strong link to PR 27 (confidence 0.86).
+- The person's list is from 2026-11-19 and stops at PR 131. The run read merged PRs up to 148, and for PRs 132 to 148 only `label:bug`, `title:fix` and `branch:fix/` could mark a fix. None did. Several of those titles name a bug or a flaky test, such as 133 "lead-merge.test.js is flaky on main", 136 "pr-comments test is flaky under load", and 142 and 144 (ECONNRESET). So 34 fix PRs and 20 escaped defects are a floor. Those PRs should join the list before S3 and the backtest (S8).
 - edd-platform has no such list yet. Its run used `title_after_key:fix` and `revert`, which found 2 fix PRs. Its titles hold about 30 more PRs that may be fixes, such as "T-90: Runner: provider errors on agents with tools crash the whole suite run".
 
 A first trial run on Building58 used the signals `[label:bug, title:fix, title_after_key:fix, branch:fix/, revert]`. It found 2 fix PRs, and one of them, PR 111 "T-338: Fix small review findings in the same PR instead of filing follow-ups", is a change of process, not a bug fix. It made 10 REST requests and 3 GraphQL queries. Its files are in `~/code/repo/exhibit-phase-a/trial-run-own-signals`.
@@ -82,6 +84,8 @@ Not yet. Use Building58 alone for now.
 - The spec's table of commands lists `exhibit history` without `--repo`, but the command stops without it, also inside a clone whose `origin` names the repo. Filed as ticket 264.
 
 No run failed, and no run came near the rate limit.
+
+The GraphQL numbers do not agree. Each run printed 3 GraphQL queries for 9 points. But GraphQL `remaining` did not change during the Building58 run, and went down by 3 during the edd-platform run. Exhibit adds up `rateLimit { cost }` from each reply, which is GitHub's own figure for what the query costs. Each query costs at least 1 point, so a change of 0 after 3 queries means `gh api rate_limit` was behind, not that Exhibit counted wrong. A later test of one query like Exhibit's gave `cost` 2, and `used` in the same replies went up by 3 between two such queries, while other sessions used the same token. So the shared token makes these numbers too noisy to check Exhibit's count. No ticket is filed for it.
 
 ## The run-only evidence.yml files
 
