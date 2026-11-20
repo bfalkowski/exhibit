@@ -94,6 +94,27 @@ test('a probe that times out leaves no process running', async (t) => {
   assert.equal(await gone(pid), true, `process ${pid} is still running`);
 });
 
+test('a time-out is failed, not an error, when macOS answers EPERM for a group of zombies', async (t) => {
+  // On macOS, kill on a process group that holds only zombies fails with EPERM, not ESRCH. That
+  // happens now and then when the second kill comes right after the time limit's kill. This stub
+  // does the real kill, then throws EPERM, so the race happens on every run.
+  const realKill = process.kill;
+  process.kill = (pid, signal) => {
+    if (pid >= 0) return realKill.call(process, pid, signal);
+    try {
+      realKill.call(process, pid, signal);
+    } catch {
+      // The real kill may find nothing, which is what the stub stands for.
+    }
+    throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+  };
+  t.after(() => { process.kill = realKill; });
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'sleep 30 & sleep 30 & wait' }), { ...where, timeoutSeconds: 0.2 });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.details.timed_out, true);
+});
+
 test('a hidden probe keeps no output and no artifacts', async (t) => {
   const where = setup(t);
   const result = await runProbe(probe({ run: 'echo secret-$((40 + 2)); echo x > a.log; exit 1', artifacts: ['a.log'], hidden: true }), { ...where, timeoutSeconds: 10 });

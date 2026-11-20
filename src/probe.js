@@ -81,8 +81,9 @@ async function runInGroup(command, { cwd, logFile, timeoutMs }) {
       try {
         process.kill(-child.pid, 'SIGKILL');
       } catch (error) {
-        // ESRCH: the group has no process left.
-        if (error.code !== 'ESRCH') throw error;
+        // ESRCH: the group has no process left. EPERM: on macOS, the group holds only zombies that
+        // the system has not yet cleaned up, so no live process is left either.
+        if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
       }
     };
     let timedOut = false;
