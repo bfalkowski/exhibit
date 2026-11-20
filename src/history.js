@@ -18,8 +18,9 @@ export async function readHistory(options) {
 // Returns { lines, read }: one history line for each merged PR, newest merge first, and how
 // many of them it read from the forge. `forge` is the forge module for the repo, such as
 // createGitHubForge in src/github.js.
-// `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N. The forge's list
-// of merged PRs is always read in full, and these two options pick from it.
+// `since` (a Date) keeps PRs merged at or after it. `limit` keeps the newest N. The forge gets
+// both, so it can stop its list of merged PRs early. It may list more PRs than these two options
+// keep, and they pick from the list.
 // `previous` holds the lines of the old history file, which must pass the schema. A kept PR that
 // has a line there is not read again, and keeps that line as it is, unless it was merged in the
 // look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
@@ -36,7 +37,7 @@ export async function readHistory(options) {
 // `warn` gets one text for each PR whose files list the forge cut short, and one for each comment
 // whose only verdict is in a quoted line, in the order of the lines.
 export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
-  let merged = await forge.mergedPulls();
+  let merged = await forge.mergedPulls({ since, limit });
   if (since) merged = merged.filter((pr) => new Date(pr.merged_at) >= since);
   merged.sort((a, b) => b.merged_at.localeCompare(a.merged_at) || b.number - a.number);
   if (limit !== undefined) merged = merged.slice(0, limit);
