@@ -498,12 +498,14 @@ export function createGitHubForge({ repo, ...client }) {
       }
       // A PR that someone updated while the pages were read moves to the top of the list, so the
       // later pages do not hold it. Read from the top again, down to the PRs that were updated
-      // before the first page was read, to find it. This is most often one query.
-      if (byUpdate && pages > 1) {
+      // before the first page was read, to find it. This is most often one query. When the first
+      // page had no update times, the first pass did not stop early and read the whole list, so
+      // there is nothing to find.
+      if (byUpdate && pages > 1 && Number.isFinite(firstNewest)) {
         for (let after = null, more = true; more; ) {
           const page = await readPage(after);
           ({ hasNextPage: more, endCursor: after } = page.pageInfo);
-          if (oldestUpdate(page.nodes) < firstNewest) break;
+          if (oldestUpdate(page.nodes) + ORDER_MARGIN_MS < firstNewest) break;
         }
       }
       return merged;
@@ -557,17 +559,25 @@ export function createGitHubForge({ repo, ...client }) {
 const newestUpdate = (nodes) => Math.max(...nodes.map((found) => Date.parse(found.updatedAt)));
 const oldestUpdate = (nodes) => Math.min(...nodes.map((found) => Date.parse(found.updatedAt)));
 
+// GitHub's list "ordered by UPDATED_AT" is not always in the order of the updatedAt it gives. On
+// cli/cli, a PR came after another PR that it was updated 2.2 hours later than (spec 8.3). So the
+// stops below allow a PR on a later page to be updated, and merged, up to this long after the
+// oldest update time on the page before. GitHub does not document how far off its order can be,
+// so this margin is a guess, made large against the one case seen.
+export const ORDER_MARGIN_MS = 24 * 60 * 60 * 1000;
+
 // Returns true when no PR after the page whose oldest update time is `oldest` can be one that
 // history keeps. `merged` holds the PRs read so far. Each later PR was updated at or before
-// `oldest`, and a merge updates the PR, so it was merged at or before `oldest` too. So it is not
-// kept when `oldest` is before `since`. And it is not kept when `limit` PRs that history keeps
-// were merged after `oldest`, because those PRs come first.
+// `oldest` plus ORDER_MARGIN_MS, and a merge updates the PR, so it was merged by then too. Call
+// that time `latest`. A later PR is not kept when `latest` is before `since`. And it is not kept
+// when `limit` PRs that history keeps were merged after `latest`, because those PRs come first.
 function noneLeftToKeep(merged, oldest, since, limit) {
-  if (since && oldest < since.getTime()) return true;
+  const latest = oldest + ORDER_MARGIN_MS;
+  if (since && latest < since.getTime()) return true;
   if (limit === undefined) return false;
   const newer = merged.filter((pr) => {
     const at = Date.parse(pr.merged_at);
-    return at > oldest && (!since || at >= since.getTime());
+    return at > latest && (!since || at >= since.getTime());
   });
   return newer.length >= limit;
 }

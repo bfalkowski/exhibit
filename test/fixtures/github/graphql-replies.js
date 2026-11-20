@@ -4,6 +4,8 @@
 // Each PR is { number, url, title, body, author, mergedAt, updatedAt, changedFiles, mergeSha, baseRef,
 // baseSha, headRef, headSha, labels, files, reviews, comments, ci }:
 // - updatedAt: when the PR was last updated. It is mergedAt when left out.
+// - sortedAt: where RecentMergedPulls puts the PR. It is updatedAt when left out. GitHub's order
+//   does not always follow updatedAt, and a test can give a PR an older sortedAt to show that.
 // - author: { __typename, login }, or null for a deleted account. A review or comment has one too.
 // - labels: [{ name }]. files: [{ path, additions, deletions }].
 // - reviews: [{ state, submittedAt, author }]. comments: [{ body, createdAt, author }].
@@ -27,8 +29,8 @@ export function graphqlReplies(repo, pulls, { pullsPerPage = 50, itemsPerPage = 
 
   // MergedPulls lists the PRs in the order given. RecentMergedPulls lists them updated last first,
   // as GitHub does, with its own cursors.
-  const updated = (pull) => pull.updatedAt ?? pull.mergedAt;
-  const byUpdate = [...pulls].sort((a, b) => updated(b).localeCompare(updated(a)));
+  const sorted = (pull) => pull.sortedAt ?? pull.updatedAt ?? pull.mergedAt;
+  const byUpdate = [...pulls].sort((a, b) => sorted(b).localeCompare(sorted(a)));
   for (const [query, list, cursor] of [['MergedPulls', pulls, 'pulls'], ['RecentMergedPulls', byUpdate, 'recent']]) {
     const pullPages = chunks(list, pullsPerPage);
     pullPages.forEach((page, index) => {
