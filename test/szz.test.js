@@ -165,26 +165,30 @@ test('SZZ on the fixture repo', async (t) => {
 const askedShas = (fetch) => fetch.calls.map((call) => /\/commits\/([0-9a-f]{40})\/pulls/.exec(call.key)?.[1]).filter(Boolean);
 
 test('the walk to a squash fix\'s first commit', async (t) => {
-  await t.test('asks GitHub nothing when the parent is a merge SHA in the history', async (t) => {
+  // Building the fixture repo takes seconds, so the subtests share one build. SZZ only reads
+  // the repo. Each subtest makes its own fetch, so its list of requests starts empty.
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+
+  await t.test('asks GitHub nothing when the parent is a merge SHA in the history', async () => {
     // Only the squash fixes 7 and 9 count as fixes here. Their parents are the merge SHAs of PR 6
     // and PR 8, so the walk costs no request. Fix 9 moves lines only, so it blames nothing. Fix 7
     // blames one line on PR 2's merge SHA and one on a commit on PR 3's branch: only that one
     // goes to GitHub.
-    const repo = buildSzzRepo();
-    t.after(() => repo.cleanup());
     const history = repo.history.map((pr) => ({ ...pr, classification: { ...pr.classification, fix: pr.number === 7 || pr.number === 9 } }));
     const fetch = commitPullsFetch(repo, REPO);
     const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
+    const fix9 = lines.find((line) => line.number === 9);
+    assert.deepEqual(fix9.szz.links, []);
+    assert.deepEqual(fix9.szz.unlinked_lines, []);
     const fix7 = lines.find((line) => line.number === 7);
     const pr3 = fix7.szz.links.find((link) => link.pr === 3);
     assert.deepEqual(askedShas(fetch), [pr3.lines[0].blame.commit]);
   });
 
-  await t.test('asks GitHub once about the parent, and stops there, when the parent is not a merge SHA in the history', async (t) => {
+  await t.test('asks GitHub once about the parent, and stops there, when the parent is not a merge SHA in the history', async () => {
     // With only PR 9 in the history, its parent (PR 8's merge commit) is not a known merge SHA.
     // GitHub says it belongs to PR 8, not PR 9, so the walk stops after one request.
-    const repo = buildSzzRepo();
-    t.after(() => repo.cleanup());
     const fix9 = repo.history.find((pr) => pr.number === 9);
     const fetch = commitPullsFetch(repo, REPO);
     const [line] = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }) });
@@ -194,11 +198,9 @@ test('the walk to a squash fix\'s first commit', async (t) => {
     assert.equal(line.szz.blamed_commit, parent);
   });
 
-  await t.test('an incremental run passes the whole file as known, so SZZ on PR 9 alone asks GitHub nothing', async (t) => {
+  await t.test('an incremental run passes the whole file as known, so SZZ on PR 9 alone asks GitHub nothing', async () => {
     // The same fix as above, but the commit-to-PR map sees every line, as in an incremental run
     // where only PR 9 is new. PR 8's merge SHA is then known, so the walk costs no request.
-    const repo = buildSzzRepo();
-    t.after(() => repo.cleanup());
     const fix9 = repo.history.find((pr) => pr.number === 9);
     const fetch = commitPullsFetch(repo, REPO);
     const lines = await addSzz([fix9], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), known: repo.history });
