@@ -157,7 +157,9 @@ async function withIdentity(cwd) {
 // the first lines git wrote to stderr.
 function git(cwd, args, { input, env = process.env } = {}) {
   return new Promise((done, fail) => {
-    const child = spawn('git', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // stdin is a pipe only when there is input. A git command that reads no input can exit
+    // before a write to its stdin, and the write then fails with EPIPE.
+    const child = spawn('git', args, { cwd, env, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
@@ -168,6 +170,10 @@ function git(cwd, args, { input, env = process.env } = {}) {
       const reason = stderr.trim().split('\n').slice(0, 3).join(' ') || `git ${args[0]} exited ${exitCode}`;
       fail(Object.assign(new Error(`git ${args[0]} failed: ${reason}`), { exitCode, reason }));
     });
-    child.stdin.end(input ?? '');
+    if (input !== undefined) {
+      // A failed write shows as git's own exit code in 'close', so the error is not needed here.
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
   });
 }
