@@ -24,8 +24,8 @@ const VERDICT = new RegExp(
 // line (">"), a heading, a code fence, a line of code, a thematic break or an empty list item in
 // the quote, the next line is not in it. A heading may be a line of "=" or "-" under a line of
 // text, with the same count of ">" as the quote that holds the paragraph (a setext heading).
-// With fewer ">", that line is lazy text. A lazy line does not change that count. A line of code is in a fence, or is indented by four spaces, not a tab, after a line that is not
-// text.
+// With fewer ">", that line is lazy text. A lazy line does not change that count. A line of
+// code is in a fence, or is indented by four spaces, not a tab, after a line that is not text.
 // A backtick fence has no backtick after its marks, so "```x``` said" is text with inline code.
 const QUOTE = /^\s*>/;
 const THEMATIC_BREAK = String.raw`(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`;
