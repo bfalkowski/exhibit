@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildExhibit, EXIT_CODES, renderSummary } from '../src/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
+import { testsBeforeAfter } from '../src/test-runs.js';
 
 const SETTINGS = { fix_signals: ['label:bug', 'title:fix', 'branch:fix/'] };
 const policyWith = (needs, kinds = {}) => ({ settings: SETTINGS, kinds, default: { risk: 'medium', needs } });
@@ -75,9 +76,37 @@ test('a change to evidence.yml gives needs_person, with a gap that says why', as
 test('the built-in collectors skip what is not built yet, so mutation can never give meets_policy', async () => {
   const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }, 'tests-before-after', 'failing-before'])), { ...options(undefined), collectors: undefined });
   assert.equal(exhibit.verdict, 'needs_person');
-  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['skipped', 'skipped', 'skipped']);
+  // tests-before-after is built. With no test command in the policy, its evidence is missing.
+  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['skipped', 'missing', 'skipped']);
   assert.match(exhibit.gaps[0].how_to_fix, /S6/);
-  assert.match(exhibit.gaps[1].how_to_fix, /not built yet/);
+  assert.match(exhibit.gaps[1].how_to_fix, /settings\.test_command/);
+  assert.match(exhibit.gaps[2].how_to_fix, /not built yet/);
+});
+
+test('the tests run once, however many collectors ask, and flaky tests from collectors are listed', async () => {
+  let runs = 0;
+  const runTests = async () => {
+    runs += 1;
+    return { base: new Map([['t > a', 'passed']]), head: new Map([['t > a', 'passed'], ['t > b', 'flaky']]) };
+  };
+  const reuse = async (requirement, context) => {
+    await context.testRuns();
+    return { status: 'met', details: {}, flaky_tests: ['t > z'] };
+  };
+  const collectors = { ...ALL_MET, 'tests-before-after': testsBeforeAfter, 'failing-before': reuse };
+  const exhibit = await buildExhibit(input(policyWith(['tests-before-after', 'failing-before'])), { ...options(collectors), runTests });
+  assert.equal(runs, 1);
+  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['met', 'met']);
+  assert.deepEqual(exhibit.flaky_tests, ['t > b', 't > z']);
+});
+
+test('a head where no test passes, only skipped or flaky ones, gives missing', async () => {
+  const runTests = async () => ({ base: new Map([['t > a', 'passed']]), head: new Map([['t > a', 'skipped'], ['t > b', 'flaky']]) });
+  const exhibit = await buildExhibit(input(policyWith(['tests-before-after'])), { ...options({ ...ALL_MET, 'tests-before-after': testsBeforeAfter }), runTests });
+  assert.equal(exhibit.requirements[0].status, 'missing');
+  assert.deepEqual(exhibit.requirements[0].details.head, { passed: 0, failed: 0, skipped: 1, flaky: 1 });
+  assert.match(exhibit.gaps[0].how_to_fix, /no test passed there/);
+  assert.equal(exhibit.verdict, 'needs_person');
 });
 
 test('no matching kind and no default gives needs_person', async () => {

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createGitHubForge, isRepoName } from '../github.js';
+import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { checkHistoryLine } from '../history-schema.js';
@@ -32,16 +32,18 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
 // many points they used. A run that fails says it too, on stderr.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
-  const options = parseOptions(argv);
-  const token = env.GITHUB_TOKEN;
-  if (!token) throw new ToolError('GITHUB_TOKEN is not set. Set it to a GitHub token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).');
+  // GitHub is the only forge today, so the command picks its module first and asks it the rest.
+  const forgeModule = GITHUB_FORGE;
+  const options = parseOptions(argv, forgeModule);
+  const token = env[forgeModule.tokenEnv];
+  if (!token) throw new ToolError(`${forgeModule.tokenEnv} is not set. Set it to a ${forgeModule.displayName} token that can read the repo, for example ${forgeModule.tokenExample}.`);
 
   // Read and check the policy before asking GitHub, so a bad evidence.yml fails fast.
   const fixSignals = (await readPolicy(cwd)).settings.fix_signals;
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
-  const forge = createGitHubForge({ repo: options.repo, token, fetch, cache });
+  const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
   try {
     await run(options, { cwd, forge, fixSignals, folder, warn, stdout, stderr });
   } catch (error) {
@@ -183,7 +185,7 @@ function classificationChanges(lines, previous) {
   return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
 }
 
-function parseOptions(argv) {
+function parseOptions(argv, forgeModule) {
   let values;
   try {
     ({ values } = parseArgs({
@@ -197,7 +199,7 @@ function parseOptions(argv) {
   }
 
   if (values.repo === undefined) throw new ToolError('history needs --repo owner/name, for example --repo bfalkowski/Building58.');
-  if (!isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
+  if (!forgeModule.isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
 
   let since;
   if (values.since !== undefined) {

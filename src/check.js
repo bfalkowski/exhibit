@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
+import { runTestsOnBaseAndHead, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
@@ -7,10 +8,11 @@ const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 // The exit code of exhibit check for each verdict (spec 7 and 9.8).
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
 
-// A collector gets one requirement and gives back { status, details, how_to_fix }. These are the
-// built-in ones. The evidence collectors for tests come in later tickets. Until each one lands,
-// it says `skipped`, so a requirement it cannot check never passes on its own. The probe
-// collector needs the head worktree, so the check command adds it (src/probe.js).
+// A collector gets one requirement and the run's context, and gives back { status, details,
+// how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The other
+// evidence collectors come in later tickets. Until each one lands, it says `skipped`, so a
+// requirement it cannot check never passes on its own. The probe collector needs the head
+// worktree, so the check command adds it (src/probe.js).
 const notBuilt = (what) => async () => ({
   status: 'skipped',
   details: { reason: 'not built yet' },
@@ -18,7 +20,7 @@ const notBuilt = (what) => async () => ({
 });
 
 export const COLLECTORS = Object.freeze({
-  'tests-before-after': notBuilt('tests-before-after (the tests on the base and the head)'),
+  'tests-before-after': testsBeforeAfter,
   'failing-before': notBuilt('failing-before (a test that fails on the base and passes on the head)'),
   mutation: async () => ({
     status: 'skipped',
@@ -32,7 +34,12 @@ export const COLLECTORS = Object.freeze({
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
 // changed paths `files`, what is known of the PR (`pr`: title, labels, branch), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
-// `head` SHAs.
+// `head` SHAs, and `cwd`, the clone, and `env` for the test command.
+//
+// Each collector gets a context: `cwd`, `env`, `base`, `head`, the policy's `settings`, and
+// `testRuns()`, which runs the tests on the base and the head the first time it is called and
+// gives back the same per-test results after that. So a later collector, such as failing-before,
+// uses the same results and does not run the tests again. `runTests` makes those results.
 //
 // Each requirement goes to the collector for its type. A collector that throws, or gives back no
 // valid status, makes that requirement `error`, and the verdict `error`. The verdict is
@@ -42,16 +49,28 @@ export const COLLECTORS = Object.freeze({
 // `clock` gives milliseconds for duration_ms, and `now` the time for created_at. These and
 // `environment` are the only parts of the result that can differ between two runs on the same
 // commits.
-export async function buildExhibit(change, { collectors = COLLECTORS, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
+export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
   const files = [...new Set(change.files)].sort();
   const { classification, requirements } = classifyChange(change.policy, files, change.pr);
   const { has_default: hasDefault, ...shown } = classification;
 
+  let testRuns;
+  const context = {
+    cwd: change.cwd,
+    env: change.env ?? process.env,
+    base: change.base,
+    head: change.head,
+    settings: change.policy?.settings ?? {},
+    testRuns: () => (testRuns ??= runTests({ cwd: change.cwd, base: change.base, head: change.head, settings: change.policy?.settings ?? {}, env: change.env ?? process.env }))
+  };
+
   const collected = [];
   const gaps = [];
+  const flaky = new Set();
   for (const requirement of requirements) {
     const started = clock();
-    const result = await collect(collectors, requirement);
+    const result = await collect(collectors, requirement, context);
+    for (const name of result.flaky_tests) flaky.add(name);
     const item = {
       type: requirement.type,
       params: requirement.params,
@@ -105,7 +124,7 @@ export async function buildExhibit(change, { collectors = COLLECTORS, clock = ()
       builder: collected.filter((item) => item.author === 'builder').length,
       hidden: collected.filter((item) => item.author === 'hidden').length
     },
-    flaky_tests: [],
+    flaky_tests: [...flaky].sort(),
     environment,
     created_at: now().toISOString()
   };
@@ -113,17 +132,18 @@ export async function buildExhibit(change, { collectors = COLLECTORS, clock = ()
 
 // Runs one collector. Any throw, or a reply with no valid status, is an `error`: Exhibit failed,
 // so the requirement must not count as met.
-async function collect(collectors, requirement) {
+async function collect(collectors, requirement, context) {
   const collector = collectors[requirement.type];
   try {
     if (typeof collector !== 'function') throw new Error(`no collector for ${requirement.type}`);
-    const result = await collector(requirement);
+    const result = await collector(requirement, context);
     if (!result || !STATUSES.includes(result.status)) throw new Error(`the ${requirement.type} collector gave back no valid status (${JSON.stringify(result?.status)})`);
-    return { status: result.status, details: result.details ?? {}, how_to_fix: result.how_to_fix };
+    return { status: result.status, details: result.details ?? {}, how_to_fix: result.how_to_fix, flaky_tests: result.flaky_tests ?? [] };
   } catch (error) {
     return {
       status: 'error',
       details: { message: error.message },
+      flaky_tests: [],
       how_to_fix: `Exhibit failed while it collected this evidence: ${error.message}. Fix the cause and run exhibit check again. If the cause is in Exhibit, report it as an Exhibit issue.`
     };
   }

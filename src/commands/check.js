@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { buildExhibit, COLLECTORS, EXIT_CODES, renderSummary } from '../check.js';
 import { checkExhibit } from '../exhibit-schema.js';
-import { createGitHubForge, isRepoName } from '../github.js';
+import { GITHUB_FORGE } from '../github.js';
 import { readPolicy } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
 import { ToolError } from '../tool-error.js';
@@ -32,16 +32,18 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   // Remove the old files before anything can fail, a bad argument too.
   await Promise.all([...Object.values(OUTPUT), PROBES].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
-  const options = parseOptions(argv);
+  // GitHub is the only forge today, so the command picks its module first and asks it the rest.
+  const forgeModule = GITHUB_FORGE;
+  const options = parseOptions(argv, forgeModule);
 
   const policy = await readPolicy(cwd);
   const policyFile = { path: 'evidence.yml', sha256: await fileHash(join(cwd, 'evidence.yml')) };
 
   let refs;
   if (options.pr !== null) {
-    const token = env.GITHUB_TOKEN;
-    if (!token) throw new ToolError('GITHUB_TOKEN is not set. --pr reads the PR from GitHub, so set it to a token that can read the repo, for example GITHUB_TOKEN=$(gh auth token).');
-    const forge = createGitHubForge({ repo: options.repo, token, fetch });
+    const token = env[forgeModule.tokenEnv];
+    if (!token) throw new ToolError(`${forgeModule.tokenEnv} is not set. --pr reads the PR from ${forgeModule.displayName}, so set it to a token that can read the repo, for example ${forgeModule.tokenExample}.`);
+    const forge = forgeModule.connect({ repo: options.repo, token, fetch });
     const pull = await forge.pull(options.pr);
     refs = {
       base: pull.base.sha,
@@ -58,13 +60,13 @@ export async function check(argv, { env, cwd, fetch, stdout, collectors }) {
   const head = await commitSha(cwd, refs.head, refs.hint);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
 
-  // The head worktree is made only when a collector asks for it, and removed at the end.
+  // The head worktree for probes is made only when a probe asks for it, and removed at the end.
   const headWorktree = worktreeOnDemand(cwd, head);
   let exhibit;
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
-    exhibit = await buildExhibit({ policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
   } finally {
     await headWorktree.remove();
   }
@@ -171,7 +173,7 @@ async function writeTogether(cwd, files) {
   }
 }
 
-function parseOptions(argv) {
+function parseOptions(argv, forgeModule) {
   let values;
   try {
     ({ values } = parseArgs({
@@ -183,7 +185,7 @@ function parseOptions(argv) {
   } catch (error) {
     throw new ToolError(`${error.message}. ${USAGE}`);
   }
-  if (values.repo !== undefined && !isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
+  if (values.repo !== undefined && !forgeModule.isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
   let pr = null;
   if (values.pr !== undefined) {
     if (!/^[1-9]\d*$/.test(values.pr)) throw new ToolError(`--pr must be a PR number, such as 12, not "${values.pr}".`);
