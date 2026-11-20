@@ -189,6 +189,7 @@ test('the GitHub forge module holds its static rules: the repo name check, the t
   assert.equal(GITHUB_FORGE.name, 'github');
   assert.equal(GITHUB_FORGE.displayName, 'GitHub');
   assert.equal(GITHUB_FORGE.tokenEnv, 'GITHUB_TOKEN');
+  assert.equal(GITHUB_FORGE.tokenExample, 'GITHUB_TOKEN=$(gh auth token)');
   assert.equal(GITHUB_FORGE.isRepoName('bfalkowski/Building58'), true);
   assert.equal(GITHUB_FORGE.isRepoName('not a repo'), false);
   const forge = GITHUB_FORGE.connect({ repo: 'acme/widgets', token: 't', fetch: widgets() });
