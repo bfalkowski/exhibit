@@ -1,0 +1,155 @@
+{
+  "/rest/api/2/issue/PAY-482?fields=issuetype,created": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10482",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-482",
+      "key": "PAY-482",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Bug",
+          "subtask": false
+        },
+        "created": "2026-01-05T09:30:00.000+0000"
+      }
+    }
+  },
+  "/rest/api/2/issue/PAY-483?fields=issuetype,created": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10483",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-483",
+      "key": "PAY-483",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Story",
+          "subtask": false
+        },
+        "created": "2026-01-06T10:00:00.000+0000"
+      }
+    }
+  },
+  "/rest/api/2/issue/PAY-484?fields=issuetype,created": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10484",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-484",
+      "key": "PAY-484",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Defect",
+          "subtask": false
+        },
+        "created": "2026-01-07T11:00:00.000-0500"
+      }
+    }
+  },
+  "/rest/api/2/issue/PAY-404?fields=issuetype,created": {
+    "status": 404,
+    "headers": {},
+    "body": {
+      "errorMessages": [
+        "Issue does not exist or you do not have permission to see it."
+      ],
+      "errors": {}
+    }
+  },
+  "/rest/api/2/issue/PAY-503?fields=issuetype,created": {
+    "status": 503,
+    "headers": {},
+    "body": {
+      "errorMessages": [
+        "Service Unavailable"
+      ]
+    }
+  },
+  "/rest/api/2/issue/PAY-401?fields=issuetype,created": {
+    "status": 401,
+    "headers": {},
+    "body": {
+      "errorMessages": [
+        "You are not authenticated. Authentication required to perform this operation."
+      ]
+    }
+  },
+  "/rest/api/2/issue/PAY-482?fields=issuetype,created,customfield_10042": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10482",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-482",
+      "key": "PAY-482",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Bug",
+          "subtask": false
+        },
+        "created": "2026-01-05T09:30:00.000+0000",
+        "customfield_10042": {
+          "self": "https://acme.atlassian.net/rest/api/2/customFieldOption/10100",
+          "value": "Production",
+          "id": "10100"
+        }
+      }
+    }
+  },
+  "/rest/api/2/issue/PAY-485?fields=issuetype,created,customfield_10042": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10485",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-485",
+      "key": "PAY-485",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Bug",
+          "subtask": false
+        },
+        "created": "2026-01-08T09:00:00.000+0000",
+        "customfield_10042": {
+          "self": "https://acme.atlassian.net/rest/api/2/customFieldOption/10101",
+          "value": "QA",
+          "id": "10101"
+        }
+      }
+    }
+  },
+  "/rest/api/2/issue/PAY-486?fields=issuetype,created,customfield_10042": {
+    "status": 200,
+    "headers": {},
+    "body": {
+      "expand": "renderedFields,names,schema",
+      "id": "10486",
+      "self": "https://acme.atlassian.net/rest/api/2/issue/PAY-486",
+      "key": "PAY-486",
+      "fields": {
+        "issuetype": {
+          "self": "https://acme.atlassian.net/rest/api/2/issuetype/1",
+          "id": "1",
+          "name": "Bug",
+          "subtask": false
+        },
+        "created": "2026-01-09T09:00:00.000+0000",
+        "customfield_10042": null
+      }
+    }
+  }
+}

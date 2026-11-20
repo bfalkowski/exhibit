@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge, GitHubReplyError } from '../src/github.js';
+import { createJiraTracker } from '../src/jira.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { ToolError } from '../src/tool-error.js';
@@ -297,6 +298,43 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
   });
 });
 
+test('SZZ takes the Jira issue\'s created date as the bug report date, when the fix links no GitHub issue', async (t) => {
+  // PR 6 fixes a line that PR 1 added in a commit written at 2026-01-05T10:00:00Z. Its fix_signal
+  // says the tracker:jira signal found it, by the Bug SHOP-6.
+  async function run(t, created, body = null) {
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const pulls = commitPullsFetch(repo, REPO);
+    const json = (status, reply) => new Response(JSON.stringify(reply), { status, headers: { 'content-type': 'application/json' } });
+    const fetch = async (url, init) => {
+      const { pathname } = new URL(url);
+      if (pathname === '/rest/api/2/issue/SHOP-6') return json(200, { key: 'SHOP-6', fields: { issuetype: { name: 'Bug' }, created } });
+      if (pathname.endsWith('/issues/50')) return json(200, { number: 50, created_at: '2026-01-05T11:00:00Z' });
+      return pulls(url, init);
+    };
+    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token: 't', fetch });
+    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' } };
+    const [line] = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), tracker });
+    return line;
+  }
+
+  await t.test('an issue created before the commit drops the line', async (t) => {
+    const { szz } = await run(t, '2026-01-05T09:30:00.000+0000');
+    assert.deepEqual(szz.links, []);
+    assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']]);
+  });
+
+  await t.test('an issue created after the commit keeps the link', async (t) => {
+    const { szz } = await run(t, '2026-01-05T10:30:00.000+0000');
+    assert.deepEqual(szz.links.map((link) => [link.pr, link.confidence]), [[1, 1]]);
+  });
+
+  await t.test('a GitHub issue that the body links wins over the Jira date', async (t) => {
+    const { szz } = await run(t, '2026-01-05T09:30:00.000+0000', 'Fixes #50');
+    assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+});
+
 test('a GitHub error for one fix skips that fix, unless the token or the rate limit is the problem', async (t) => {
   const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   // Runs SZZ on fix PR 6, which links issue 50, with a GitHub that answers `status` for `failing`.
@@ -577,4 +615,48 @@ test('SZZ reads the files to drop a JSDoc text row and a Python line that only c
     ['total.py', 3, 'whitespace'],
     ['total.py', 5, 'whitespace']
   ]);
+});
+
+// A repo whose fix changes 400 JavaScript files with long names, so the list of files that SZZ
+// sends to git cat-file is over 100 KB: more than a pipe holds before git reads it.
+function repoWithManyChangedFiles(t) {
+  const dir = tempDir(t, 'exhibit-many-');
+  git(dir, ['init', '--quiet', '--initial-branch=main']);
+  const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
+  const names = Array.from({ length: 400 }, (_, i) => `${String(i).padStart(3, '0')}-${'x'.repeat(150)}.js`);
+  const write = (text) => {
+    for (const name of names) writeFileSync(join(dir, name), text);
+    git(dir, ['add', '.']);
+  };
+  write('one;\n');
+  commit('Add the files');
+  write('two;\n');
+  commit('Fix the files');
+  return dir;
+}
+
+// Puts a git first on PATH that fails `git cat-file --batch` at once, without reading its
+// input, and runs the real git for every other command.
+function gitThatFailsCatFile(t) {
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = tempDir(t, 'exhibit-fake-git-');
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --batch ]; then echo 'fatal: cat-file broke' >&2; exit 128; fi
+done
+exec '${realGit}' "$@"
+`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${path}`;
+  t.after(() => { process.env.PATH = path; });
+}
+
+test('when git cat-file fails before it reads a long file list, SZZ skips the fix with a warning, and the run goes on', async (t) => {
+  const dir = repoWithManyChangedFiles(t);
+  const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
+  gitThatFailsCatFile(t);
+  const warnings = [];
+  const [line] = await addSzz([fix], { dir, forge: noPrs(), warn: (text) => warnings.push(text) });
+  assert.equal(line.szz, null);
+  assert.deepEqual(warnings, ['PR 3: SZZ skipped, because git failed: git cat-file: fatal: cat-file broke']);
 });
