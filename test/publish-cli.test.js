@@ -205,3 +205,16 @@ test('with no identity in git, the commit is made by Exhibit, and an empty GIT_A
     'Exhibit <exhibit@users.noreply.github.com>|Exhibit <exhibit@users.noreply.github.com>\n'
   );
 });
+
+test('a name that git refuses for the commit gives exit 2 with git\'s reason, not a bug in Exhibit, and stores nothing', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+
+  const run = spawnSync(process.execPath, publishArgs(file), { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home, { ...IDENTITY, GIT_AUTHOR_NAME: '<>' }) });
+
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: could not make the commit for prs\/12\/1{40}\.json: .*disallowed characters/);
+  assert.doesNotMatch(run.stderr, /a bug in Exhibit/);
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+  assert.equal(fixture.git(fixture.repo, 'for-each-ref', 'refs/exhibit'), '');
+});
