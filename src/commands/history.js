@@ -33,6 +33,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
 // REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
 // many points they used. A run that fails says it too, on stderr.
+// At the end, also after a run that fails, it removes the cache entries that no run has used for
+// 30 days (spec 8.6).
 // With tracker:jira in the fix signals, it asks Jira about each PR's ticket (spec 9.1), with the
 // token in JIRA_API_TOKEN, and says how many Jira requests it made. With no token, the signal
 // matches no PR, the run still succeeds, and it says so in one line on stderr.

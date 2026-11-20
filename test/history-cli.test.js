@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cacheFolder } from '../src/github-cache.js';
+import { cacheFolder, UNUSED_DAYS } from '../src/github-cache.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { writeBigFixture } from './fixtures/github/acme-big.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
@@ -396,10 +396,10 @@ test('a run removes the cache entries that no run has used for 30 days', (t) => 
   const folder = cacheOf(cwd);
   const used = readdirSync(folder);
   assert.equal(used.length, 6);
-  // An entry that some other run saved 40 days ago, and that no run has read since.
+  // An entry that no run has read or written for UNUSED_DAYS + 10 days.
   const stale = join(folder, `${'a'.repeat(64)}.json`);
   writeFileSync(stale, '{}');
-  const then = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
   utimesSync(stale, then, then);
 
   const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--full'], { fixturePath, cwd });
@@ -416,7 +416,7 @@ test('a run that fails still removes the cache entries that no run has used for 
   const fresh = join(folder, `${'b'.repeat(64)}.json`);
   writeFileSync(stale, '{}');
   writeFileSync(fresh, '{}');
-  const then = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  const then = new Date(Date.now() - (UNUSED_DAYS + 10) * 24 * 60 * 60 * 1000);
   utimesSync(stale, then, then);
 
   const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken', cwd });

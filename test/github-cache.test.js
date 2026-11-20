@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitHub } from '../src/github.js';
-import { cacheFolder, createReplyCache, removeOldEntries } from '../src/github-cache.js';
+import { cacheFolder, createReplyCache, removeOldEntries, UNUSED_DAYS } from '../src/github-cache.js';
 
 // Makes a new empty cache folder. The folder is removed when the test that made it ends.
 const madeFolders = [];
@@ -199,7 +199,7 @@ test('a run that reads an entry marks it as used, so its file time is now', asyn
   const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
   await client(github.fetch, dir).getOne('/repos/o/r');
   const [file] = readdirSync(dir);
-  ageBy(join(dir, file), 40);
+  ageBy(join(dir, file), UNUSED_DAYS + 10);
 
   const second = client(github.fetch, dir);
   await second.getOne('/repos/o/r');
@@ -218,13 +218,13 @@ test('removeOldEntries removes the entries that no run has used for 30 days, and
   const [oldFile] = readdirSync(dir);
   await first.getOne('/new');
   const [newFile] = readdirSync(dir).filter((name) => name !== oldFile);
-  ageBy(join(dir, oldFile), 31);
-  ageBy(join(dir, newFile), 29);
+  ageBy(join(dir, oldFile), UNUSED_DAYS + 1);
+  ageBy(join(dir, newFile), UNUSED_DAYS - 1);
   // A temporary file that a stopped run left behind, and a file that the cache did not write.
   writeFileSync(join(dir, `${oldFile}.123.abc.tmp`), '{"url":');
-  ageBy(join(dir, `${oldFile}.123.abc.tmp`), 31);
+  ageBy(join(dir, `${oldFile}.123.abc.tmp`), UNUSED_DAYS + 1);
   writeFileSync(join(dir, 'notes.txt'), 'mine');
-  ageBy(join(dir, 'notes.txt'), 31);
+  ageBy(join(dir, 'notes.txt'), UNUSED_DAYS + 1);
 
   assert.equal(await removeOldEntries(dir), 2);
   assert.deepEqual(readdirSync(dir).sort(), [newFile, 'notes.txt'].sort());
@@ -240,4 +240,21 @@ test('removeOldEntries on a folder that is not there removes nothing and does no
   const dir = join(newFolder(), 'github');
   assert.equal(await removeOldEntries(dir), 0);
   assert.equal(existsSync(dir), false);
+});
+
+test('removeOldEntries removes an entry that is exactly 30 days old, and keeps one that is 1 second younger', async () => {
+  const dir = newFolder();
+  // A whole second, so the file times hold it exactly.
+  const now = Math.floor(Date.now() / 1000) * 1000;
+  const files = { exact: 'a', younger: 'b', older: 'c' };
+  const ages = { exact: UNUSED_DAYS * DAY, younger: UNUSED_DAYS * DAY - 1000, older: UNUSED_DAYS * DAY + 1000 };
+  for (const [name, letter] of Object.entries(files)) {
+    const path = join(dir, `${letter.repeat(64)}.json`);
+    writeFileSync(path, '{}');
+    const then = new Date(now - ages[name]);
+    utimesSync(path, then, then);
+  }
+
+  assert.equal(await removeOldEntries(dir, { now }), 2);
+  assert.deepEqual(readdirSync(dir), [`${files.younger.repeat(64)}.json`]);
 });
