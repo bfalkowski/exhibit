@@ -4,7 +4,8 @@
 #
 # This is Exhibit's examples/pull-request.yml with three changes:
 # - The check job sets up Node, as Building58's CI does, because evidence.yml runs Building58's tests.
-# - Each job has a time limit. The check runs the tests up to three times, one file at a time.
+# - Each job has a time limit. The check runs the tests two or three times, one file at a time, so
+#   its limit is 120 minutes.
 # - Both jobs pin the release v0.1.0. Keep the same release in both jobs. Never use v0 or main: they
 #   move, so the check job and the publish job of one run could get different Exhibit code.
 name: Exhibit
@@ -21,7 +22,7 @@ jobs:
   check:
     name: Exhibit check
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       # Read the code and the PR. The check runs the PR's code, so it gets nothing more. Building58
       # is a public repo, so this reads the PR too.

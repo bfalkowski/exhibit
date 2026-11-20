@@ -18,7 +18,7 @@ Change nothing else in the PR. A PR that changes `evidence.yml` always gets `nee
 The workflow is [examples/pull-request.yml](../pull-request.yml) with three changes:
 
 - The check job sets up Node with `lts/*`, as Building58's CI does. Exhibit needs Node 20 or later, so the check job does not use Node 18.
-- The check job has a time limit of 60 minutes. The tests run one file at a time, on the base and on the head, and once more on the base for a fix.
+- The check job has a time limit of 120 minutes, and the publish job one of 10. The tests run one file at a time, on the base and on the head, and once more on the base for a fix. Building58's CI notes say one such run took about 10 minutes there. On a busy Mac, one run took 39 minutes, mostly spent waiting on timers. If the check job often takes long, lower the limit or make the tests faster (see below).
 - Both jobs pin `bfalkowski/exhibit@v0.1.0`. Keep the same release in both jobs. Do not pin `v0` or `main`. They move, so the check job and the publish job of one run could get different code. To move to a newer release, change both lines in a PR of its own.
 
 The runner is `ubuntu-24.04`, where Exhibit's own real runs passed. Building58's CI uses `ubuntu-24.04-arm` because it costs less. Exhibit is plain JavaScript, so arm should work, but no real run has shown it yet.
@@ -54,7 +54,7 @@ The test command runs `relay/test/*.test.js` with `node --test`, because Exhibit
 - It has no time limit for each file, only for each test (120 seconds).
 - It leaves out the browser tests in `relay/test/browser/`.
 
-A room ticket can make it faster later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
+A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 39 minutes on a busy Mac. A room ticket can make it faster later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
 
 This policy is a start. Phase A of the field test finds Building58's escaped defects, and the kinds and their needs come from them later.
 
