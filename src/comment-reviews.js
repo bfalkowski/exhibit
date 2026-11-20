@@ -23,8 +23,9 @@ const VERDICT = new RegExp(
 // And a lazy line goes on a quote only when the quote's last line is text: after a blank quote
 // line (">"), a heading, a code fence, a line of code, a thematic break or an empty list item in
 // the quote, the next line is not in it. A heading may be a line of "=" or "-" under a line of
-// text (a setext heading). A line of code is in a fence, or is indented by four spaces after a
-// line that is not text.
+// text with the same count of ">" (a setext heading). With fewer ">", that line is lazy text. A
+// line of code is in a fence, or is indented by four spaces, not a tab, after a line that is not
+// text.
 // A backtick fence has no backtick after its marks, so "```x``` said" is text with inline code.
 const QUOTE = /^\s*>/;
 const THEMATIC_BREAK = String.raw`(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`;
@@ -33,7 +34,7 @@ const ENDS_QUOTE = new RegExp(String.raw`^ {0,3}(?:${NOT_TEXT}|[-+*][ \t]|\d+[.)
 const ENDS_TEXT = new RegExp(String.raw`^\s*$|^ {0,3}(?:${NOT_TEXT})`);
 const QUOTE_MARKS = /^(?:\s*> ?)+/;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
-const INDENTED_CODE = /^(?: {4}|\t)/;
+const INDENTED_CODE = /^ {4}/;
 const EMPTY_LIST_ITEM = /^ {0,3}(?:[-+*]|\d+[.)])[ \t]*$/;
 
 // A GitHub alert box, such as "> [!IMPORTANT]", is a quote in markdown, but it holds the
@@ -84,8 +85,10 @@ function splitQuotes(body) {
         const content = line.replace(QUOTE_MARKS, '');
         const marks = content.match(FENCE)?.[1];
         if (marks) quoteFence = { marks, depth };
-        // A deeper quote starts a new block, so it has no open paragraph yet.
-        text = isText(content, text && depth <= lastDepth);
+        // A deeper quote starts a new block, so it has no open paragraph yet. A line with fewer
+        // ">" after text is lazy: it goes on the paragraph unless it starts a block.
+        if (!text || depth > lastDepth) text = isText(content, 'none');
+        else text = isText(content, depth === lastDepth ? 'same' : 'lazy');
       }
     } else if (quote && (!text || endsQuote(line))) {
       quote = null;
@@ -103,10 +106,12 @@ function splitQuotes(body) {
 }
 
 // Says whether a quoted line, without its ">" marks, is text that a lazy line can go on.
-// afterText says whether the line before it in the quote is text.
-function isText(content, afterText) {
+// after says what comes before it: 'same' is text with the same count of ">", 'lazy' is text
+// with more ">", and 'none' is no text.
+function isText(content, after) {
   if (ENDS_TEXT.test(content)) return false;
-  if (afterText) return !SETEXT_UNDERLINE.test(content);
+  if (after === 'same') return !SETEXT_UNDERLINE.test(content);
+  if (after === 'lazy') return !EMPTY_LIST_ITEM.test(content);
   return !INDENTED_CODE.test(content) && !EMPTY_LIST_ITEM.test(content);
 }
 

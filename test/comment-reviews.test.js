@@ -167,6 +167,19 @@ test('a lazy line does not go on a quote that ends in code, a setext heading or 
   assert.equal(commentVerdict('> quoted\n>     more text\nVerdict: fix'), null);
   assert.equal(commentVerdict('> ===\nVerdict: fix'), null);
   assert.equal(commentVerdict('> quoted\n> *\nVerdict: fix'), null);
+  // A line of "=" or "-" with fewer ">" than the text above it is lazy text, not a heading.
+  assert.equal(commentVerdict('> > quoted\n> ===\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> > quoted\n> --\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> [!NOTE]\n> > quoted\n> ===\n> Verdict: fix'), null);
+  assert.equal(commentVerdict('> > quoted\n>     more\nVerdict: fix'), null);
+  // But an empty list item with fewer ">" still ends the paragraph.
+  assert.equal(commentVerdict('> > quoted\n> -\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> > quoted\n> *\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> > quoted\n> 1.\nVerdict: fix'), 'fix');
+  assert.equal(commentVerdict('> - item\n> -\nVerdict: fix'), 'fix');
+  // One tab after ">" does not reach four columns, so the line is text, not code.
+  assert.equal(commentVerdict('>\tquoted\nVerdict: fix'), null);
+  assert.equal(commentVerdict('> \tquoted\nVerdict: fix'), null);
 });
 
 test('a line that starts with inline code is text, not a code fence', () => {
