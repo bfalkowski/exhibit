@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge, GitHubReplyError } from '../src/github.js';
 import { createJiraTracker } from '../src/jira.js';
@@ -615,4 +615,48 @@ test('SZZ reads the files to drop a JSDoc text row and a Python line that only c
     ['total.py', 3, 'whitespace'],
     ['total.py', 5, 'whitespace']
   ]);
+});
+
+// A repo whose fix changes 400 JavaScript files with long names, so the list of files that SZZ
+// sends to git cat-file is over 100 KB: more than a pipe holds before git reads it.
+function repoWithManyChangedFiles(t) {
+  const dir = tempDir(t, 'exhibit-many-');
+  git(dir, ['init', '--quiet', '--initial-branch=main']);
+  const commit = (message) => git(dir, ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', message]);
+  const names = Array.from({ length: 400 }, (_, i) => `${String(i).padStart(3, '0')}-${'x'.repeat(150)}.js`);
+  const write = (text) => {
+    for (const name of names) writeFileSync(join(dir, name), text);
+    git(dir, ['add', '.']);
+  };
+  write('one;\n');
+  commit('Add the files');
+  write('two;\n');
+  commit('Fix the files');
+  return dir;
+}
+
+// Puts a git first on PATH that fails `git cat-file --batch` at once, without reading its
+// input, and runs the real git for every other command.
+function gitThatFailsCatFile(t) {
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = tempDir(t, 'exhibit-fake-git-');
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --batch ]; then echo 'fatal: cat-file broke' >&2; exit 128; fi
+done
+exec '${realGit}' "$@"
+`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}${delimiter}${path}`;
+  t.after(() => { process.env.PATH = path; });
+}
+
+test('when git cat-file fails before it reads a long file list, SZZ skips the fix with a warning, and the run goes on', async (t) => {
+  const dir = repoWithManyChangedFiles(t);
+  const fix = { number: 3, merge_sha: git(dir, ['rev-parse', 'HEAD']), classification: { fix: true } };
+  gitThatFailsCatFile(t);
+  const warnings = [];
+  const [line] = await addSzz([fix], { dir, forge: noPrs(), warn: (text) => warnings.push(text) });
+  assert.equal(line.szz, null);
+  assert.deepEqual(warnings, ['PR 3: SZZ skipped, because git failed: git cat-file: fatal: cat-file broke']);
 });

@@ -24,7 +24,12 @@ class GitError extends Error {}
 async function git(dir, args, input) {
   try {
     const running = run('git', [...PLAIN, ...args], { cwd: dir, encoding: input === undefined ? 'utf8' : 'buffer', maxBuffer: 512 * 1024 * 1024 });
-    if (input !== undefined) running.child.stdin.end(input);
+    if (input !== undefined) {
+      // When git exits before it reads all of the input, the write fails with EPIPE. With no
+      // listener, that error ends the whole run. The exit of git gives the GitError below.
+      running.child.stdin.on('error', () => {});
+      running.child.stdin.end(input);
+    }
     const { stdout } = await running;
     return stdout;
   } catch (error) {
@@ -747,6 +752,10 @@ function squashCode(text, style) {
 //   triple-quoted string or after a backslash at the end of the line before.
 // Text in quotes is skipped, so a "/*" in a string such as 'src/**/*.js' opens nothing. A
 // regex literal is read as code, so a "/*" in one, such as /[/*]/, is a rare wrong guess.
+// A backtick in one, such as /`/, is a second: it reads as a template string that goes on
+// until the next backtick. So a block comment after it can be missed, and its lines count. Or
+// the next backtick opens a real template string, its text reads as code, and a "/*" in that
+// text opens a block, so the code lines after it drop as a comment.
 function lineFacts(text, path) {
   const rows = text.split('\n');
   return [undefined, ...(commentStyle(path) === 'hash' ? pythonLevels(rows) : blockStarts(rows))];
