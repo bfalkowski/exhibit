@@ -316,6 +316,7 @@ How `exhibit label` works:
 - It checks the label against the schema, then adds it to the end of the file at once. So quitting halfway keeps the labels given so far. A label that fails the schema is not written: `exhibit label` exits 2 and names the problem, and the file keeps its earlier lines.
 - `s` at a link question, at the draft question or at the code question skips a defect. `q` at any question, or the end of the input, quits. The defect it was on is not written, even with a draft on screen. The next run shows the skipped defects and the defects it did not reach, and no defect that has a line.
 - At the end it says how many defects it labeled and skipped, and how many still have no code. With `--json`, it shows the defects and the questions on stderr, and prints one summary line on stdout: `{ "shown": 3, "labeled": 2, "skipped": 1, "open": 1, "output": ".exhibit/labels.jsonl" }`. `shown` counts the defects it showed, and `open` counts the defects still with no line in the file.
+- With `--claude`, the end of the run also says how often the person kept Claude's draft unchanged, once for this run and once for the whole file (section 9.11). With `--json`, the summary line has the same numbers in `drafts`, with `run` and `file`. Each holds `shown`, `kept`, `edited`, `replaced` and `kept_share`, which is null when there are no drafts, and otherwise holds `kept`, `n`, `rate`, `low`, `high` and `weak`.
 - It exits 2 with a message that says to run `exhibit history` first when there is no `.exhibit/history.jsonl`, or when the history has no SZZ links. It exits 2 too when a history line fails the history schema, or a labels line is not JSON or fails the labels schema. It then names the line, and writes nothing.
 - A line for a defect that is no longer in the history, for example after a run of `exhibit history` with a smaller `--limit`, stays in the file.
 - `exhibit history` never changes this file. So when it runs again and SZZ links the fix to the same PRs, a rejected link stays rejected: the line keeps its `rejected_prs`, and `exhibit label` does not ask about the defect again.
@@ -496,7 +497,13 @@ Exhibit only reports these numbers. It never changes a rung.
 - The first time `--claude` runs in a repo, it says in one line what is sent to Anthropic's API: the fix PR's title and body, the changed lines, and what git blame says about them, which is the commit, the author's name and the commit message, and the titles of the linked PRs. It then writes `.exhibit/claude-notice-shown`, so the line does not show again.
 - Each draft is marked as a draft until the person acts on it. A draft is never written as a label by itself.
 - An API error, a refusal, or a draft that does not fit is shown as a plain message, and the person labels that defect by hand. The labels already written stay.
-- Exhibit records how often the person keeps Claude's draft unchanged: `labeled_by` and `claude_draft` in each line (section 8.4). That number measures the drafter.
+- Exhibit records how often the person keeps Claude's draft unchanged: `labeled_by` and `claude_draft` in each line (section 8.4). That number measures the drafter, so the person can decide how far to trust the drafts.
+- At the end of each `exhibit label --claude` run, it shows that number, from the labels lines alone, so it is the same each time it is worked out. It counts it twice: for the lines this run wrote, and for every line in `.exhibit/labels.jsonl`.
+  - Drafts shown: the lines with `claude_draft`. A skipped defect, or a defect left when the person quit, has no line, so its draft is not counted. Nor is a draft that failed.
+  - Kept unchanged: `claude_draft_confirmed`. Edited: `claude_draft_edited`, a change to the code, the category or both. Replaced: `person` with `claude_draft`, after `t`. A draft counts as kept only when both its code and its category are unchanged.
+  - The kept share is kept divided by drafts shown, with its n and the exact 95% Clopper-Pearson interval, as in section 9.10. So 7 kept of 10 shown is 70%, with an interval of 35% to 93%. The 2.5% tail sits on each side; with 0 kept the low end is 0, and with every draft kept the high end is 1.
+  - With fewer than 10 drafts, it says the number is weak. With 9 it is weak, and with 10 it is not.
+  - With no drafts, it says there are none and shows no share, not 0%.
 
 ### 9.12 Storage
 
