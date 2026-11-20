@@ -1,0 +1,15 @@
+{
+  "/v1/messages": {
+    "status": 529,
+    "headers": {
+      "request-id": "req_fixture"
+    },
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "overloaded_error",
+        "message": "Overloaded"
+      }
+    }
+  }
+}

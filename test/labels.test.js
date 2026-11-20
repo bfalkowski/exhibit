@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolError } from '../src/tool-error.js';
 import { checkLabelLine, defectId, labelDefects } from '../src/labels.js';
+import { DraftError } from '../src/claude.js';
 import { SHOP_HISTORY } from './fixtures/report/shop-history.js';
 
 const NOW = new Date('2026-11-19T10:00:00Z');
@@ -194,4 +195,107 @@ test('the labels schema checks that szz_link_rejected matches rejected_prs', () 
   const old = { ...line, szz_link_rejected: false };
   delete old.rejected_prs;
   assert.deepEqual(checkLabelLine(old), []);
+});
+
+// A drafter that gives `drafts` in order, and records what it was given. A draft that is an Error
+// is thrown, as the Claude client throws a DraftError when the API fails.
+function drafter(drafts) {
+  const given = [];
+  const draft = async (input) => {
+    given.push(input);
+    const next = drafts[given.length - 1];
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  return { draft, given };
+}
+
+const DRAFT = { code: 'Discount applied the percent as money', category: 'arithmetic', model: 'claude-opus-5-5' };
+
+test('with a drafter, each defect is drafted from what the person reads, and the answer source sees the draft', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { draft, given } = drafter([DRAFT]);
+  const seen = [];
+  const ask = async (defect, context) => {
+    seen.push(context);
+    return 'quit';
+  };
+  await labelDefects({ cwd, ask, draft, now: () => NOW });
+  assert.equal(given[0].id, 'D-012');
+  assert.match(given[0].title, /\S/);
+  assert.ok('body' in given[0]);
+  assert.equal(given[0].text, seen[0].text);
+  assert.deepEqual(given[0].categories, []);
+  assert.deepEqual(seen[0].draft, DRAFT);
+  // Quitting with the draft on screen writes nothing.
+  assert.equal(existsSync(labelsPath(cwd)), false);
+});
+
+test('confirming the draft gives claude_draft_confirmed and keeps the draft', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ code: DRAFT.code, category: DRAFT.category, would_have_caught: 'A 10% discount test', draft: 'confirmed' }, 'quit']);
+  await labelDefects({ cwd, ask, draft: drafter([DRAFT]).draft, now: () => NOW });
+  const [line] = readLabels(cwd);
+  assert.equal(line.labeled_by, 'claude_draft_confirmed');
+  assert.deepEqual(line.claude_draft, DRAFT);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('editing the draft gives claude_draft_edited and keeps the draft, so the change can be seen', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ code: 'Discount took 10 off, not 10%', category: DRAFT.category, would_have_caught: 'A 10% discount test', draft: 'edited' }, 'quit']);
+  await labelDefects({ cwd, ask, draft: drafter([DRAFT]).draft, now: () => NOW });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.labeled_by, line.code, line.claude_draft], ['claude_draft_edited', 'Discount took 10 off, not 10%', DRAFT]);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('replacing the draft gives person and keeps the draft', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ code: 'Wrong unit for the discount', category: 'units', would_have_caught: 'A 10% discount test', draft: 'replaced' }, 'quit']);
+  await labelDefects({ cwd, ask, draft: drafter([DRAFT]).draft, now: () => NOW });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.labeled_by, line.code, line.claude_draft], ['person', 'Wrong unit for the discount', DRAFT]);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('an API error on one defect keeps the earlier labels, and the person labels that defect by hand', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { draft } = drafter([DRAFT, new DraftError('the Anthropic API answered 529: Overloaded')]);
+  const { ask, asked } = scripted([
+    { code: DRAFT.code, category: DRAFT.category, would_have_caught: 'a test', draft: 'confirmed' },
+    answer('Stock went below zero', 'state', 'A test that sells the last item twice'),
+    'quit'
+  ]);
+  const seen = [];
+  const spy = async (defect, context) => {
+    seen.push(context);
+    return ask(defect, context);
+  };
+  await labelDefects({ cwd, ask: spy, draft, now: () => NOW });
+  assert.deepEqual(asked.map((a) => a.id), ['D-012', 'D-007', 'D-006']);
+  assert.equal(seen[1].draft, null);
+  assert.match(seen[1].draftError, /529/);
+  const lines = readLabels(cwd);
+  assert.deepEqual(lines.map((l) => [l.id, l.labeled_by, 'claude_draft' in l]), [['D-012', 'claude_draft_confirmed', true], ['D-007', 'person', false]]);
+  for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
+});
+
+test('the labels schema checks that a Claude label has its draft, and that a confirmed label matches it', () => {
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: DRAFT.code, category: DRAFT.category, would_have_caught: 'c', labeled_by: 'claude_draft_confirmed', claude_draft: DRAFT, szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' };
+  assert.deepEqual(checkLabelLine(line), []);
+  const noDraft = { ...line };
+  delete noDraft.claude_draft;
+  assert.deepEqual(checkLabelLine(noDraft), ['/claude_draft: a claude_draft_confirmed label must keep the draft in claude_draft']);
+  assert.deepEqual(checkLabelLine({ ...line, code: 'other' }), ['/code: a claude_draft_confirmed label must have the code and category of its draft']);
+  assert.deepEqual(checkLabelLine({ ...line, claude_draft: { ...DRAFT, model: '' } }).length, 1);
+});
+
+test('replacing the draft with the same words still gives person, because the person did not accept it', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask } = scripted([{ code: DRAFT.code, category: DRAFT.category, would_have_caught: 'A 10% discount test', draft: 'replaced' }, 'quit']);
+  await labelDefects({ cwd, ask, draft: drafter([DRAFT]).draft, now: () => NOW });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.labeled_by, line.code, line.claude_draft], ['person', DRAFT.code, DRAFT]);
+  assert.deepEqual(checkLabelLine(line), []);
 });
