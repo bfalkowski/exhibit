@@ -1,5 +1,5 @@
 import { commentReviews, quotedVerdictWarnings } from './comment-reviews.js';
-import { classifyFix, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
+import { classifyWithTracker, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
 import { ToolError } from './tool-error.js';
 
 // How many PRs ask for their files, reviews, comments and CI results at the same time.
@@ -34,9 +34,12 @@ export async function readHistory(options) {
 // exhibit) are left out. The schema requires szz, so the history command
 // (src/commands/history.js) adds szz to each line that has none before it checks and writes the
 // lines.
-// `warn` gets one text for each PR whose files list the forge cut short, and one for each comment
-// whose only verdict is in a quoted line, in the order of the lines.
-export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, warn = () => {} }) {
+// `tracker` is a connected tracker, such as Jira, for the tracker:jira signal, or null. Each PR
+// asks it at most once, kept lines too (see classifyWithTracker in src/fix-signals.js).
+// `warn` gets one text for each PR whose files list the forge cut short, one for each comment
+// whose only verdict is in a quoted line, and one for each PR whose ticket the tracker could not
+// read, in the order of the lines.
+export async function updateHistory({ forge, since, limit, previous, fixSignals = DEFAULT_FIX_SIGNALS, tracker = null, warn = () => {} }) {
   let merged = await forge.mergedPulls({ since, limit });
   if (since) merged = merged.filter((pr) => new Date(pr.mergedAt) >= since);
   merged.sort((a, b) => b.mergedAt.localeCompare(a.mergedAt) || b.number - a.number);
@@ -46,32 +49,41 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
   const windowStart = previous.length === 0 ? null : Math.max(...previous.map((line) => Date.parse(line.merged_at))) - LOOK_BACK_MS;
   const toRead = merged.filter((pr) => !old.has(pr.number) || Date.parse(pr.mergedAt) >= windowStart);
 
+  const classify = async (pr) => {
+    const { classification, problem } = await classifyWithTracker({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, tracker);
+    return { classification, warnings: problem ? [`PR ${pr.number}: ${problem}`] : [] };
+  };
+
   const read = await mapInBatches(toRead, PRS_AT_ONCE, async (pr) => {
-    const [files, reviews, comments, ci] = await Promise.all([
+    const [files, reviews, comments, ci, classified] = await Promise.all([
       forge.pullFiles(pr.number),
       forge.pullReviews(pr.number),
       // The PR's comments, where some rooms post their reviews (spec 8.3).
       forge.pullComments(pr.number),
       // The CI results on the PR's last head commit: the CI result the PR was merged with.
-      forge.ciResults(pr.headSha)
+      forge.ciResults(pr.headSha),
+      classify(pr)
     ]);
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
-      line: toHistoryLine(forge, pr, files, reviews, comments, ci, fixSignals),
-      warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments)]
+      number: pr.number,
+      line: toHistoryLine(forge, pr, files, reviews, comments, ci, classified.classification),
+      warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments), ...classified.warnings]
     };
   });
-  for (const { warnings } of read) for (const warning of warnings) warn(warning);
-  const fresh = new Map(read.map(({ line }) => [line.number, line]));
-  const lines = merged.map((pr) => fresh.get(pr.number) ?? classifyAgain(old.get(pr.number), pr.headRef, forge.repo, fixSignals));
-  return { lines, read: read.length };
-}
-
-// Returns the kept `line` with its classification by `fixSignals`, from its title, body and
-// labels. `branch` is the PR's branch name, and `repo` the forge's repo. The line keeps its szz: the history command sets szz to null on a line that is no fix.
-function classifyAgain(line, branch, repo, fixSignals) {
-  const classification = classifyFix({ number: line.number, title: line.title, body: line.body, labels: line.labels, branch, repo }, fixSignals);
-  return { ...line, classification };
+  const fresh = new Map(read.map((one) => [one.number, one]));
+  // A kept line is classified again from its own title, body and labels, and from the branch name in
+  // the list of merged PRs, as a line does not hold its branch name. It keeps its szz: the history
+  // command sets szz to null on a line that is no fix.
+  const kept = await mapInBatches(merged.filter((pr) => !fresh.has(pr.number)), PRS_AT_ONCE, async (pr) => {
+    const line = old.get(pr.number);
+    const { classification, warnings } = await classify({ ...pr, title: line.title, body: line.body, labels: line.labels });
+    return { number: pr.number, line: { ...line, classification }, warnings };
+  });
+  const byNumber = new Map([...fresh, ...kept.map((one) => [one.number, one])]);
+  const lines = merged.map((pr) => byNumber.get(pr.number));
+  for (const { warnings } of lines) for (const warning of warnings) warn(warning);
+  return { lines: lines.map(({ line }) => line), read: read.length };
 }
 
 // Returns a warning when the forge listed fewer files than the PR changed, or null. Only a PR
@@ -91,7 +103,7 @@ async function checkFilesComplete(forge, number, listed) {
   return `PR ${number} changed ${changed} files, but ${forge.displayName} listed only the first ${listed}, so its files field is cut short.`;
 }
 
-function toHistoryLine(forge, pr, files, reviews, comments, ci, fixSignals) {
+function toHistoryLine(forge, pr, files, reviews, comments, ci, classification) {
   const list = inTimeOrder(
     reviews.map((review) => ({ state: review.state, author: review.author, source: 'review', at: review.at })),
     commentReviews(comments)
@@ -120,7 +132,7 @@ function toHistoryLine(forge, pr, files, reviews, comments, ci, fixSignals) {
     },
     // The history line keeps the name and conclusion of each CI result (spec 8.3).
     ci: ci.map(({ name, conclusion }) => ({ name, conclusion })),
-    classification: classifyFix({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals)
+    classification
   };
 }
 

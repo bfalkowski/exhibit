@@ -38,9 +38,47 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^((label|title|title_after_key|branch):\\S(.*\\S)?|pr:[1-9][0-9]*|revert)$"
+            "pattern": "^((label|title|title_after_key|branch):\\S(.*\\S)?|pr:[1-9][0-9]*|tracker:jira|revert)$"
           },
           "description": "The signals that mark a PR as a fix (spec 9.1). null or absent means the defaults [label:bug, title:fix, branch:fix/]."
+        },
+        "jira": {
+          "type": "object",
+          "required": [
+            "site"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "site": {
+              "type": "string",
+              "pattern": "^https?://[^\\s/]+(/\\S*)?$",
+              "description": "The Jira site, such as https://acme.atlassian.net (spec 9.1)."
+            },
+            "issue_types": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "The issue types that count as a bug. Absent means [Bug]. A list replaces the default."
+            },
+            "found_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The Jira field that says where a bug was found, such as customfield_10042. Needs escaped_values."
+            },
+            "escaped_values": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "The values of found_field that mean the bug got out to users, such as [Production]. Needs found_field."
+            }
+          },
+          "description": "The Jira site and fields for the tracker:jira fix signal (spec 9.1). The token comes from the env variable JIRA_API_TOKEN, never from this file."
         },
         "mutation_budget_seconds": {
           "type": "integer",
@@ -54,7 +92,10 @@
           "description": "The time limit for each probe (spec 9.6), at most 86400 (one day). A probe that runs longer is stopped and fails. Absent means 600."
         },
         "storage": {
-          "enum": ["data-branch", "local"],
+          "enum": [
+            "data-branch",
+            "local"
+          ],
           "description": "Where exhibit publish stores an exhibit (spec 9.12). data-branch commits it to the data branch. local writes it to a folder. Absent means data-branch."
         },
         "data_branch": {

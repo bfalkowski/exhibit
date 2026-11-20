@@ -23,10 +23,14 @@ export function buildReport(lines, { repo, szzRan, fixSignals }) {
 }
 
 // The escaped defects: the fix PRs that SZZ linked to at least one introducing PR, newest fix
-// first. The report lists them, and `exhibit label` labels this same list.
+// first. A fix whose tracker says the bug was found before release (classification.escaped is
+// false) is not one. The report lists them, and `exhibit label` labels this same list.
 export function escapedDefects(lines) {
-  return lines.filter((line) => line.classification.fix && line.szz?.links.length > 0).sort(newestFirst);
+  return lines.filter((line) => line.classification.fix && line.classification.escaped !== false && line.szz?.links.length > 0).sort(newestFirst);
 }
+
+// Says whether the tracker found the fix's bug before release, so it is no escaped defect.
+const caughtBeforeRelease = (line) => line.classification.escaped === false;
 
 // One escaped defect as plain text for a terminal, with the same facts as its part of the report.
 // `lines` are all the history lines, for the titles of the introducing PRs.
@@ -38,7 +42,8 @@ function reportBlocks(lines, { repo, szzRan, fixSignals }) {
   const byNumber = new Map(lines.map((line) => [line.number, line]));
   const fixes = lines.filter((line) => line.classification.fix).sort(newestFirst);
   const defects = szzRan ? escapedDefects(lines) : [];
-  const noLink = szzRan ? fixes.filter((line) => !(line.szz?.links.length > 0)) : [];
+  const caught = fixes.filter(caughtBeforeRelease);
+  const noLink = szzRan ? fixes.filter((line) => !caughtBeforeRelease(line) && !(line.szz?.links.length > 0)) : [];
   const skipped = szzRan ? fixes.filter((line) => line.szz === null).length : 0;
   const strong = defects.filter((line) => line.szz.links[0].confidence >= WEAK_HISTORY.strongConfidence).length;
 
@@ -68,6 +73,11 @@ function reportBlocks(lines, { repo, szzRan, fixSignals }) {
   if (noLink.length > 0) {
     blocks.push(heading(2, `Fix PRs with no escaped defect found (${noLink.length})`));
     blocks.push(list(noLink.map((fix) => item(`PR ${fix.number} (${fix.title}): ${whyNoLink(fix)}`))));
+  }
+  if (caught.length > 0) {
+    blocks.push(heading(2, `Fix PRs whose bug was found before release (${caught.length})`));
+    blocks.push(paragraph('The tracker says where each bug was found, and these were found before release, so they are not escaped defects.'));
+    blocks.push(list(caught.map((fix) => item(`PR ${fix.number} (${fix.title}): ${fix.classification.fix_signal}`))));
   }
   return blocks;
 }

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isRevert, REVERT_SIGNAL, revertedWork } from './fix-signals.js';
 import { GitHubReplyError } from './github.js';
+import { JiraReplyError } from './jira.js';
 
 const run = promisify(execFile);
 
@@ -108,7 +109,10 @@ async function askForge(forge, sha, defaultBranch) {
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
 // `known` holds every history line that maps a commit to its PR, `lines` when left out. An
 // incremental run passes the whole file there, and only the lines SZZ must run on as `lines`.
-export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines }) {
+// `tracker` is the connected tracker that the fix signals asked, such as Jira, or null. A fix
+// found by its signal, such as jira:PAY-482, takes the issue's created date as its bug report
+// date when the GitHub issues give none (step 5).
+export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {}, known = lines }) {
   const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
   const knownPrs = new Map(known.map((line) => [line.number, line]));
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
@@ -129,7 +133,7 @@ export async function addSzz(lines, { dir, forge, warn = () => {}, known = lines
     try {
       const szz = revert
         ? await revertLinks(dir, line, { findPr, forge, knownPrs })
-        : await szzForFix(dir, line, findPr, await bugReportDate(line, forge));
+        : await szzForFix(dir, line, findPr, (await bugReportDate(line, forge)) ?? (await trackerReportDate(line, tracker)));
       out.push({ ...line, szz });
     } catch (error) {
       if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
@@ -175,7 +179,7 @@ async function branchTip(dir, forge, branch) {
 
 // A GitHub reply that is a problem with one request, such as a 502. GitHubReplyError says
 // which replies would fail every later request too: those stop the run.
-const failsOneRequest = (error) => error instanceof GitHubReplyError && !error.stopsRun;
+const failsOneRequest = (error) => (error instanceof GitHubReplyError || error instanceof JiraReplyError) && !error.stopsRun;
 
 async function hasCommit(dir, sha) {
   try {
@@ -367,6 +371,16 @@ async function bugReportDate(fix, forge) {
     if (newest === null || Date.parse(issue.createdAt) > Date.parse(newest)) newest = issue.createdAt;
   }
   return newest;
+}
+
+// Returns the created time of the tracker issue that marked `fix` as a fix, such as jira:PAY-482
+// in its fix_signal, or null. The fix signals asked the tracker for the issue already, and the
+// tracker keeps each answer, so this sends no new request.
+async function trackerReportDate(fix, tracker) {
+  const signal = fix.classification?.fix_signal ?? '';
+  if (!tracker || !signal.startsWith(`${tracker.name}:`)) return null;
+  const issue = await tracker.ticket(signal.slice(tracker.name.length + 1));
+  return issue?.createdAt ?? null;
 }
 
 // Splits blamed lines by the bug report date (spec 9.2, step 5). A line whose commit was

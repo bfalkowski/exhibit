@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge, GitHubReplyError } from '../src/github.js';
+import { createJiraTracker } from '../src/jira.js';
 import { checkHistoryLine } from '../src/history-schema.js';
 import { addSzz, cloneRoot, createPrFinder } from '../src/szz.js';
 import { ToolError } from '../src/tool-error.js';
@@ -293,6 +294,43 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
 
   await t.test('a linked PR, or an issue GitHub does not know, gives no date', async (t) => {
     const { szz } = await szzWithIssues(t, 'Fixes #51, fixes #52', { 51: { number: 51, created_at: '2026-01-01T00:00:00Z', pull_request: {} } });
+    assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+});
+
+test('SZZ takes the Jira issue\'s created date as the bug report date, when the fix links no GitHub issue', async (t) => {
+  // PR 6 fixes a line that PR 1 added in a commit written at 2026-01-05T10:00:00Z. Its fix_signal
+  // says the tracker:jira signal found it, by the Bug SHOP-6.
+  async function run(t, created, body = null) {
+    const repo = buildSzzRepo();
+    t.after(() => repo.cleanup());
+    const pulls = commitPullsFetch(repo, REPO);
+    const json = (status, reply) => new Response(JSON.stringify(reply), { status, headers: { 'content-type': 'application/json' } });
+    const fetch = async (url, init) => {
+      const { pathname } = new URL(url);
+      if (pathname === '/rest/api/2/issue/SHOP-6') return json(200, { key: 'SHOP-6', fields: { issuetype: { name: 'Bug' }, created } });
+      if (pathname.endsWith('/issues/50')) return json(200, { number: 50, created_at: '2026-01-05T11:00:00Z' });
+      return pulls(url, init);
+    };
+    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token: 't', fetch });
+    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' } };
+    const [line] = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), tracker });
+    return line;
+  }
+
+  await t.test('an issue created before the commit drops the line', async (t) => {
+    const { szz } = await run(t, '2026-01-05T09:30:00.000+0000');
+    assert.deepEqual(szz.links, []);
+    assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']]);
+  });
+
+  await t.test('an issue created after the commit keeps the link', async (t) => {
+    const { szz } = await run(t, '2026-01-05T10:30:00.000+0000');
+    assert.deepEqual(szz.links.map((link) => [link.pr, link.confidence]), [[1, 1]]);
+  });
+
+  await t.test('a GitHub issue that the body links wins over the Jira date', async (t) => {
+    const { szz } = await run(t, '2026-01-05T09:30:00.000+0000', 'Fixes #50');
     assert.deepEqual(szz.links.map((link) => link.pr), [1]);
   });
 });

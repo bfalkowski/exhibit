@@ -28,9 +28,10 @@ function newFolder(t) {
 // token: null runs it with no GITHUB_TOKEN at all.
 // fixturePath: a fixture file built by a test, in place of a named one.
 // failWrite: a write to a path that holds this text fails, as on a full disk.
+// moreEnv: more env variables, such as JIRA_API_TOKEN.
 // history runs git inside a clone, so it gets a clean env: see gitEnv.
-function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t), failWrite } = {}) {
-  const env = gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: fixturePath });
+function exhibit(t, args, { fixtureName = 'acme-widgets', fixturePath = fixture(fixtureName), token = 'test-token', cwd = newFolder(t), failWrite, moreEnv = {} } = {}) {
+  const env = gitEnv(cwd, { EXHIBIT_TEST_FIXTURE: fixturePath, ...moreEnv });
   if (token !== null) env.GITHUB_TOKEN = token;
   const preloads = failWrite === undefined ? ['--import', preload] : ['--import', preload, '--import', fullDisk];
   if (failWrite !== undefined) env.EXHIBIT_TEST_FULL_DISK = failWrite;
@@ -440,4 +441,74 @@ test('a policy that breaks the schema gives exit 2 with a message that names the
   assert.match(run.stderr, /^exhibit: evidence\.yml kinds\.relay-core\.risk must be low, medium or high, not "extreme"\.$/m);
   assert.doesNotMatch(run.stderr, /\n\s+at /);
   assert.ok(!existsSync(run.historyPath));
+});
+
+// The acme/widgets fixture, with Jira keys in some titles and branches, and the Jira replies from
+// test/fixtures/jira/acme.json in the same file, so one replay serves both. PR 4 names the Bug
+// PAY-482, PR 3's branch names the Story PAY-483, PR 1 names PAY-404, which Jira does not know,
+// and PR 7 names PAY-503, which Jira answers with a 503. PR 5 has the label bug, so the signal
+// label:bug before tracker:jira matches it, and Jira is not asked.
+function jiraFixture(t) {
+  const replies = JSON.parse(readFileSync(fixture('acme-widgets'), 'utf8'));
+  const titles = { 4: 'PAY-482: Rename the widget table', 1: 'PAY-404: First commit of widgets', 7: 'PAY-503: Add the widget cache' };
+  for (const reply of Object.values(replies)) {
+    for (const pr of reply.body?.data?.repository?.pullRequests?.nodes ?? []) {
+      if (titles[pr.number]) pr.title = titles[pr.number];
+      if (pr.number === 3) pr.headRefName = 'PAY-483-readme';
+    }
+  }
+  Object.assign(replies, JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8')));
+  const dir = newFolder(t);
+  const path = join(dir, 'acme-jira.json');
+  writeFileSync(path, JSON.stringify(replies));
+  return path;
+}
+
+const JIRA_POLICY = 'version: 3\nsettings:\n  fix_signals: [label:bug, tracker:jira]\n  jira:\n    site: https://acme.atlassian.net\n';
+const JIRA_TOKEN = 'secret-jira-token-5f2e';
+
+test('tracker:jira marks a PR whose Jira issue is a Bug, warns for a 5xx, and counts the Jira requests', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), JIRA_POLICY);
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t), moreEnv: { JIRA_API_TOKEN: JIRA_TOKEN } });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'jira:PAY-482'], [5, 'label:bug']]);
+  assert.match(run.stderr, /^exhibit: warning: PR 7: the tracker:jira signal could not check PAY-503, so it does not match\. Jira answered 503 \(Service Unavailable\) for \/rest\/api\/2\/issue\/PAY-503\. Jira had a problem: try again later\.$/m);
+  assert.match(run.stdout, /^Made 4 Jira requests\. 1 named an issue that Jira does not know\.$/m);
+
+  // No token in any output, the history file or the report.
+  const written = [run.stdout, run.stderr, ...['.exhibit/history.jsonl', REPORT.markdown, REPORT.html].map((name) => readFileSync(join(cwd, name), 'utf8'))];
+  for (const text of written) assert.ok(!text.includes(JIRA_TOKEN));
+
+  const json = exhibit(t, ['history', '--repo', 'acme/widgets', '--json', '--full'], { cwd, fixturePath: jiraFixture(t), moreEnv: { JIRA_API_TOKEN: JIRA_TOKEN } });
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout).jira, { requests: 4, not_found: 1 });
+});
+
+test('with tracker:jira and no JIRA_API_TOKEN, the signal matches nothing, the run succeeds, and one line says so', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), JIRA_POLICY);
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t) });
+  assert.equal(run.status, 0, run.stderr);
+  const notice = 'exhibit: note: JIRA_API_TOKEN is not set, so the tracker:jira fix signal matched no PR. Set it to a Jira API token, and for Jira Cloud set JIRA_EMAIL to the email of its account.\n';
+  assert.equal(run.stderr.split(notice).length - 1, 1, run.stderr);
+  assert.deepEqual(readLines(run.historyPath).filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[5, 'label:bug']]);
+  assert.doesNotMatch(run.stdout, /Jira request/);
+
+  // --json gives jira: null with tracker:jira and no token. Without tracker:jira it has no jira
+  // field at all: the test "--json prints a short machine summary" checks the whole object.
+  const json = exhibit(t, ['history', '--repo', 'acme/widgets', '--json', '--full'], { cwd, fixturePath: jiraFixture(t) });
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).jira, null);
+});
+
+test('tracker:jira with no settings.jira gives exit 2 with a message, and writes no file', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [tracker:jira]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /settings\.fix_signals has tracker:jira, so settings needs jira: \{ site: /);
+  assert.equal(existsSync(run.historyPath), false);
 });
