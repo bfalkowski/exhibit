@@ -1,10 +1,10 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitHub } from '../src/github.js';
-import { cacheFolder, createReplyCache } from '../src/github-cache.js';
+import { cacheFolder, createReplyCache, removeOldEntries } from '../src/github-cache.js';
 
 // Makes a new empty cache folder. The folder is removed when the test that made it ends.
 const madeFolders = [];
@@ -185,4 +185,59 @@ test('a request that never reached GitHub is not counted', async () => {
   const github = createGitHub({ token: TOKEN, fetch: async () => { throw new Error('offline'); } });
   await assert.rejects(github.getOne('/repos/o/r'), /could not reach GitHub/);
   assert.deepEqual(github.counts(), { requests: 0, not_modified: 0, queries: 0, points: 0 });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+// Sets the file time of `path` to `days` days before now.
+function ageBy(path, days) {
+  const then = new Date(Date.now() - days * DAY);
+  utimesSync(path, then, then);
+}
+
+test('a run that reads an entry marks it as used, so its file time is now', async () => {
+  const dir = newFolder();
+  const github = recorded({ '/repos/o/r': { etag: '"v1"', body: { default_branch: 'main' } } });
+  await client(github.fetch, dir).getOne('/repos/o/r');
+  const [file] = readdirSync(dir);
+  ageBy(join(dir, file), 40);
+
+  const second = client(github.fetch, dir);
+  await second.getOne('/repos/o/r');
+  assert.deepEqual(second.counts(), { requests: 1, not_modified: 1, queries: 0, points: 0 }, 'the entry was read, not written again');
+  assert.ok(Date.now() - statSync(join(dir, file)).mtimeMs < DAY, 'the read moved the file time to now');
+});
+
+test('removeOldEntries removes the entries that no run has used for 30 days, and keeps the rest', async () => {
+  const dir = newFolder();
+  const github = recorded({
+    '/old': { etag: '"o"', body: { n: 1 } },
+    '/new': { etag: '"n"', body: { n: 2 } }
+  });
+  const first = client(github.fetch, dir);
+  await first.getOne('/old');
+  const [oldFile] = readdirSync(dir);
+  await first.getOne('/new');
+  const [newFile] = readdirSync(dir).filter((name) => name !== oldFile);
+  ageBy(join(dir, oldFile), 31);
+  ageBy(join(dir, newFile), 29);
+  // A temporary file that a stopped run left behind, and a file that the cache did not write.
+  writeFileSync(join(dir, `${oldFile}.123.abc.tmp`), '{"url":');
+  ageBy(join(dir, `${oldFile}.123.abc.tmp`), 31);
+  writeFileSync(join(dir, 'notes.txt'), 'mine');
+  ageBy(join(dir, 'notes.txt'), 31);
+
+  assert.equal(await removeOldEntries(dir), 2);
+  assert.deepEqual(readdirSync(dir).sort(), [newFile, 'notes.txt'].sort());
+
+  // The removed entry costs one full request, and is saved again.
+  const second = client(github.fetch, dir);
+  assert.deepEqual(await second.getOne('/old'), { n: 1 });
+  assert.equal(github.calls.at(-1).headers['if-none-match'], undefined);
+  assert.equal(readdirSync(dir).length, 3);
+});
+
+test('removeOldEntries on a folder that is not there removes nothing and does not fail', async () => {
+  const dir = join(newFolder(), 'github');
+  assert.equal(await removeOldEntries(dir), 0);
+  assert.equal(existsSync(dir), false);
 });

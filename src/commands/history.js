@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { REVERT_SIGNAL } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
-import { cacheFolder, createReplyCache } from '../github-cache.js';
+import { cacheFolder, createReplyCache, removeOldEntries } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { JIRA_TRACKER } from '../jira.js';
 import { checkHistoryLine } from '../history-schema.js';
@@ -60,6 +60,9 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     }
     if (tracker && tracker.counts().requests > 0) stderr.write(`exhibit: note: this run made ${plural(tracker.counts().requests, 'Jira request')}.\n`);
     throw error;
+  } finally {
+    // After the run, so the entries this run read have a new file time and stay (spec 8.6).
+    if (folder) await removeOldEntries(folder);
   }
 }
 

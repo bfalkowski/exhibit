@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -387,6 +387,25 @@ test('a second run gets a 304 for every REST request, writes the same history, a
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(JSON.parse(second.stdout).github, githubCounts(cwd, 6, 1, 6));
   assert.equal(readFileSync(second.historyPath, 'utf8'), history);
+});
+
+test('a run removes the cache entries that no run has used for 30 days', (t) => {
+  const { cwd, fixturePath } = shopWithETags(t);
+  const first = exhibit(t, ['history', '--repo', 'fixture/shop'], { fixturePath, cwd });
+  assert.equal(first.status, 0, first.stderr);
+  const folder = cacheOf(cwd);
+  const used = readdirSync(folder);
+  assert.equal(used.length, 6);
+  // An entry that some other run saved 40 days ago, and that no run has read since.
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  const then = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const second = exhibit(t, ['history', '--repo', 'fixture/shop', '--full'], { fixturePath, cwd });
+  assert.equal(second.status, 0, second.stderr);
+  assert.ok(second.stdout.endsWith(madeRequests(cwd, 6, 1, 6)), second.stdout);
+  assert.deepEqual(readdirSync(folder).sort(), used.sort());
 });
 
 test('--no-cache gets no 304s and writes no cache folder', (t) => {
