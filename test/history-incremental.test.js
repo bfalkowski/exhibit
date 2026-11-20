@@ -373,3 +373,36 @@ test('a fix line kept with szz null gets SZZ once a later run is inside a clone'
   assert.equal(out.read, 0);
   assert.deepEqual(out.szz, { fix_prs: 7, linked: 4, skipped: 0 });
 });
+
+test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ again', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  const replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(replay.cleanup);
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = () => spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd: shop.dir, env: gitEnv(shop.dir, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+  const historyPath = join(shop.dir, '.exhibit/history.jsonl');
+  const linesOf = () => new Map(readFileSync(historyPath, 'utf8').trim().split('\n').map((row) => JSON.parse(row)).map((line) => [line.number, line]));
+
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  const blamed = linesOf().get(14).szz;
+  assert.deepEqual(blamed.links.map((link) => link.pr), [13]);
+
+  // A year ahead, every line is kept. PR 14's kept body now says it reverts PR 13, and revert comes first.
+  writeFileSync(historyPath, [...linesOf().values()].map((line) => JSON.stringify({ ...line, merged_at: line.merged_at.replace(/^2026/, '2027'), ...(line.number === 14 ? { body: 'Reverts fixture/shop#13' } : {}) })).join('\n') + '\n');
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [revert, label:bug]\n');
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  const reverted = linesOf().get(14);
+  assert.deepEqual(reverted.classification, { fix: true, fix_signal: 'revert' });
+  assert.deepEqual(reverted.szz, { blamed_commit: null, links: [{ pr: 13, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null });
+
+  // Back to blame: the revert's szz no longer fits, so SZZ blames the lines again.
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug]\n');
+  const third = run();
+  assert.equal(third.status, 0, third.stderr);
+  assert.deepEqual(linesOf().get(14).szz, blamed);
+});

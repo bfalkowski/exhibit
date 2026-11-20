@@ -1,3 +1,5 @@
+import { REVERT_NOT_FOUND, REVERTS_A_REVERT } from './szz.js';
+
 // Builds the history report (spec 8.5): report.md and a self-contained report.html, from the
 // history lines. Both files come from one list of blocks, so they always hold the same facts.
 
@@ -97,14 +99,16 @@ function defectBlocks(fix, byNumber) {
   const items = links.map((link) => {
     const title = byNumber.get(link.pr)?.title;
     const name = title === undefined ? `Introducing PR ${link.pr}` : `Introducing PR ${link.pr}: ${title}`;
-    return item(`${name}, confidence ${Math.round(link.confidence * 100)}% (${link.lines.length} of ${counted} counted lines)`, lineItems(link.lines));
+    const confidence = `confidence ${Math.round(link.confidence * 100)}%`;
+    // A revert names the PR it reverts, so the revert is the evidence, in place of blame lines.
+    if (link.found_by === 'revert') return item(`${name}, ${confidence}, evidence: revert. PR ${fix.number} reverts it.`);
+    return item(`${name}, ${confidence} (${link.lines.length} of ${counted} counted lines)`, lineItems(link.lines));
   });
   if (unlinked.length > 0) items.push(item(`Lines from commits that are in no merged PR (${unlinked.length} of ${counted} counted lines)`, lineItems(unlinked)));
-  return [
-    heading(3, `Fix PR ${fix.number}: ${fix.title}`),
-    paragraph(`Merged on ${fix.merged_at.slice(0, 10)}. SZZ ran git blame on `, { code: blamed.slice(0, 7) }, ', the main branch just before the fix.'),
-    list(items)
-  ];
+  const how = blamed === null
+    ? paragraph(`Merged on ${fix.merged_at.slice(0, 10)}. It is a revert, so SZZ ran no git blame: the revert names the PR it takes back.`)
+    : paragraph(`Merged on ${fix.merged_at.slice(0, 10)}. SZZ ran git blame on `, { code: blamed.slice(0, 7) }, ', the main branch just before the fix.');
+  return [heading(3, `Fix PR ${fix.number}: ${fix.title}`), how, list(items)];
 }
 
 // One item for each line, with what git blame said about it under it.
@@ -127,6 +131,8 @@ function lineItems(lines) {
 function whyNoLink(fix) {
   const { szz } = fix;
   if (szz === null) return 'SZZ skipped it. The warning from exhibit history says why.';
+  if (szz.no_link_reason === REVERT_NOT_FOUND) return 'It is a revert, but Exhibit found no PR in this repo that it names.';
+  if (szz.no_link_reason === REVERTS_A_REVERT) return 'It reverts a revert, so it puts a change back, and the PR it takes back brought no bug.';
   if (szz.no_link_reason) return `SZZ dropped every line it changed: ${szz.no_link_reason}.`;
   if (szz.unlinked_lines.length > 0) return `SZZ found its ${szz.unlinked_lines.length} ${szz.unlinked_lines.length === 1 ? 'line' : 'lines'} only in commits that are in no merged PR.`;
   return 'SZZ found no line that it deleted or changed, so there was nothing to blame.';

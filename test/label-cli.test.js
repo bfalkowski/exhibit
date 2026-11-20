@@ -79,6 +79,33 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
   for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
 });
 
+test('a revert link shows revert as its evidence, and the person can keep it or reject it', (t) => {
+  const shop = shopText().trimEnd().split('\n').map((line) => JSON.parse(line));
+  const base = shop.find((line) => line.number === 7);
+  // Two reverts, newer than every fix in the shop: PR 16 reverts PR 2 and PR 15 reverts PR 5.
+  const revert = (number, of, title) => ({
+    ...base, number, title, body: `Reverts fixture/shop#${of}`, url: `https://github.com/fixture/shop/pull/${number}`, merged_at: `2026-02-0${number - 14}T10:00:00Z`,
+    classification: { fix: true, fix_signal: 'revert' },
+    szz: { blamed_commit: null, links: [{ pr: of, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null }
+  });
+  const lines = [...shop, revert(15, 5, 'Revert "Add the shop entry point"'), revert(16, 2, 'Revert "Add discounts"')];
+  const cwd = withHistory(t, lines.map((line) => JSON.stringify(line) + '\n').join(''));
+  // D-016: reject its link. D-015: keep its link. Then the input ends, which quits.
+  const typed = ['r', 'Not a bug: the revert was a rollback for a launch date', 'rollback', 'Nothing', 'k', 'The entry point broke checkout', 'wiring', 'An end-to-end test of checkout'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Fix PR 16: Revert "Add discounts"\n.*It is a revert, so SZZ ran no git blame/);
+  assert.match(run.stdout, /- Introducing PR 2: Add discounts, confidence 100%, evidence: revert\. PR 16 reverts it\./);
+  assert.match(run.stdout, /Link to PR 2, confidence 100%, evidence: revert: k to keep it, or r to reject it as a false link\./);
+  assert.match(run.stdout, /Link to PR 5, confidence 100%, evidence: revert: k to keep it/);
+  const saved = readLabels(cwd);
+  assert.deepEqual(saved.map((l) => [l.id, l.introducing_prs, l.rejected_prs, l.szz_link_rejected]), [
+    ['D-016', [], [2], true],
+    ['D-015', [5], [], false]
+  ]);
+  for (const line of saved) assert.deepEqual(checkLabelLine(line), [], line.id);
+});
+
 test('the end of the typed input quits and keeps the labels given so far', (t) => {
   const cwd = withHistory(t, shopText());
   const run = label(cwd, [], 'k\nk\nPercent taken as money\narithmetic\nA test\nhalf an answer\n');

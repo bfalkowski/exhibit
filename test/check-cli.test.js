@@ -176,6 +176,25 @@ test('check --pr reads the base, the head, the title and the labels from the for
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
+test('check --pr passes the body and the repo to the revert signal', async (t) => {
+  const fixture = buildRepo(t);
+  writeFileSync(join(fixture.repo, 'evidence.yml'), POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [revert]\n'));
+  const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
+  const signalFor = async (body) => {
+    const fetch = async () => {
+      const pull = { number: 7, title: 'Take back the app change', body, labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+      return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    await check(['--pr', '7', '--repo', 'Owner/Name'], { env: { GITHUB_TOKEN: 'test-token' }, cwd: fixture.repo, fetch, stdout: { write() {} } });
+    const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
+    return [fix, fixSignal];
+  };
+  // A plain title: only the body says it is a revert, and it names the PR's own repo.
+  assert.deepEqual(await signalFor('Reverts owner/name#6'), [true, 'revert']);
+  // A body that names only another repo's PR is no revert.
+  assert.deepEqual(await signalFor('Reverts lodash/lodash#5000'), [false, null]);
+});
+
 test('a bad argument removes the old evidence.json too, so no old verdict is left', (t) => {
   const fixture = buildRepo(t);
   mkdirSync(join(fixture.repo, '.exhibit'));
