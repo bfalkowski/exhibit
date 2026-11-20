@@ -286,7 +286,7 @@ If GitHub asks for a wait longer than 15 minutes, it stops and exits 2. After th
 - Checks: read, for the check runs. GitHub's page of permissions for fine-grained tokens does not list the check-runs request, so this one is not yet confirmed.
 - Commit statuses: read, for the commit statuses.
 
-A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks. A 429, and a rate limit that is still there when the waits end, do not name a permission.
+A classic token needs the `repo` scope for a private repo, and no scope for a public one. When a request gets a 403 that is not a rate limit, the message names the permission that request needs, so a person can see which one the token lacks. A 429, and a rate limit that is still there when the waits end, say that GitHub's rate limit is used up. They do not name a permission or tell you to check the token.
 
 ### 8.4 `.exhibit/labels.jsonl`
 

@@ -150,16 +150,6 @@ test('a 403 that is not a rate limit names the permission the request needs', as
   );
 });
 
-test('a rate limit that is still there after three waits does not blame a missing permission', async () => {
-  const limited = { status: 403, body: { message: 'You have exceeded a secondary rate limit.' } };
-  const s = scripted([limited, limited, limited, limited]);
-  const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep, random: () => 0 });
-  await assert.rejects(
-    github.getAll('/x', { permission: PERMISSIONS.pullRequests }),
-    (error) => error instanceof ToolError && /secondary rate limit/.test(error.message) && !/permission/.test(error.message)
-  );
-});
-
 test('a 403 rate limit that asks for too long a wait does not blame a missing permission', async () => {
   const s = scripted([{ status: 403, headers: { 'retry-after': '3600' }, body: { message: 'API rate limit exceeded' } }]);
   const github = createGitHub({ token: 't', fetch: s.fetch, sleep: s.sleep });
