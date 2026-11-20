@@ -408,6 +408,24 @@ test('a run removes the cache entries that no run has used for 30 days', (t) => 
   assert.deepEqual(readdirSync(folder).sort(), used.sort());
 });
 
+test('a run that fails still removes the cache entries that no run has used for 30 days', (t) => {
+  const cwd = newFolder(t);
+  const folder = cacheOf(cwd);
+  mkdirSync(folder, { recursive: true });
+  const stale = join(folder, `${'a'.repeat(64)}.json`);
+  const fresh = join(folder, `${'b'.repeat(64)}.json`);
+  writeFileSync(stale, '{}');
+  writeFileSync(fresh, '{}');
+  const then = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  utimesSync(stale, then, then);
+
+  const run = exhibit(t, ['history', '--repo', 'acme/broken'], { fixtureName: 'acme-broken', cwd });
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /does not fit the history schema/);
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(fresh), true);
+});
+
 test('--no-cache gets no 304s and writes no cache folder', (t) => {
   const { cwd, fixturePath } = shopWithETags(t);
   // --full, so each run reads every PR and runs SZZ, and only the cache could save a request (spec 8.3).
