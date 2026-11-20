@@ -176,7 +176,7 @@ test('an evidence file that does not fit the schema gives exit 2 and stores noth
   assert.deepEqual(readdirSync(fixture.dir).sort(), ['evidence.json', 'home', 'remote.git', 'repo']);
 });
 
-test('a remote that refuses the push gives exit 2 at once, with git\'s reason', (t) => {
+test('a remote that refuses the push gives exit 2 after one more fetch, with git\'s reason', (t) => {
   const fixture = buildFixture(t);
   const hook = join(fixture.remote, 'hooks', 'pre-receive');
   writeFileSync(hook, '#!/bin/sh\necho "pushes from CI are not allowed" >&2\nexit 1\n', { mode: 0o755 });
@@ -188,4 +188,20 @@ test('a remote that refuses the push gives exit 2 at once, with git\'s reason', 
   assert.match(run.stderr, /^exhibit: could not push prs\/12\/1{40}\.json on exhibit-data to origin: .*pushes from CI are not allowed/);
   assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
   assert.equal(fixture.git(fixture.repo, 'for-each-ref', 'refs/exhibit'), '');
+});
+
+test('with no identity in git, the commit is made by Exhibit, and an empty GIT_AUTHOR_NAME counts as no name', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  // user.useConfigOnly stops git from making up a name from the account and host, as a CI
+  // runner with no user.name does.
+  const env = gitEnv(fixture.home, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'user.useConfigOnly', GIT_CONFIG_VALUE_0: 'true', GIT_AUTHOR_NAME: '' });
+
+  const run = spawnSync(process.execPath, publishArgs(file), { cwd: fixture.repo, encoding: 'utf8', env });
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(
+    fixture.git(fixture.remote, 'log', '-1', '--format=%an <%ae>|%cn <%ce>', 'exhibit-data'),
+    'Exhibit <exhibit@users.noreply.github.com>|Exhibit <exhibit@users.noreply.github.com>\n'
+  );
 });

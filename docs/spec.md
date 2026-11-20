@@ -65,7 +65,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 
 ## 7. Commands
 
-All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which reads the repo from the exhibit. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
+All commands accept `--json` for machine output and `--repo owner/name`, except `exhibit label`, which reads only local files, and `exhibit publish`, which needs no repo name, because it pushes to `--remote`. Neither takes `--repo`. Each command exits 0 on success and 2 on a tool error, or on any other failure, such as a bug in Exhibit. `exhibit check` also exits 1 for `needs_person` (section 9.8).
 
 | Command | What it does |
 |---|---|
@@ -492,9 +492,9 @@ The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wi
 - `data-branch`, the default, commits the file to the data branch on the remote (`--remote`, by default `origin`). The branch is `settings.data_branch` or `--data-branch`, by default `exhibit-data`.
   - It uses only git's plumbing: a blob, a tree made in a temporary index, and a commit, which it pushes. It never touches the working tree, the index or the checked-out branch, and it never pushes with force. Git updates the remote-tracking ref, such as `origin/exhibit-data`, as it does for any push.
   - When the remote has no data branch, it makes one with no shared history: its first commit has no parent.
-  - When two runs publish at the same time, the push of the later one is refused. That run fetches the branch again, puts its commit on the new tip, and pushes again, up to 5 tries, and then exits 2. A push that is refused while the branch did not move is not a race, such as a remote that refuses pushes from CI, so it exits 2 at once with git's reason.
+  - When two runs publish at the same time, the push of the later one is refused. That run fetches the branch again, puts its commit on the new tip, and pushes again, up to 5 tries, and then exits 2. A push that is refused while the branch did not move is not a race, such as a remote that refuses pushes from CI, so it exits 2 after one more fetch, with git's reason.
   - When the branch already holds the same bytes at the path, it makes no commit and exits 0. A new exhibit for the same PR and head, such as one with a later `created_at`, replaces the old file in a new commit.
-  - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`.
+  - When git cannot name the author, as on a CI runner with no `user.name`, the commit is made by `Exhibit`. An identity variable that is set but empty, such as `GIT_AUTHOR_NAME=`, counts as not set. When git still cannot make the commit, publish exits 2 with git's reason.
 - `local` writes the file to a folder, `settings.local_path` or `--local-path`, by default `.exhibit/out`, relative to the repo. It makes no git change. When the file already holds the same bytes, it writes nothing.
 
 Later tickets add the rest of storage:

@@ -122,7 +122,11 @@ async function commitOnTop(cwd, env, parent, path, blob, message) {
     await git(cwd, parent === null ? ['read-tree', '--empty'] : ['read-tree', parent], { env: withIndex });
     await git(cwd, ['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`], { env: withIndex });
     const tree = (await git(cwd, ['write-tree'], { env: withIndex })).trim();
-    return (await git(cwd, ['commit-tree', tree, ...(parent === null ? [] : ['-p', parent]), '-m', message], { env })).trim();
+    const parents = parent === null ? [] : ['-p', parent];
+    return (await git(cwd, ['commit-tree', tree, ...parents, '-m', message], { env })).trim();
+  } catch (error) {
+    if (error.reason === undefined) throw error;
+    throw new ToolError(`could not make the commit for ${path}: ${error.reason}`);
   } finally {
     await rm(index, { force: true });
   }
@@ -140,16 +144,23 @@ async function push(cwd, remote, commit, ref) {
 
 // The env for git commit-tree. A CI runner often has no user.name or user.email, and then git
 // refuses to commit. So when git cannot name the author or the committer, the commit is made by
-// "Exhibit".
+// "Exhibit". An identity variable that is set but empty, such as GIT_AUTHOR_NAME=, counts as
+// not set: git refuses an empty name, so it is left out before git is asked.
+const IDENTITY_VARS = ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'];
+
 async function withIdentity(cwd) {
+  const env = { ...process.env };
+  for (const name of IDENTITY_VARS) {
+    if (env[name] === '') delete env[name];
+  }
   try {
-    await git(cwd, ['var', 'GIT_AUTHOR_IDENT']);
-    await git(cwd, ['var', 'GIT_COMMITTER_IDENT']);
-    return process.env;
+    await git(cwd, ['var', 'GIT_AUTHOR_IDENT'], { env });
+    await git(cwd, ['var', 'GIT_COMMITTER_IDENT'], { env });
+    return env;
   } catch {
     const name = 'Exhibit';
     const email = 'exhibit@users.noreply.github.com';
-    return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email, ...process.env };
+    return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email, ...env };
   }
 }
 
