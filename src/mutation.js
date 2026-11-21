@@ -11,6 +11,7 @@ import { clopperPearson } from './interval.js';
 import { DEFAULT_MUTATION_PYTHON, MUTMUT_VERSION, PYTHON_FILE, pythonProjects, runMutmutProcess } from './mutmut.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runInGroup } from './probe.js';
 import { ToolError } from './tool-error.js';
+import { runTwinsProcess } from './twin-values.js';
 import { worktreeOnDemand } from './worktree.js';
 
 const run = promisify(execFile);
@@ -42,16 +43,34 @@ const COUNTED = { Killed: 'killed', Timeout: 'timeout', Survived: 'survived', No
 // survived ones.
 //
 // One run serves every mutation requirement of a check, because only `min` differs between them.
-export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = runMutmutProcess } = {}) {
+//
+// Stryker has no mutator that puts one name in place of another, so the run also looks for twin
+// values on the changed lines (src/twin-values.js). When it finds them, a requirement that would
+// be met is missing: a person must judge whether the tests try enough inputs.
+export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = runMutmutProcess, runTwins = runTwinsProcess } = {}) {
   const runs = new WeakMap();
   return async (requirement, context) => {
-    if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker, runMutmut }));
+    if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker, runMutmut, runTwins }));
     const runResult = await runs.get(context);
-    const result = judge(runResult, requirement.params.min, context.equivalentMutants ?? []);
+    const result = withTwinValues(judge(runResult, requirement.params.min, context.equivalentMutants ?? []), runResult.twins ?? []);
     // A test that failed in the coverage run of Exhibit's first Stryker run, and passed in the
     // coverage run of the second, is flaky (spec 9.3 and 9.5).
     return passedInSecondCoverageRun(result.details) ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
   };
+}
+
+// Adds the twin values of the run to a requirement's result (spec 9.5). A result that would be
+// met is missing, because no mutant puts one name in place of another, so a person must judge
+// whether the tests try enough inputs. A result that already has a gap keeps its status, and its
+// how_to_fix names the twins too.
+export function withTwinValues(result, twins) {
+  if (twins.length === 0) return result;
+  const named = twins.slice(0, LISTED).map((twin) => `${twin.file}:${twin.line} \`${twin.used}\` was always equal to ${twin.twins.map((other) => `\`${other}\``).join(', ')}`).join('; ');
+  const more = twins.length > LISTED ? `, and ${twins.length - LISTED} more listed in evidence.json` : '';
+  const help = `Each time the tests ran these changed lines, a value that the line reads was equal to another value in scope that the line does not read: ${named}${more}. So no test can tell the two apart there, and if the line reads the wrong one, every test still passes. Add a test with inputs where the two differ, or ask a person to read the line.`;
+  const details = { ...result.details, twin_values: twins };
+  if (result.status === 'met') return { ...result, status: 'missing', details, how_to_fix: help };
+  return { ...result, details, how_to_fix: result.how_to_fix ? `${result.how_to_fix} ${help}` : help };
 }
 
 // Does the run for one check, and gives back either `{ fixed }`, a result that does not depend on
@@ -69,7 +88,9 @@ export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = 
 //    head SHA fixes, and mutmut the Python files (mutmutRun). Each run stops when
 //    settings.mutation_budget_seconds runs out.
 // 5. The mutants of both count together.
-async function mutationRun({ cwd, base, head, settings, env }, { runStryker, runMutmut }) {
+// 6. It runs the test files that Stryker got once more, and records the values on the changed
+//    JavaScript lines, to find twin values (src/twin-values.js).
+async function mutationRun({ cwd, base, head, settings, env }, { runStryker, runMutmut, runTwins }) {
   const testGlobs = settings.mutation_test_files ?? [];
   const isTest = (path) => isTestPath(path) || testGlobs.some((glob) => matchesGlob(path, glob));
   const mutated = [];
@@ -115,7 +136,12 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker, run
     if (forMutmut.length > 0 && !parts.some((part) => part.fixed)) parts.push(await mutmutRun({ ...shared, files: forMutmut, runMutmut }));
     const stopped = parts.find((part) => part.fixed);
     if (stopped) return stopped;
+    // 6. The test files that Stryker got run once more, with the twin capture.
+    const testFiles = parts.find((part) => part.testFiles)?.testFiles ?? [];
+    // The pass has a budget of its own, the same as a Stryker run, so a slow test cannot make it long.
+    const twins = forStryker.length === 0 ? [] : await runTwins({ root, files: forStryker, testFiles, env, budgetMs: budgetSeconds * 1000, logDir: join(outDir, 'twins') });
     return Object.assign({ budgetSeconds, mutated }, ...parts, {
+      twins,
       mutants: parts.flatMap((part) => part.mutants),
       complete: parts.every((part) => part.complete)
     });
@@ -656,6 +682,12 @@ export function describeMutation(details) {
   show('Survived, because no test ran the line', details.no_coverage_mutants);
   show('Killed by a timeout, so check that the mutant really makes the tests hang', details.timeout_mutants);
   show('Marked as equivalent, so they do not count', details.equivalent_mutants);
+  const twins = details.twin_values ?? [];
+  if (twins.length > 0) {
+    lines.push('  - Twin values: each time a test ran the line, the value it reads was equal to a value it does not read:');
+    for (const twin of twins.slice(0, LISTED)) lines.push(`    - ${twin.file}:${twin.line} \`${twin.used}\` and ${twin.twins.map((other) => `\`${other}\``).join(', ')} (values ${twin.values.join(', ')}): \`${twin.line_text}\``);
+    if (twins.length > LISTED) lines.push(`    - and ${twins.length - LISTED} more, listed in evidence.json.`);
+  }
   return lines.join('\n');
 }
 

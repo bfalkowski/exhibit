@@ -667,3 +667,37 @@ test('a run is complete when the done line is there and Stryker exited 0, or the
 test('a status that Exhibit does not know throws, so an upgrade cannot count mutants wrong', () => {
   assert.throws(() => judge(ran(mutants('Exploded', 1), true), 0.5), /status "Exploded"/);
 });
+
+// Canary 5 of ticket 258, made small: daysLeft counts from the first day of the window, where it
+// meant today. Each test asks on a first day, so every mutant dies. The good test also asks on a
+// day inside the window.
+const DAYS_CODE = `export function daysLeft(today, window) {
+  if (today < window.from || today > window.to) return 0;
+  const from = window.from, to = window.to;
+  return to - from + 1;
+}
+`;
+const daysTest = (cases) => `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { daysLeft } from '../src/days.js';
+test('days left', () => {
+${cases.map(([today, from, to, want]) => `  assert.equal(daysLeft(${today}, { from: ${from}, to: ${to} }), ${want});`).join('\n')}
+});
+`;
+
+test('twin values: a test that asks only where the wrong name and the right value are equal makes a met requirement missing', async (t) => {
+  const allKilled = async (options) => ({ mutants: [{ fileName: join(options.root, 'src/days.js'), location: { start: { line: 4, column: 10 }, end: { line: 4, column: 18 } }, mutatorName: 'ArithmeticOperator', replacement: 'to + from', status: 'Killed' }], complete: true, timedOut: false, code: 0 });
+  const weak = collectorRepo(t, { 'src/days.js': DAYS_CODE, 'test/days.test.js': daysTest([[10, 10, 25, 16], [40, 40, 54, 15], [5, 10, 25, 0]]) });
+  const missing = await mutationCollector({ runStryker: allKilled })({ params: { min: 0.8 } }, weak);
+  assert.equal(missing.status, 'missing', JSON.stringify(missing));
+  assert.deepEqual(missing.details.twin_values.map(({ file, line, used, twins }) => ({ file, line, used, twins })), [
+    { file: 'src/days.js', line: 3, used: 'window.from', twins: ['today'] },
+    { file: 'src/days.js', line: 4, used: 'from', twins: ['today'] }
+  ]);
+  assert.match(missing.how_to_fix, /src\/days\.js:4 `from` was always equal to `today`/);
+
+  const good = collectorRepo(t, { 'src/days.js': DAYS_CODE, 'test/days.test.js': daysTest([[10, 10, 25, 16], [40, 40, 54, 15], [5, 10, 25, 0], [20, 10, 25, 6]]) });
+  const met = await mutationCollector({ runStryker: allKilled })({ params: { min: 0.8 } }, good);
+  assert.equal(met.status, 'met');
+  assert.equal(met.details.twin_values, undefined);
+});
