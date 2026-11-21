@@ -1,0 +1,82 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "92b8614fd44348060557cf6f5980affefedd2f429ca506d026a337a4aa6d6909"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 322,
+  "base": "db3442c02c6b975f1ece68b39dc5d8d6e46d26bc",
+  "head": "c8d7af4c1969cfe2f35a5b71c5c19fc6f2a1f7d5",
+  "classification": {
+    "kinds": [
+      "source",
+      "tooling"
+    ],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "source",
+        "tooling"
+      ],
+      "status": "met",
+      "details": {
+        "base": {
+          "passed": 767,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 760,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": []
+      },
+      "author": "builder",
+      "duration_ms": 102359
+    },
+    {
+      "type": "failing-before",
+      "params": {
+        "when": [
+          "fix"
+        ]
+      },
+      "kinds": [
+        "source"
+      ],
+      "status": "skipped",
+      "details": {
+        "reason": "The policy asks for it only on a fix, and this change is not classified as one, so it is not needed. This does not stop meets_policy."
+      },
+      "author": "builder",
+      "duration_ms": 0
+    }
+  ],
+  "verdict": "meets_policy",
+  "gaps": [],
+  "checks_by_author": {
+    "builder": 1,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-21T08:17:43.414Z"
+}
