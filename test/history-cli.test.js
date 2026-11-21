@@ -106,7 +106,7 @@ test('a pr: signal that is not a PR number gives exit 2 with a message, and writ
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, pr:abc]\n');
   const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96\./);
   assert.ok(!existsSync(run.historyPath));
 });
 

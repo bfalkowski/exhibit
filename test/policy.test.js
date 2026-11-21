@@ -164,12 +164,12 @@ test('readPolicy accepts pr: with a PR number, like the other types', async (t) 
 test('readPolicy refuses a pr: value that is not a PR number, with a message for each', async (t) => {
   const cases = [
     ['settings:\n  fix_signals: ["pr:"]\n', /fix_signals\[0\] is "pr:", which needs a value after the colon\./],
-    ['settings:\n  fix_signals: [label:bug, pr:abc]\n', /fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
-    ['settings:\n  fix_signals: ["pr:-3"]\n', /"pr:-3"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: [label:bug, pr:abc]\n', /fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:-3"]\n', /"pr:-3"\. A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96\./],
     ['settings:\n  fix_signals: ["pr:0"]\n', /"pr:0"\. A pr: signal needs a PR number of 1 or more/],
     ['settings:\n  fix_signals: ["pr:9.5"]\n', /"pr:9\.5"\. A pr: signal needs a PR number/],
     ['settings:\n  fix_signals: ["pr:#96"]\n', /"pr:#96"\. A pr: signal needs a PR number/],
-    ['settings:\n  fix_signals: ["pr:096"]\n', /"pr:096"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./],
+    ['settings:\n  fix_signals: ["pr:096"]\n', /"pr:096"\. A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96\./],
     ['settings:\n  fix_signals: ["pr: 96"]\n', /"pr: 96"\. Remove the space before or after the value, as in pr:96\./],
     // Without quotes, YAML reads "pr: 96" in a list as a mapping, not as text.
     ['settings:\n  fix_signals: [pr: 96]\n', /fix_signals\[0\] must be text like label:bug, not \{"pr":96\}\. Write it with no space after the colon, as in pr:96\./]
@@ -177,6 +177,11 @@ test('readPolicy refuses a pr: value that is not a PR number, with a message for
   for (const [text, message] of cases) {
     await assert.rejects(readPolicy(folderWith(t, text)), (error) => error instanceof ToolError && message.test(error.message), text);
   }
+});
+
+test('readPolicy refuses a pr: signal that is in the list twice, and names both places', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [pr:96, label:bug, pr:96]\n');
+  await assert.rejects(readPolicy(cwd), (error) => error instanceof ToolError && /evidence\.yml settings\.fix_signals\[2\] is "pr:96", the same as settings\.fix_signals\[0\]\. Name each PR once\./.test(error.message));
 });
 
 test('readPolicy accepts title_after_key: like the other types', async (t) => {

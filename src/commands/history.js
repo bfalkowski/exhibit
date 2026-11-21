@@ -218,7 +218,8 @@ const fitsSignal = (szz, line) => (szz.blamed_commit === null) === (line.classif
 
 // Returns one text that lists the PRs whose classification differs from their line in the old
 // file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so
-// this is how a person sees what a change to the signals did.
+// this is how a person sees what a change to the signals did. A PR can also change with the same
+// signals, such as when a person adds the label bug to it on GitHub, so the text does not say why.
 function classificationChanges(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line.classification]));
   const changed = lines.filter((line) => {
@@ -231,7 +232,8 @@ function classificationChanges(lines, previous) {
     return old.get(number).fix ? `PR ${number} is a fix by ${signal} now` : `PR ${number} is now a fix (${signal})`;
   });
   const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
-  return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
+  const count = changed.length === 1 ? '1 PR in ' + OUTPUT + ' is' : `${changed.length} PRs in ${OUTPUT} are`;
+  return `${count} classified another way than in the old file: ${said.join(', ')}${more}.`;
 }
 
 // Returns one text that lists the PRs whose kinds differ from their line in the old file, or ''

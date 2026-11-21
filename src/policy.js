@@ -118,7 +118,11 @@ function checkSignals(signals, file) {
     // creates or renames the label, and git refuses a space in a branch name. So refuse
     // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
-    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
+    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96.`);
+    // A repeated pr: signal does no harm, as the first match wins, but it is most often a typo
+    // for another number, so that PR would be missed. So refuse it, and name both places.
+    const first = signals.indexOf(signal);
+    if (type === 'pr' && first < i) throw new ToolError(`${at} is "${signal}", the same as settings.fix_signals[${first}]. Name each PR once.`);
     if (type === 'tracker' && !TRACKERS.includes(value)) throw new ToolError(`${at} is "${signal}". A tracker: signal names a tracker Exhibit knows: ${TRACKERS.map((name) => `tracker:${name}`).join(', ')}.`);
   });
 }
