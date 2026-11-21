@@ -28,7 +28,9 @@ export const JIRA_TRACKER = {
 // Connects the Jira tracker for exhibit history and exhibit check (spec 9.1). It returns
 // { tracker, note }. tracker is null when the fix signals do not hold tracker:jira, and null with
 // a note when JIRA_API_TOKEN is not set: then the signal matches no PR, and every other signal
-// still works. The caller shows the note in one line. Otherwise note is null.
+// still works. The caller shows the note in one line. Otherwise note is null. exhibit history
+// does not use the null: with no token it makes its own tracker that cannot ask Jira, so the
+// answers saved in the old history file still count (spec 8.3).
 export function connectTracker(settings, { env, fetch }) {
   if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return { tracker: null, note: null };
   const token = env[JIRA_TRACKER.tokenEnv];

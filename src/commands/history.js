@@ -63,8 +63,9 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
   // Without a token, history still reads the Jira answers saved in the old file (spec 8.3), so it
   // takes a tracker that cannot ask, and says so in its own note after the PRs are classified.
-  const connected = connectTracker(policy.settings, { env, fetch });
-  const tracker = connected.note ? JIRA_TRACKER.connect({ settings: policy.settings.jira, fetch }) : connected.tracker;
+  // So it leaves out the note from connectTracker.
+  const noToken = fixSignals.includes(`tracker:${JIRA_TRACKER.name}`) && !env[JIRA_TRACKER.tokenEnv];
+  const tracker = noToken ? JIRA_TRACKER.connect({ settings: policy.settings.jira, fetch }) : connectTracker(policy.settings, { env, fetch }).tracker;
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
   const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
@@ -92,6 +93,7 @@ function noTokenNote(lines) {
     : `so Exhibit did not ask Jira. ${saved === 1 ? '1 PR keeps' : `${saved} PRs keep`} the Jira answer saved in ${OUTPUT}, and the tracker:jira fix signal matched no other PR`;
   return `exhibit: note: ${JIRA_TRACKER.tokenEnv} is not set, ${what}. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.\n`;
 }
+
 async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, kinds, tracker, warn });
