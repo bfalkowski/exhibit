@@ -81,7 +81,7 @@
         "fix": { "type": "boolean" },
         "fix_signal": {
           "type": ["string", "null"],
-          "pattern": "^((label|title|title_after_key|branch|pr|jira):.+|revert)$",
+          "pattern": "^((label|title|title_after_key|title_after_tag|branch|pr|jira):.+|revert)$",
           "description": "The first fix signal that matched, such as label:bug, pr:96 or revert. For the tracker:jira signal it is the Jira issue that matched, such as jira:PAY-482. null when the PR is not a fix."
         },
         "escaped": {
