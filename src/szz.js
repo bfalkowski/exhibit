@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { isRevert, REVERT_SIGNAL, revertedWork } from './fix-signals.js';
+import { isRevert, oldRepoNames, REVERT_SIGNAL, revertedWork } from './fix-signals.js';
 import { GitHubReplyError } from './github.js';
 import { JiraReplyError } from './jira.js';
 
@@ -277,9 +277,10 @@ async function revertLinks(dir, fix, context) {
 // Returns the set of PRs that the body of the revert `line` names. A PR named by number counts
 // when the history holds it, or when the forge says it is a PR. A commit maps to its PR as a
 // blamed commit does (createPrFinder), after a short SHA is made full in the clone. The revert
-// PR itself is never in the set.
+// PR itself is never in the set. A PR named by an old name of the repo, as after a rename or a
+// transfer, counts too (oldRepoNames).
 async function revertedPrs(dir, line, { findPr, forge, knownPrs }) {
-  const { prs, commits } = revertedWork(line.body, forge.repo);
+  const { prs, commits } = revertedWork(line.body, forge.repo, await oldRepoNames(line.body, forge));
   const found = new Set();
   for (const number of prs) {
     if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
@@ -305,7 +306,7 @@ function createTakesOut(dir, context) {
   const takesOut = async (number, path = new Set()) => {
     if (decided.has(number)) return decided.get(number);
     const line = context.knownPrs.get(number);
-    if (line === undefined || !isRevert({ ...line, repo: context.forge.repo })) return false;
+    if (line === undefined || !isRevert({ ...line, repo: context.forge.repo, oldNames: await oldRepoNames(line.body, context.forge) })) return false;
     if (path.has(number)) return true;
     const above = new Set([...path, number]);
     const named = await revertedPrs(dir, line, context);
