@@ -437,15 +437,16 @@ test('the base and head runs give the base error, not a throw, when only the bas
 
 test('a base run past the time limit is a base with no results: tests-before-after is judged by the head', async (t) => {
   const fixture = buildRepo(t);
-  // Only the head has scripts/test.sh, so the command hangs on the base and runs the tests on the head.
-  fixture.setBasePolicy(policy('if [ ! -f scripts/test.sh ]; then sleep 600; fi; sh scripts/test.sh').replace('settings:\n', 'settings:\n  test_timeout_seconds: 1\n'));
+  // Only the head has scripts/test.sh, so the command hangs on the base and runs the tests on the
+  // head. The head has the same limit, so it gets 3 seconds, to pass on a busy machine too.
+  fixture.setBasePolicy(policy('if [ ! -f scripts/test.sh ]; then sleep 600; fi; sh scripts/test.sh').replace('settings:\n', 'settings:\n  test_timeout_seconds: 3\n'));
   fixture.branch('tools', TOOLS);
   const started = Date.now();
   const { code, evidence, requirement } = await runCheck(fixture.repo, 'tools');
   assert.ok(Date.now() - started < 60_000, 'exhibit check stopped the base soon after the time limit');
   assert.equal(requirement.status, 'met');
   assert.equal(requirement.details.base, null);
-  assert.match(requirement.details.base_error.message, /ran past the time limit of 1 seconds on the base/);
+  assert.match(requirement.details.base_error.message, /ran past the time limit of 3 seconds on the base/);
   assert.equal(evidence.verdict, 'meets_policy');
   assert.equal(code, 0);
   assertNoWorktreeLeft(fixture);
