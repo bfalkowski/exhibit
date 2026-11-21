@@ -3,10 +3,11 @@
 // of unknown ones. Mutation runs only in a second pass, while the time budget still holds a whole
 // mutation run.
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { judge } from './backtest.js';
+import { judge, requirementName } from './backtest.js';
 import { buildExhibit } from './check.js';
 import { DEFAULT_MUTATION_BUDGET_SECONDS, MUTATION_DIR } from './mutation.js';
 import { DEFAULT_POLICY } from './policy.js';
@@ -151,22 +152,22 @@ async function collectFor({ cwd, env, line, policies, wanted, cache, collectorsF
 
 function fill(result, cache) {
   result.requirements = [...cache.entries()].map(([key, value]) => ({ ...JSON.parse(key), status: value.status, details: value.details }));
-  result.errors = result.requirements.filter((item) => item.status === 'error').map((item) => `${item.type === 'probe' ? `probe ${item.params.name}` : item.type}: ${item.details?.message ?? item.details?.reason ?? 'error'}`);
+  result.errors = result.requirements.filter((item) => item.status === 'error').map((item) => `${requirementName(item)}: ${item.details?.message ?? item.details?.reason ?? 'error'}`);
   result.status = result.errors.length > 0 ? 'error' : 'ran';
 }
 
 // Moves the logs that exhibit check's collectors wrote into .exhibit/rerun/<number>, so the next PR
-// does not write over them.
+// does not write over them. Only a folder that this pass wrote moves, so the mutation pass keeps
+// the test and probe logs of the first pass.
 async function keepLogs(cwd, number) {
   const target = join(cwd, RERUN_DIR, String(number));
   for (const dir of LOG_DIRS) {
     const from = join(cwd, dir);
+    if (!existsSync(from)) continue;
     const to = join(target, dir.split('/').pop());
     await mkdir(target, { recursive: true });
     await rm(to, { recursive: true, force: true });
-    await rename(from, to).catch((error) => {
-      if (error.code !== 'ENOENT') throw error;
-    });
+    await rename(from, to);
   }
 }
 

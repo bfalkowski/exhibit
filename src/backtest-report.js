@@ -115,7 +115,8 @@ function replayBlocks(result) {
   return blocks;
 }
 
-function verdictText({ verdict, missing, strong }) {
+function verdictText({ verdict, missing, strong, no_commits: noCommits }) {
+  if (noCommits) return `${verdict}, from the exhibit or body only. Not counted: its commits are not in the clone, so it could not run again.`;
   if (verdict === 'meets_policy') return 'meets_policy, so missed.';
   return `needs_person, caught. Missing: ${missing.join(', ')}. ${strong ? 'A strong catch.' : 'Not a strong catch.'}`;
 }
@@ -150,7 +151,7 @@ function rerunBlocks(result) {
     if (these.length > 0) blocks.push(paragraph(`${text}: ${these.map((pr) => pr.number).join(', ')}.`));
   };
   named('not_reached', 'PRs the budget did not reach. Give a larger --budget to run them');
-  named('no_commits', 'PRs whose base or head commit is not in the clone, so they did not run. Fetch them, for example with git fetch origin pull/N/head, and run again. They are not counted as missed for this');
+  named('no_commits', 'PRs whose base or head commit is not in the clone, so they did not run. They are in no rate: not caught, not missed and not a false demand. Fetch them, for example with git fetch origin pull/N/head, and run again');
   const noMutation = prs.filter((pr) => pr.rerun.mutation === 'not_reached').map((pr) => pr.number);
   if (noMutation.length > 0) blocks.push(paragraph(`PRs whose mutation requirement did not run, because the budget could not hold one more mutation run: ${noMutation.join(', ')}.`));
   return blocks;

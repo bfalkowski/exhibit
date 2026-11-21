@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { backtest, withoutRules } from '../backtest.js';
+import { backtest, requirementName, testSetOf, withoutRules } from '../backtest.js';
 import { buildBacktestReport, funnelLines, shareText } from '../backtest-report.js';
 import { COLLECTORS } from '../check.js';
 import { checkExhibit } from '../exhibit-schema.js';
@@ -45,7 +45,7 @@ export async function backtestCommand(argv, { cwd, env = process.env, stdout, st
   let result = before;
   let rerunInfo = null;
   if (options.rerun) {
-    const testSet = lines.filter((line) => options.from === null || new Date(line.merged_at) >= options.from).sort((a, b) => a.number - b.number);
+    const testSet = testSetOf(lines, options.from);
     const policies = before.leaks.length === 0 ? [policy] : [policy, withoutRules(policy, before.leaks.map((leak) => leak.rule))];
     const started = clock();
     const reruns = await rerunWithStop({ cwd, env, lines: testSet, policies, exhibits: stored.exhibits, budgetSeconds: options.budgetMinutes * 60, clock, stderr });
@@ -128,7 +128,7 @@ async function rerunWithStop({ cwd, env, lines, policies, exhibits, budgetSecond
         return { collectors: { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) }, done: () => headWorktree.remove() };
       },
       onPr: (number, result) => {
-        const said = result.requirements.map((item) => `${item.type === 'probe' ? `probe ${item.params.name}` : item.type} ${item.status}`).join(', ');
+        const said = result.requirements.map((item) => `${requirementName(item)} ${item.status}`).join(', ');
         stderr.write(`exhibit: rerun of PR ${number}: ${said} (${Math.round(result.seconds)} s).\n`);
       }
     });

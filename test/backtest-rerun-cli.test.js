@@ -113,9 +113,12 @@ test('--rerun turns unknown requirements into met or missing, and the counts cha
   assert.match(after.rerun.prs[2].errors[0], /^tests-before-after: /);
   assert.deepEqual([after.rerun.ran, after.rerun.error, after.rerun.no_commits, after.rerun.not_reached], [3, 1, 1, 0]);
   // PR 2 is still caught, now by a missing requirement. PRs 1 and 5 meet the policy, so two false
-  // demands are gone. PR 3 (error) and PR 4 (no commits) keep their unknown requirements.
+  // demands are gone. PR 3 (error) keeps its unknown requirement, and is still a false demand.
+  // PR 4 (no commits) could not run, so it is in no rate: the clean PRs drop from 4 to 3.
   assert.deepEqual([after.counts.all.caught.k, after.counts.all.caught.n], [1, 1]);
-  assert.deepEqual([after.counts.all.false_demands.k, after.counts.all.false_demands.n], [2, 4]);
+  assert.deepEqual([after.counts.all.false_demands.k, after.counts.all.false_demands.n], [1, 3]);
+  assert.equal(after.counts.all.no_commits, 1);
+  assert.equal(before.counts.all.no_commits, 0);
   assert.equal(after.counts.all.unknown_only, 2);
   assert.deepEqual(after.counts_before_rerun, before.counts);
   assert.deepEqual(after.evidence_from, { exhibit: 0, rerun: 4, body: 0, none: 1 });

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { judge } from '../src/backtest.js';
+import { backtest, judge } from '../src/backtest.js';
 import { parsePolicy } from '../src/policy.js';
 import { CHEAP, rerun } from '../src/rerun.js';
 
@@ -127,4 +127,48 @@ test('judge takes met, missing and failed from a rerun, and the rerun wins over 
   assert.deepEqual(after.requirements.map((item) => [item.status, item.from]), [['missing', 'rerun'], ['met', 'rerun'], ['missing', 'body']]);
   assert.equal(after.basis, 'rerun');
   assert.deepEqual(after.missing, ['tests-before-after', 'mutation 0.5']);
+});
+
+test('the mutation pass keeps the test and probe logs of the first pass (review of PR 370)', async (t) => {
+  const cwd = folder(t);
+  // Each collector writes a log where exhibit check's collector would: tests, probes or mutation.
+  const writes = (dir) => async () => {
+    mkdirSync(join(cwd, dir), { recursive: true });
+    writeFileSync(join(cwd, dir, 'run.log'), 'ran\n');
+    return { status: 'met', details: {} };
+  };
+  const collectorsFor = () => ({
+    collectors: { 'tests-before-after': writes('.exhibit/tests'), 'failing-before': writes('.exhibit/tests'), probe: writes('.exhibit/probes/ready'), mutation: writes('.exhibit/mutation') },
+    done: async () => {}
+  });
+  const results = await rerun({ cwd, env: {}, lines: [line(1)], policies: [POLICY], budgetSeconds: 3600, collectorsFor, hasCommit: async () => true });
+  assert.equal(results.get(1).mutation, 'ran');
+  for (const path of ['tests/run.log', 'probes/ready/run.log', 'mutation/run.log']) {
+    assert.ok(existsSync(join(cwd, '.exhibit/rerun/1', path)), `${path} was not kept`);
+  }
+});
+
+test('a PR whose commits are not in the clone is in no rate, even when its body says met (review of PR 370)', () => {
+  const policy = parsePolicy('version: 3\ndefault:\n  risk: medium\n  needs: [tests-before-after]\n');
+  const met = '## Evidence\n\n- npm test passes.\n';
+  const lines = [
+    { ...line(1), body: met },
+    { ...line(2), body: met },
+    { ...line(3), title: 'Fix 3', labels: ['bug'], body: met, classification: { fix: true, fix_signal: 'label:bug', kinds: [] }, szz: { blamed_commit: 'a'.repeat(40), links: [{ pr: 1, confidence: 1, lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null } }
+  ];
+  const labels = [{ id: 'D-003', fix_pr: 3, introducing_prs: [1], rejected_prs: [], code: 'x', category: 'Bug', would_have_caught: 'x', labeled_by: 'person', szz_link_rejected: false, known_at_review: false, labeled_at: '2026-03-01T00:00:00Z' }];
+  const before = backtest({ lines, labels, policy });
+  // The body says npm test ran, so the introducing PR 1 meets the policy, and is missed.
+  assert.deepEqual([before.counts.all.missed.k, before.counts.all.missed.n], [1, 1]);
+  assert.equal(before.counts.all.clean, 2);
+
+  // PR 1's head and PR 2's head are not in the clone, so neither counts. PR 3 ran, and met.
+  const noCommits = { status: 'no_commits', seconds: 0, requirements: [], errors: [], mutation: null };
+  const reruns = new Map([[1, noCommits], [2, noCommits], [3, { status: 'ran', seconds: 1, requirements: [{ type: 'tests-before-after', params: {}, status: 'met' }], errors: [], mutation: null }]]);
+  const after = backtest({ lines, labels, policy, reruns });
+  assert.equal(after.counts.all.defects, 0);
+  assert.equal(after.counts.all.missed, null);
+  assert.equal(after.counts.all.clean, 1);
+  assert.equal(after.counts.all.no_commits, 2);
+  assert.deepEqual(after.replayed.map((item) => [item.pr, item.no_commits]), [[1, true]]);
 });

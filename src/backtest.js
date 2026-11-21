@@ -23,7 +23,9 @@ export const DEFAULT_KIND = 'default';
  * - `reruns`: a Map from PR number to what src/rerun.js gave for it, or null with no --rerun.
  */
 export function backtest({ lines, labels, policy, exhibits = new Map(), from = null, reruns = null }) {
-  const testSet = lines.filter((line) => from === null || new Date(line.merged_at) >= from).sort(byNumber);
+  const testSet = testSetOf(lines, from);
+  // A PR whose base or head is not in the clone could not run again, so it is in no rate (spec 9.9).
+  const noCommits = new Set([...(reruns ?? new Map())].filter(([, result]) => result.status === 'no_commits').map(([number]) => number));
   const roles = prRoles(lines, labels);
   const counted = roles.defects.filter((defect) => defect.introducing_prs.some((pr) => testSet.some((line) => line.number === pr)));
   const leaks = findLeaks(policy, counted);
@@ -32,7 +34,7 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
 
   const run = (rules) => {
     const verdicts = new Map(lines.map((line) => [line.number, judge(line, rules, exhibits.get(line.number) ?? null, reruns?.get(line.number) ?? null)]));
-    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories) };
+    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories, noCommits) };
   };
   const withAll = run(policy);
   const withoutLeaks = without === null ? null : run(without);
@@ -45,7 +47,7 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
         const verdict = result.verdicts.get(pr);
         return { verdict: verdict.verdict, missing: verdict.missing, strong: isStrong(verdict, defect, rules, categories) };
       };
-      replayed.push({ id: defect.id, category: defect.category, pr, ...replay(withAll, policy), without: withoutLeaks === null ? null : replay(withoutLeaks, without) });
+      replayed.push({ id: defect.id, category: defect.category, pr, ...replay(withAll, policy), without: withoutLeaks === null ? null : replay(withoutLeaks, without), ...(reruns === null ? {} : { no_commits: noCommits.has(pr) }) });
     }
   }
 
@@ -109,6 +111,14 @@ export function judge(line, rules, exhibit, rerun = null) {
     basis,
     unknown_only: verdict === 'needs_person' && gaps.length === 0 && notMet.every((requirement) => requirement.status === 'unknown')
   };
+}
+
+/**
+ * The test set: the PRs merged at or after `from` (a Date), or every PR with null, by PR number.
+ * The rerun runs this same set, so it must come from here.
+ */
+export function testSetOf(lines, from) {
+  return lines.filter((line) => from === null || new Date(line.merged_at) >= from).sort(byNumber);
 }
 
 // What the report and --json say about one PR's rerun: its status, run time and errors.
@@ -214,18 +224,20 @@ function isStrong(verdict, defect, rules, categories) {
  * - unlabeled: PRs with an SZZ link that nobody labeled yet, in no rate.
  * - deferral_prs: introducing PRs of a deferral, in no rate.
  * - unknown_only: needs_person verdicts that rest only on unknown requirements.
+ * - no_commits: PRs that --rerun could not run, because a commit is not in the clone. They are
+ *   in no rate: not in defects, and not in clean.
  */
-function countByKind(testSet, verdicts, roles, rules, categories) {
+function countByKind(testSet, verdicts, roles, rules, categories, noCommits = new Set()) {
   const pairs = [];
   for (const defect of roles.defects) {
-    for (const pr of defect.introducing_prs) if (testSet.some((line) => line.number === pr)) pairs.push({ defect, pr });
+    for (const pr of defect.introducing_prs) if (!noCommits.has(pr) && testSet.some((line) => line.number === pr)) pairs.push({ defect, pr });
   }
   const row = (kind, inKind) => {
     const prs = testSet.filter((line) => inKind(line.number));
     const mine = pairs.filter((pair) => inKind(pair.pr));
     const caught = mine.filter((pair) => verdicts.get(pair.pr).verdict === 'needs_person');
     const strong = caught.filter((pair) => isStrong(verdicts.get(pair.pr), pair.defect, rules, categories));
-    const clean = prs.filter((line) => roles.roleOf(line.number) === 'clean');
+    const clean = prs.filter((line) => roles.roleOf(line.number) === 'clean' && !noCommits.has(line.number));
     const demands = clean.filter((line) => verdicts.get(line.number).verdict === 'needs_person');
     return {
       kind,
@@ -238,7 +250,8 @@ function countByKind(testSet, verdicts, roles, rules, categories) {
       false_demands: share(demands.length, clean.length),
       unlabeled: prs.filter((line) => roles.roleOf(line.number) === 'unlabeled').length,
       deferral_prs: prs.filter((line) => roles.roleOf(line.number) === 'deferral').length,
-      unknown_only: prs.filter((line) => verdicts.get(line.number).unknown_only).length
+      unknown_only: prs.filter((line) => verdicts.get(line.number).unknown_only).length,
+      no_commits: prs.filter((line) => noCommits.has(line.number)).length
     };
   };
   const kinds = [...new Set(testSet.flatMap((line) => verdicts.get(line.number).kinds))].sort((a, b) => (a === DEFAULT_KIND) - (b === DEFAULT_KIND) || a.localeCompare(b));
