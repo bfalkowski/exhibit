@@ -1,7 +1,8 @@
-# A first policy for Building58 (Exhibit's docs/spec.md section 8.1). Copy it to evidence.yml at
-# the top of Building58. It is a start: phase A of the field test (spec 12) finds the escaped
-# defects, and the kinds and their needs come from them later. A change to this file always needs
-# a person (spec 9.8).
+# The policy that the canary runs of Exhibit ticket 258 used (docs/field/canaries.md). It is the
+# starter policy from examples/building58/evidence.yml, plus the three mutation settings and
+# mutation: { min: 0.8 } on the code kind. It is not Building58's policy: do not copy it to
+# Building58's evidence.yml. To run the canaries again, copy it to evidence-canary.yml at the top
+# of a scratch clone of Building58 at 145143a, commit it, and apply the patches on top.
 version: 3
 
 settings:

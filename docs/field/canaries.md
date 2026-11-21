@@ -11,7 +11,7 @@ The 1.0 target is that Exhibit gives `needs_person` on 90% or more of the plante
 - Exhibit at `main` 3f93878, run from source.
 - A fresh clone of Building58 at `main` 145143a, in a scratch folder. Its push URL was set to a word that is not a remote, so nothing could be pushed. No PR was opened.
 - One commit on the clone's `main` (dd76c8a) added the policy as `evidence-canary.yml`: the starter policy from ticket 193 ([examples/building58/evidence.yml](../../examples/building58/evidence.yml)), plus `mutation: { min: 0.8 }` on the `code` kind and the mutation settings from ticket 260's Building58 run. Ticket 257, the policy from Building58's own defects, is not done yet. The file is [canaries/evidence-canary.yml](canaries/evidence-canary.yml).
-- Each canary is one commit on its own branch from dd76c8a. The patches are in [canaries/](canaries/), as `git format-patch` wrote them, so a later run can apply them with `git am`.
+- Each canary is one commit on its own branch from dd76c8a. The patches are in [canaries/](canaries/), as `git format-patch` wrote them. dd76c8a is only in the scratch clone. To run them again, copy [canaries/evidence-canary.yml](canaries/evidence-canary.yml) to the top of a clone of Building58 at 145143a, commit it, and apply each patch on that commit with `git am`.
 - Each run, one at a time, so the runs did not slow each other:
 
   ```
@@ -137,7 +137,7 @@ exit 0 after 1290 s
 - mutation (from code): met. Catch rate 1 (9 of 9 mutants killed, 0 of them by a timeout; 95% interval 0.6637 to 1).
 ```
 
-Stryker has no mutator that puts one variable in place of another. So no mutant puts `today` where `from` is, and the one test point, the first day, gives the same answer for both. Ticket 301.
+Stryker has no mutator that puts one variable in place of another. So no mutant puts `today` where `from` is, and each test point is the first day of a window (or a day with no decorations), where both give the same answer. Ticket 301.
 
 ## What this says
 
