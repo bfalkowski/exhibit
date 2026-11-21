@@ -348,6 +348,21 @@ test('a change with JavaScript and Python runs Stryker and mutmut, and counts th
   assert.deepEqual(result.details.mutmut, [{ project: 'py', output: '.exhibit/mutation/mutmut-py.log', complete: true }]);
 });
 
+test('a mutmut mutant has the text of its line, so a mark of an equivalent mutant finds it', async (t) => {
+  const fixture = buildRepo(t, { heads: { change: { 'py/shop/inside.py': NEW_CODE } } });
+  const survivor = { file: 'shop/inside.py', line: 6, column: 16, mutator: 'swap_op', original: '== root', replacement: '!= root', status: 'Survived' };
+  const killed = { ...survivor, column: 12, original: 'path', replacement: 'None', status: 'Killed' };
+  const lineText = 'return path == root or path.startswith(root + "/")';
+  const mark = { file: 'py/shop/inside.py', line_text: lineText, mutator: 'swap_op', original: '== root', replacement: '!= root', reason: 'For this test only.' };
+  const context = { cwd: fixture.repo, base: fixture.sha('start'), head: fixture.sha('change'), settings: {}, env: gitEnv(fixture.home), equivalentMutants: [mark] };
+  const result = await mutationCollector({ runMutmut: fakeMutmut([], { mutants: [survivor, killed], complete: true, timedOut: false, code: 0 }) })({ params: { min: 0.9 } }, context);
+  assert.equal(result.status, 'met');
+  assert.equal(result.details.n, 1);
+  assert.equal(result.details.equivalent, 1);
+  assert.equal(result.details.equivalent_mutants[0].line_text, lineText);
+  assert.equal(result.details.equivalent_mutants[0].reason, 'For this test only.');
+});
+
 test('a mutmut run that crashes, stops, or leaves out a changed file never meets the policy', async (t) => {
   const fixture = buildRepo(t, { heads: { change: { 'py/shop/inside.py': NEW_CODE } } });
   const context = { cwd: fixture.repo, base: fixture.sha('start'), head: fixture.sha('change'), settings: {}, env: gitEnv(fixture.home) };

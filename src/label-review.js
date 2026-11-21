@@ -33,7 +33,7 @@ const WHAT_LENGTH = 300;
  * - `idle()` resolves when every answer given so far is written.
  */
 export async function createReviewSession({ cwd, draft, issues, now = () => new Date() }) {
-  const { history, labels, categories: fileCategories, open } = await readLabeling(cwd);
+  const { history, labels, categories: fileCategories, open, relink } = await readLabeling(cwd);
   const byNumber = new Map(history.map((line) => [line.number, line]));
   const items = open.map((defect) => ({ defect, view: viewOf(defect, byNumber), prepared: null, state: 'open', line: null, saved: null, reply: null }));
   const categories = () => [...new Set([...fileCategories, ...items.filter((item) => item.saved !== null).map((item) => item.saved.category)])];
@@ -91,14 +91,15 @@ export async function createReviewSession({ cwd, draft, issues, now = () => new 
     });
   }
 
-  // run: { shown, labeled, skipped, open }, as the terminal flow counts them: `shown` counts the
-  // defects the page showed, `skipped` the defects left as skipped or for later, and `open` every
-  // defect on the page still with no line. With a drafter,
+  // run: { shown, labeled, skipped, open, relinked, new_links }, as the terminal flow counts them:
+  // `shown` counts the defects the page showed, `skipped` the defects left as skipped or for later,
+  // and `open` every defect on the page still with no line. The page does not ask about the new
+  // links of a labeled defect, so `relinked` is 0 and `new_links` counts those defects. With a drafter,
   // drafts: { run, file } and draftsText say how often the person kept Claude's draft (spec 9.11).
   // categories: categoryCounts of every line in the file.
   function summary() {
     const saved = items.filter((item) => item.saved !== null).map((item) => item.saved);
-    const run = { shown: shown.size, labeled: saved.length, skipped: items.filter((item) => item.state === 'skipped' || item.state === 'later').length, open: items.length - saved.length };
+    const run = { shown: shown.size, labeled: saved.length, skipped: items.filter((item) => item.state === 'skipped' || item.state === 'later').length, open: items.length - saved.length, relinked: 0, new_links: relink.length };
     const all = [...labels, ...saved];
     const counts = { run, categories: categoryCounts(all) };
     if (draft === undefined) return counts;

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { buildExhibit, renderSummary } from '../src/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
 import { changedLines, describeMutation, failedInFirstRun, judge, mutationCollector, readOutcome, testsThatReach } from '../src/mutation.js';
+import { stringify as stringifyYaml } from 'yaml';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -168,6 +169,44 @@ test('a change with a weak test needs a person, with the surviving mutants liste
   assert.equal(strongEvidence.requirements[0].details.n, weakEvidence.requirements[0].details.n);
 });
 
+test('mutants marked as equivalent in the base policy drop out of a later run, also when their lines move', async (t) => {
+  const first = buildRepo(t, { heads: { weak: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST } } });
+  const weak = exhibitCheck(first, 'weak');
+  assert.equal(weak.status, 1, weak.stderr + weak.stdout);
+  const { survivors } = JSON.parse(read(first.repo, 'evidence.json')).requirements[0].details;
+  assert.ok(survivors.length > 0);
+  assert.ok(survivors.every((mutant) => mutant.line_text === "return path === root || path.startsWith(root + '/');"), JSON.stringify(survivors));
+
+  // A person marks every survivor in the policy on main. The next change puts a comment line
+  // above the code, so each mutant is one line lower than when it was marked.
+  const marks = survivors.map(({ file, line_text: lineText, mutator, original, replacement }) => ({ file, line_text: lineText, mutator, original, replacement, reason: 'A person judged it.' }));
+  const later = buildRepo(t, {
+    policyText: `${policy()}${stringifyYaml({ equivalent_mutants: marks })}`,
+    heads: { moved: { 'src/inside.js': `// Says if a path is in a folder.\n${NEW_CODE}`, 'test/inside.test.js': WEAK_TEST } }
+  });
+  const moved = exhibitCheck(later, 'moved');
+  assert.equal(moved.status, 0, moved.stderr + moved.stdout);
+  const evidence = JSON.parse(read(later.repo, 'evidence.json'));
+  assert.deepEqual(checkExhibit(evidence), []);
+  assert.equal(evidence.verdict, 'meets_policy');
+  const { details } = evidence.requirements[0];
+  assert.equal(details.survived, 0);
+  assert.equal(details.equivalent, survivors.length);
+  assert.deepEqual(details.equivalent_mutants.map(({ line, mutator, replacement }) => ({ line, mutator, replacement })), survivors.map(({ line, mutator, replacement }) => ({ line: line + 1, mutator, replacement })));
+  assert.match(read(later.repo, 'summary.md'), /Marked as equivalent, so they do not count:\n {4}- src\/inside\.js:3 /);
+
+  // A PR that marks its own survivors: the marks are only on the head, so they are not used, and
+  // the change to the policy needs a person.
+  const own = buildRepo(t, { heads: { selfmark: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST, 'evidence.yml': `${policy()}${stringifyYaml({ equivalent_mutants: marks })}` } } });
+  const selfmark = exhibitCheck(own, 'selfmark');
+  assert.equal(selfmark.status, 1, selfmark.stderr + selfmark.stdout);
+  const ownEvidence = JSON.parse(read(own.repo, 'evidence.json'));
+  assert.equal(ownEvidence.requirements[0].status, 'failed');
+  assert.equal(ownEvidence.requirements[0].details.equivalent, 0);
+  assert.equal(ownEvidence.requirements[0].details.survived, survivors.length);
+  assert.deepEqual(ownEvidence.gaps.map((gap) => gap.type), ['mutation', 'policy-change']);
+});
+
 test('when Stryker fails, here because a test fails on the head, the verdict is error, never meets_policy', async (t) => {
   // min 0 would pass any catch rate, so only the error can stop meets_policy.
   const fixture = buildRepo(t, { policyText: policy({ min: 0 }), heads: { broken: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': FAILING_TEST } } });
@@ -264,6 +303,64 @@ test('timeouts count as killed, mutants with no coverage as survived and listed 
   assert.equal(result.details.survivors.length, 1);
   assert.equal(result.details.no_coverage_mutants.length, 1);
   assert.equal(result.details.timeout_mutants.length, 1);
+});
+
+// One mutant on the line "if (a > 0) return a;", and the mark that says it is equivalent.
+const onLine = (status, line, lineText = 'if (a > 0) return a;') => ({ file: 'src/a.js', line, column: 5, line_text: lineText, mutator: 'EqualityOperator', original: 'a > 0', replacement: 'a >= 0', status });
+const MARK = { file: 'src/a.js', line_text: 'if (a > 0) return a;', mutator: 'EqualityOperator', original: 'a > 0', replacement: 'a >= 0', reason: 'a is never 0 here.' };
+
+test('a marked mutant that survived, or that no test reached, does not count, and is listed apart with the reason', () => {
+  const list = [...mutants('Killed', 3), onLine('Survived', 7), onLine('NoCoverage', 12), ...mutants('Survived', 1)];
+  const unmarked = judge(ran(list, true), 0.7);
+  assert.equal(unmarked.status, 'failed');
+  assert.equal(unmarked.details.n, 6);
+
+  const result = judge(ran(list, true), 0.7, [MARK]);
+  assert.equal(result.status, 'met');
+  assert.equal(result.details.n, 4);
+  assert.equal(result.details.survived, 1);
+  assert.equal(result.details.no_coverage, 0);
+  assert.equal(result.details.equivalent, 2);
+  assert.equal(result.details.catch_rate, 0.75);
+  assert.deepEqual(result.details.survivors.map((mutant) => mutant.line), [1]);
+  assert.deepEqual(result.details.no_coverage_mutants, []);
+  // The key has no line number, so the mark holds on line 7 and on line 12.
+  assert.deepEqual(result.details.equivalent_mutants, [
+    { file: 'src/a.js', line: 7, column: 5, line_text: 'if (a > 0) return a;', mutator: 'EqualityOperator', original: 'a > 0', replacement: 'a >= 0', status: 'Survived', reason: 'a is never 0 here.' },
+    { file: 'src/a.js', line: 12, column: 5, line_text: 'if (a > 0) return a;', mutator: 'EqualityOperator', original: 'a > 0', replacement: 'a >= 0', status: 'NoCoverage', reason: 'a is never 0 here.' }
+  ]);
+});
+
+test('a mark holds only for the same file, line text, mutator, code and replacement, and never for a killed mutant', () => {
+  const others = [
+    { ...onLine('Survived', 1), file: 'src/b.js' },
+    onLine('Survived', 2, 'if (a > 0) return b;'),
+    { ...onLine('Survived', 3), mutator: 'ConditionalExpression' },
+    { ...onLine('Survived', 4), original: 'a' },
+    { ...onLine('Survived', 5), replacement: 'a < 0' }
+  ];
+  const result = judge(ran([...others, onLine('Killed', 6), onLine('Timeout', 7)], true), 0.5, [MARK]);
+  assert.equal(result.details.equivalent, 0);
+  assert.deepEqual(result.details.equivalent_mutants, []);
+  assert.equal(result.details.survived, 5);
+  assert.equal(result.details.killed, 1);
+  assert.equal(result.details.timeout, 1);
+  assert.equal(result.details.n, 7);
+});
+
+test('when every mutant that would count is marked, the requirement is met and says why', () => {
+  const result = judge(ran([onLine('Survived', 7)], true), 0.9, [MARK]);
+  assert.equal(result.status, 'met');
+  assert.equal(result.details.n, 0);
+  assert.match(result.details.reason, /each one that survived is marked as equivalent/);
+});
+
+test('summary.md lists the marked mutants apart, with the reason', () => {
+  const result = judge(ran([...mutants('Killed', 3), onLine('Survived', 7)], true), 0.7, [MARK]);
+  const words = describeMutation(result.details);
+  assert.match(words, /1 mutant marked as equivalent in the policy does not count\./);
+  assert.match(words, / {2}- Marked as equivalent, so they do not count:\n {4}- src\/a\.js:7 EqualityOperator: `a > 0` became `a >= 0`\. Why: a is never 0 here\./);
+  assert.doesNotMatch(describeMutation(judge(ran(mutants('Killed', 3), true), 0.7).details), /equivalent/);
 });
 
 // A repo for the collector with a stand-in for Stryker. Gives the context buildExhibit makes.

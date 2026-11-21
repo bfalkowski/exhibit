@@ -172,7 +172,8 @@ test('a re-land with an edited title is no fix: it links nothing, and its szz is
 
 test('a reverted PR that the history and the forge do not know gives no link, and says so', async (t) => {
   // The replies are GitHub's own, recorded from timonrieger/homelab: a 404 for an issue number it
-  // does not have, and a 422 for a commit it does not know.
+  // does not have, a 422 for a commit it does not know, and a 404 for a repo, other/repo, that
+  // does not exist.
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const fetch = replayFetch(fileURLToPath(new URL('./fixtures/github/revert-not-found.json', import.meta.url)));
@@ -195,5 +196,44 @@ test('a reverted PR that the history and the forge do not know gives no link, an
       const [line] = await addSzz([{ ...revert, body }], { dir: repo.dir, forge });
       assert.equal(line.szz.no_link_reason, REVERT_NOT_FOUND, String(body));
     }
+  });
+});
+
+// A fetch for the fixture repo after a rename: GitHub calls it fixture/shop now, and its old name
+// oldowner/shop leads to it, with the same id. other/shop is another repo.
+function renamedFetch(repo) {
+  const inner = commitPullsFetch(repo, REPO);
+  const repos = { '/repos/fixture/shop': { id: 7, full_name: REPO, default_branch: 'main' }, '/repos/oldowner/shop': { id: 7, full_name: REPO }, '/repos/other/shop': { id: 8, full_name: 'other/shop' } };
+  const asked = [];
+  const fetch = async (url) => {
+    const { pathname } = new URL(url);
+    if (!(pathname in repos)) return inner(url);
+    asked.push(pathname);
+    return new Response(JSON.stringify(repos[pathname]), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  fetch.asked = asked;
+  return fetch;
+}
+
+test('a revert whose body names the repo by an old name links the PR, after a rename or a transfer', async (t) => {
+  const { repo, lines } = fixtureWithReverts(t);
+  const fetch = renamedFetch(repo);
+  const forge = createGitHubForge({ repo: REPO, token: 't', fetch });
+  // GitHub's Revert button wrote the name the repo had then.
+  const revert = { ...lines.at(-2), body: 'Reverts oldowner/shop#5\nReverts other/shop#6' };
+  const [done] = await addSzz([revert], { dir: repo.dir, forge, known: [...repo.history, revert] });
+  assert.deepEqual(done.szz, { blamed_commit: null, links: [revertLink(5)], unlinked_lines: [], dropped_lines: [], no_link_reason: null });
+  assert.deepEqual(checkHistoryLine(done), []);
+
+  await t.test('a re-land of a revert that names the old name is no fix, so the chain reads the old name too', async () => {
+    // PR 15 has a plain title, so only its body, with the old name, makes it a revert.
+    const pr15 = { ...revert, title: 'Take back the shop entry point', body: 'Reverts oldowner/shop#5' };
+    const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts oldowner/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17` };
+    const [line] = await addSzz([reland], { dir: repo.dir, forge, known: [...repo.history, pr15, reland] });
+    assert.deepEqual([line.classification.fix, line.szz], [false, null]);
+  });
+
+  await t.test('each name costs one request in the run, and this repo one more', () => {
+    assert.deepEqual([...fetch.asked].sort(), ['/repos/fixture/shop', '/repos/oldowner/shop', '/repos/other/shop']);
   });
 });

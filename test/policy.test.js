@@ -54,6 +54,7 @@ test('the example policy in spec 8.1 passes, and readPolicy returns it as writte
   assert.deepEqual(policy.kinds['relay-core'].source, ['D-004', 'D-011']);
   assert.equal(policy.kinds.manual.merge_without_reading, 'allowed');
   assert.deepEqual(policy.default, { risk: 'medium', needs: ['tests-before-after', { mutation: { min: 0.7 } }] });
+  assert.deepEqual(policy.equivalent_mutants.map((mark) => mark.replacement), ['queue.length >= 0']);
 });
 
 // The evidence.yml block in docs/index.html, with the HTML escapes undone. CLAUDE.md tells
@@ -78,7 +79,7 @@ test('readPolicy accepts a hidden probe, a bare failing-before and a min of 0 or
 });
 
 test('readPolicy gives an empty policy with the default fix signals when there is no file', async (t) => {
-  assert.deepEqual(await readPolicy(folderWith(t)), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
+  assert.deepEqual(await readPolicy(folderWith(t)), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {}, equivalent_mutants: [] });
 });
 
 test('readPolicy refuses an unknown item type, and names the item', async (t) => {
@@ -233,10 +234,10 @@ test('readPolicy refuses a mutation min of NaN or infinity', async (t) => {
 });
 
 test('a key with nothing under it is the same as no key', async (t) => {
-  assert.deepEqual(await readPolicy(folderWith(t, 'settings:\nkinds:\ndefault:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
+  assert.deepEqual(await readPolicy(folderWith(t, 'settings:\nkinds:\ndefault:\nequivalent_mutants:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {}, equivalent_mutants: [] });
   const policy = await readPolicy(folderWith(t, kind('    needs:\n      - failing-before:\n      - tests-before-after:\n')));
   assert.deepEqual(policy.kinds['relay-core'].needs, ['failing-before', 'tests-before-after']);
-  assert.deepEqual(await readPolicy(folderWith(t, 'version:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {} });
+  assert.deepEqual(await readPolicy(folderWith(t, 'version:\n')), { settings: { fix_signals: [...DEFAULT_FIX_SIGNALS] }, kinds: {}, equivalent_mutants: [] });
   const withDefault = await readPolicy(folderWith(t, 'default:\n  risk: low\n  needs:\n    - failing-before:\n'));
   assert.deepEqual(withDefault.default.needs, ['failing-before']);
 });
@@ -269,4 +270,30 @@ test('readPolicy reads settings.jira for the tracker:jira signal, and refuses a 
   await refuses(t, 'settings:\n  jira:\n    site: https://acme.atlassian.net\n    escaped_values: [Production]\n', /^evidence\.yml settings\.jira\.escaped_values needs found_field/);
   await refuses(t, 'settings:\n  jira:\n    issue_types: [Bug]\n', /settings\.jira/);
   await refuses(t, 'settings:\n  jira:\n    site: https://acme.atlassian.net\n    token: abc\n', /settings\.jira has a field the schema does not allow: token/);
+});
+
+// A mark for one equivalent mutant (spec 9.5), for the tests to break one field at a time.
+const mark = (fields) => `version: 3\nequivalent_mutants:\n  - ${fields}\n`;
+const MARK = 'file: src/a.js\n    line_text: "if (a > 0) return a;"\n    mutator: EqualityOperator\n    original: a > 0\n    replacement: a >= 0\n    reason: "a is never 0 here."';
+
+test('readPolicy reads the marks of equivalent mutants, and an empty list is no marks', async (t) => {
+  const policy = await readPolicy(folderWith(t, mark(MARK)));
+  assert.deepEqual(policy.equivalent_mutants, [{ file: 'src/a.js', line_text: 'if (a > 0) return a;', mutator: 'EqualityOperator', original: 'a > 0', replacement: 'a >= 0', reason: 'a is never 0 here.' }]);
+  assert.deepEqual((await readPolicy(folderWith(t, 'version: 3\nequivalent_mutants:\n'))).equivalent_mutants, []);
+  assert.deepEqual((await readPolicy(folderWith(t, 'version: 3\n'))).equivalent_mutants, []);
+});
+
+test('readPolicy refuses a mark with no reason, an empty reason or an unknown field', async (t) => {
+  await refuses(t, mark(MARK.replace(/\n {4}reason: .*/, '')), /^evidence\.yml equivalent_mutants\[0\] /);
+  await refuses(t, mark(MARK.replace(/reason: .*/, 'reason: ""')), /^evidence\.yml equivalent_mutants\[0\]\.reason /);
+  await refuses(t, mark(`${MARK}\n    line: 3`), /^evidence\.yml equivalent_mutants\[0\] has a field the schema does not allow: line\.$/);
+});
+
+test('readPolicy refuses code that YAML reads as another type or as empty text, so a mark that never matches does not hide', async (t) => {
+  // Stryker's replacements true, [] and "" need the quotes that evidence.json gives them.
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: true')), /^evidence\.yml equivalent_mutants\[0\]\.replacement must be string, not boolean\.$/);
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: []')), /^evidence\.yml equivalent_mutants\[0\]\.replacement /);
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: ""')), /^evidence\.yml equivalent_mutants\[0\]\.replacement must have at least 1 character\.$/);
+  const quoted = await readPolicy(folderWith(t, mark(MARK.replace('replacement: a >= 0', 'replacement: "\\"\\""'))));
+  assert.equal(quoted.equivalent_mutants[0].replacement, '""');
 });

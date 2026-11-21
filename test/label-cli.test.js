@@ -66,7 +66,7 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
   const typed = ['', 'x', 'k', 'r', 'Percent taken as money', 'arithmetic', 'A test with a 10% discount', 'maybe', 'n', 's', 'k', 'Tax rounded too early', '1', 'A rounding test', ''].join('\n') + '\n';
   const run = label(cwd, ['--json'], typed);
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { shown: 3, labeled: 2, skipped: 1, open: 1, output: '.exhibit/labels.jsonl' });
+  assert.deepEqual(JSON.parse(run.stdout), { shown: 3, labeled: 2, skipped: 1, open: 1, relinked: 0, new_links: 0, output: '.exhibit/labels.jsonl' });
   // Under --json the defects and the questions go to stderr, so stdout holds only the summary.
   assert.match(run.stderr, /D-012, 1 of 3 with no code yet/);
   assert.match(run.stderr, /Please type an answer/);
@@ -356,4 +356,40 @@ test('with GITHUB_TOKEN, a follow-up issue that the fix PR closes makes the prop
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Exhibit proposes yes, because the title of issue 80 that the fix PR closes says: "Follow-ups from the review of PR 11", and SZZ blamed PR 11\./);
   assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.known_at_review]), [['D-012', true]]);
+});
+
+test('a labeled defect with a new SZZ link asks only about that link, and the answer goes into its line', (t) => {
+  const cwd = withHistory(t, shopText());
+  // D-012 was labeled when SZZ linked it only to PR 1. SZZ now links it to PR 11 too.
+  const line = (fixPr, introducing) => ({ id: `D-${String(fixPr).padStart(3, '0')}`, fix_pr: fixPr, introducing_prs: introducing, rejected_prs: [], code: `Code ${fixPr}`, category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-01T10:00:00.000Z' });
+  const before = [line(12, [1]), line(7, [2, 3]), line(6, [1])];
+  writeFileSync(join(cwd, '.exhibit', 'labels.jsonl'), before.map((l) => JSON.stringify(l) + '\n').join(''));
+
+  // An unknown answer is asked again, then r rejects the link to PR 11.
+  const run = label(cwd, [], 'x\nr\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /1 labeled defect has new SZZ links that nobody kept or rejected yet/);
+  assert.match(run.stdout, /D-012, labeled as "Code 12", 1 of 1 with new links/);
+  assert.match(run.stdout, /Its label keeps PR 1\. SZZ now links it to PR 11 too\./);
+  assert.match(run.stdout, /Link to PR 11, confidence 50%: k to keep it, or r to reject it/);
+  assert.match(run.stdout, /Please type k, r or s\./);
+  assert.match(run.stdout, /Got the answers for D-012\./);
+  assert.match(run.stdout, /Answered the new links of 1 labeled defect\. Every labeled defect has an answer for each SZZ link now\./);
+  assert.deepEqual(readLabels(cwd), [{ ...before[0], rejected_prs: [11], szz_link_rejected: true }, before[1], before[2]]);
+
+  // The next run has nothing to ask.
+  const again = label(cwd, ['--json']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(JSON.parse(again.stdout), { shown: 0, labeled: 0, skipped: 0, open: 0, relinked: 0, new_links: 0, output: '.exhibit/labels.jsonl' });
+});
+
+test('a skipped new link is counted at the end, and the next run asks about it again', (t) => {
+  const cwd = withHistory(t, shopText());
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: 'Code 12', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-01T10:00:00.000Z' };
+  writeFileSync(join(cwd, '.exhibit', 'labels.jsonl'), JSON.stringify(line) + '\n');
+  // D-007 and D-006 are skipped, then the new link of D-012.
+  const run = label(cwd, [], 's\ns\ns\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Labeled 0 escaped defects\. Skipped 2\. 2 still have no code\. Run exhibit label again to label them\.\n1 labeled defect still has new SZZ links\. Run exhibit label again to answer them\./);
+  assert.deepEqual(readLabels(cwd), [line]);
 });
