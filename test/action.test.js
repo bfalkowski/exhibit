@@ -272,6 +272,16 @@ for (const path of WORKFLOWS) {
     assert.deepEqual(workflow.jobs.publish.concurrency, { group: 'exhibit-publish-${{ github.event.pull_request.number }}', 'cancel-in-progress': false });
   });
 
+  // Without this, a slow run for an older head can finish after the run for the newer head, and
+  // its publish job then puts the older verdict in the one summary comment. A new push cancels the
+  // older run of the same PR, and the publish job's !cancelled() then skips it. The run's group
+  // must not be the publish job's group, or the publish job waits for its own run.
+  test(`${path}: a new push to a PR cancels the older run of that PR`, () => {
+    assert.deepEqual(workflow.concurrency, { group: 'exhibit-pr-${{ github.event.pull_request.number }}', 'cancel-in-progress': true });
+    assert.notEqual(workflow.concurrency.group, workflow.jobs.publish.concurrency.group);
+    assert.match(workflow.jobs.publish.if, /^\$\{\{ !cancelled\(\) && /);
+  });
+
   test(`${path}: for a PR from a fork, the check job summary says why the publish job is skipped`, () => {
     const note = workflow.jobs.check.steps.find((step) => step.name === 'Say why the publish job is skipped');
     assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
