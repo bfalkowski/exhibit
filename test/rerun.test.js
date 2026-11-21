@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backtest, judge } from '../src/backtest.js';
+import { backtest, judge, withoutRules } from '../src/backtest.js';
 import { parsePolicy } from '../src/policy.js';
-import { CHEAP, rerun } from '../src/rerun.js';
+import { CHEAP, prsWithoutCommits, rerun } from '../src/rerun.js';
 
 const POLICY = parsePolicy(`
 version: 3
@@ -190,4 +190,45 @@ test('a defect whose only introducing PR has no commits makes no leak (second re
   assert.equal(after.counts_without_leaks, null);
   // The replayed line is still there, and says it is not counted.
   assert.deepEqual(after.replayed.map((item) => [item.id, item.pr, item.no_commits, item.without]), [['D-003', 1, true, null]]);
+});
+
+test('the rerun runs the policy without the same leaking rules that the report uses (third review of PR 370, finding 9)', async (t) => {
+  // relay learned from D-1 (PR 1), and default from D-2 (PR 2). PR 2's head is not in the clone,
+  // so D-2 makes no leak. Before the fix, the command picked the rerun's policies from both leaks,
+  // and the report then used a "without" policy whose default needs were never run on PR 1.
+  const policy = parsePolicy(`
+version: 3
+kinds:
+  relay:
+    match: ["src/relay/**"]
+    risk: high
+    needs:
+      - probe: { name: syntax, run: "node --check src/relay/1.js" }
+    source: [D-1]
+default:
+  risk: medium
+  needs: [tests-before-after]
+  source: [D-2]
+`);
+  const at = (number, path) => ({ ...line(number), files: [{ path, additions: 1, deletions: 1 }] });
+  const fix = (number, path, introducing) => ({ ...at(number, path), title: `Fix ${number}`, labels: ['bug'], classification: { fix: true, fix_signal: 'label:bug', kinds: [] }, szz: { blamed_commit: 'a'.repeat(40), links: [{ pr: introducing, confidence: 1, lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null } });
+  const lines = [at(1, 'src/relay/1.js'), at(2, 'src/2.js'), at(3, 'src/relay/3.js'), fix(4, 'src/relay/1.js', 1), fix(5, 'src/2.js', 2)];
+  const label = (id, fixPr, pr) => ({ id, fix_pr: fixPr, introducing_prs: [pr], rejected_prs: [], code: 'x', category: 'Bug', would_have_caught: 'x', labeled_by: 'person', szz_link_rejected: false, known_at_review: false, labeled_at: '2026-03-01T00:00:00Z' });
+  const labels = [label('D-1', 4, 1), label('D-2', 5, 2)];
+  const hasCommit = async (cwd, sha) => sha !== line(2).head_sha;
+
+  // The steps of src/commands/backtest.js with --rerun.
+  const leakNoCommits = await prsWithoutCommits({ cwd: folder(t), lines, policy, hasCommit });
+  assert.deepEqual([...leakNoCommits], [2]);
+  const { leaks } = backtest({ lines, labels, policy, leakNoCommits });
+  assert.deepEqual(leaks, [{ rule: 'relay', defects: ['D-1'] }]);
+  const fake = fakeRun(() => 'met', 1);
+  const reruns = await rerun({ cwd: folder(t), env: {}, lines, policies: [policy, withoutRules(policy, leaks.map((leak) => leak.rule))], budgetSeconds: 1000, collectorsFor: fake.collectorsFor, clock: fake.clock, hasCommit });
+  const result = backtest({ lines, labels, policy, reruns, leakNoCommits });
+
+  assert.deepEqual(result.leaks, leaks);
+  // Without relay, PR 1 falls to default, and the rerun ran default's tests on it, so it meets.
+  const d1 = result.replayed.find((item) => item.id === 'D-1');
+  assert.equal(d1.without.verdict, 'meets_policy');
+  assert.ok(fake.calls.includes('1 tests-before-after'));
 });

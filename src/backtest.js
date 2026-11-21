@@ -21,8 +21,12 @@ export const DEFAULT_KIND = 'default';
  *   PRs that have one.
  * - `from`: a Date, or null. The test set is the PRs merged at or after it, or every PR with null.
  * - `reruns`: a Map from PR number to what src/rerun.js gave for it, or null with no --rerun.
+ * - `leakNoCommits`: a Set of PR numbers whose defects make no leak, or null to use the PRs that
+ *   `reruns` marks `no_commits`. The command gives the set it found before the rerun
+ *   (prsWithoutCommits in src/rerun.js), so the leaks here are the ones that picked the rerun's
+ *   policies, and the table without them uses only requirements that the rerun ran.
  */
-export function backtest({ lines, labels, policy, exhibits = new Map(), from = null, reruns = null }) {
+export function backtest({ lines, labels, policy, exhibits = new Map(), from = null, reruns = null, leakNoCommits = null }) {
   const testSet = testSetOf(lines, from);
   // A PR whose base or head is not in the clone could not run again, so it is in no rate (spec 9.9).
   const noCommits = new Set([...(reruns ?? new Map())].filter(([, result]) => result.status === 'no_commits').map(([number]) => number));
@@ -30,7 +34,8 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
   const counted = roles.defects.filter((defect) => defect.introducing_prs.some((pr) => testSet.some((line) => line.number === pr)));
   // A leak is a defect that a rate counts, so a defect whose only introducing PRs in the test set
   // have no commits in the clone makes no leak. `counted` keeps it, for its replayed line.
-  const leaks = findLeaks(policy, counted.filter((defect) => defect.introducing_prs.some((pr) => !noCommits.has(pr) && testSet.some((line) => line.number === pr))));
+  const noLeak = leakNoCommits ?? noCommits;
+  const leaks = findLeaks(policy, counted.filter((defect) => defect.introducing_prs.some((pr) => !noLeak.has(pr) && testSet.some((line) => line.number === pr))));
   const without = leaks.length === 0 ? null : withoutRules(policy, leaks.map((leak) => leak.rule));
   const categories = sourceCategories(roles.defects);
 

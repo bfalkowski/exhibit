@@ -108,6 +108,20 @@ function wantedRequirements(line, policies, exhibit) {
   return [...wanted.values()];
 }
 
+// The test-set PRs that a rerun with `policy` would mark `no_commits`: PRs that want a requirement
+// to run, but whose base or head is not in the clone. The command finds them before the rerun, so
+// the leaks that pick the rerun's policies are the same leaks that the report uses after it (spec
+// 9.9). A rerun with more policies marks these PRs too, and maybe more.
+export async function prsWithoutCommits({ cwd, lines, policy, exhibits = new Map(), hasCommit = commitInClone }) {
+  const missing = new Set();
+  for (const line of lines) {
+    const wanted = wantedRequirements(line, [policy], exhibits.get(line.number) ?? null);
+    if (!wanted.some((item) => CHEAP.includes(item.type) || item.type === 'mutation')) continue;
+    if (!(await hasCommit(cwd, line.base_sha)) || !(await hasCommit(cwd, line.head_sha))) missing.add(line.number);
+  }
+  return missing;
+}
+
 // Runs exhibit check's buildExhibit for the PR with each policy. A requirement that is not wanted
 // in this pass, or that ran already, is not run: it gets the cached result, or `skipped`. So each
 // requirement runs once, and the tests run once for all the requirements that share them.

@@ -10,7 +10,7 @@ import { checkLabelLine, HISTORY, LABELS, parseLines } from '../labels.js';
 import { readPolicy } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS } from '../probe.js';
 import { BACKTEST_REPORT } from '../report.js';
-import { RERUN_DIR, rerun } from '../rerun.js';
+import { prsWithoutCommits, RERUN_DIR, rerun } from '../rerun.js';
 import { readStoredExhibits } from '../storage.js';
 import { ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
@@ -46,11 +46,15 @@ export async function backtestCommand(argv, { cwd, env = process.env, stdout, st
   let rerunInfo = null;
   if (options.rerun) {
     const testSet = testSetOf(lines, options.from);
-    const policies = before.leaks.length === 0 ? [policy] : [policy, withoutRules(policy, before.leaks.map((leak) => leak.rule))];
+    // A defect on a PR that cannot run again makes no leak (spec 9.9). Find those PRs first, so the
+    // rerun runs the policy without the same leaking rules that the report uses after it.
+    const leakNoCommits = await prsWithoutCommits({ cwd, lines: testSet, policy, exhibits: stored.exhibits });
+    const { leaks } = backtest({ lines, labels, policy, exhibits: stored.exhibits, from: options.from, leakNoCommits });
+    const policies = leaks.length === 0 ? [policy] : [policy, withoutRules(policy, leaks.map((leak) => leak.rule))];
     const started = clock();
     const reruns = await rerunWithStop({ cwd, env, lines: testSet, policies, exhibits: stored.exhibits, budgetSeconds: options.budgetMinutes * 60, clock, stderr });
     rerunInfo = { budget_minutes: options.budgetMinutes, seconds: Math.round((clock() - started) / 1000), logs: RERUN_DIR };
-    result = { ...backtest({ lines, labels, policy, exhibits: stored.exhibits, from: options.from, reruns }), counts_before_rerun: before.counts, rerun: rerunInfo };
+    result = { ...backtest({ lines, labels, policy, exhibits: stored.exhibits, from: options.from, reruns, leakNoCommits }), counts_before_rerun: before.counts, rerun: rerunInfo };
   }
   const repo = repoOf(lines);
   const report = buildBacktestReport(result, { repo, fromText: options.fromText });
