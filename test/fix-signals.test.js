@@ -64,7 +64,7 @@ test('title_after_key: skips only a key of letters, a hyphen and digits', () => 
 
 test('title_after_key: skips a bare ticket number with a colon after it, as in "192: Fix the crash"', () => {
   const signals = ['title_after_key:fix'];
-  for (const title of ['192: Fix the crash', '79 : fix the parser', '192: T-170: Fix', 'T-170, 192: fix']) {
+  for (const title of ['192: Fix the crash', '192:fix the crash', '79 : fix the parser', '192: T-170: Fix', 'T-170, 192: fix']) {
     assert.deepEqual(classifyFix(pr({ title }), signals), { fix: true, fix_signal: 'title_after_key:fix' }, title);
   }
   for (const title of ['192: Add prefix fixer', '79 Fix the crash', '79, Fix the crash', '79. Fix the crash', '79-Fix the crash', '1.2: Fix', '[79] Fix the crash']) {
