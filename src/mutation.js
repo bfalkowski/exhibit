@@ -131,7 +131,10 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker, run
 // When no test file reaches the changed files, it gives Stryker every test file.
 async function strykerRun({ root, settings, budgetSeconds, outDir, env, mutated, files, runStryker }) {
   const testGlobs = settings.mutation_test_files;
-  const allTests = (await gitLines(root, ['ls-files', '-z'])).filter((path) => testGlobs.some((glob) => matchesGlob(path, glob))).sort();
+  // Only the JavaScript and TypeScript files that the globs match are Stryker's test files. The
+  // globs can also match a Python file, such as a conftest.py, to keep it out of mutation, and
+  // node cannot run that.
+  const allTests = (await gitLines(root, ['ls-files', '-z'])).filter((path) => STRYKER_FILE.test(path) && testGlobs.some((glob) => matchesGlob(path, glob))).sort();
   if (allTests.length === 0) {
     return fixed('missing', { reason: 'No file in the head matches settings.mutation_test_files.', mutated },
       `No file in the head commit matches settings.mutation_test_files (${testGlobs.join(', ')}), so no test can kill a mutant. Fix the globs in evidence.yml, or add tests.`);

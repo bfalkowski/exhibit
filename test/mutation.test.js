@@ -417,6 +417,20 @@ test('the collector does not run Stryker when nothing can be mutated, or the pol
   assert.match(missing.how_to_fix, /mutation_test_files/);
 });
 
+test('Stryker gets only the matched test files that it can run, so a Python file in mutation_test_files does not reach it', async (t) => {
+  // No test imports src/twice.js, so Stryker gets every matched test file. py/conftest.py matches
+  // the globs, as the mutmut adapter's left-out gap advises, but node cannot run it.
+  const context = collectorRepo(t, { 'src/twice.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST, 'py/conftest.py': 'import os\n' }, { mutation_test_files: ['test/*.test.js', 'py/conftest.py'] });
+  let asked;
+  const runStryker = async (options) => {
+    asked = options;
+    return { mutants: [], complete: true, timedOut: false, code: 0 };
+  };
+  const result = await mutationCollector({ runStryker })({ params: { min: 0.5 } }, context);
+  assert.deepEqual(asked.testFiles, ['test/inside.test.js']);
+  assert.deepEqual(result.details.test_files, ['test/inside.test.js']);
+});
+
 test('a failing mutation_setup gives error and its log', async (t) => {
   const context = collectorRepo(t, { 'src/inside.js': NEW_CODE }, { mutation_test_files: ['test/*.test.js'], mutation_setup: 'echo no network; exit 3' });
   const result = await mutationCollector({ runStryker: async () => assert.fail('Stryker should not run') })({ params: { min: 0.5 } }, context);
