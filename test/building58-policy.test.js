@@ -22,11 +22,11 @@ const FILES = {
   'relay/test/hang.test.js': 'import test from "node:test";\nimport { writeFileSync } from "node:fs";\ntest("starts a timer", () => { writeFileSync("hang.pid", String(process.pid)); setInterval(() => {}, 1000); });\n'
 };
 
-function runCommand(seconds) {
+function runCommand(seconds, files = FILES) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'exhibit-b58-')));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'b58', version: '1.0.0', type: 'module' }));
   writeFileSync(join(dir, 'package-lock.json'), JSON.stringify({ name: 'b58', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'b58', version: '1.0.0' } } }));
-  for (const [path, text] of Object.entries(FILES)) {
+  for (const [path, text] of Object.entries(files)) {
     mkdirSync(join(dir, path, '..'), { recursive: true });
     writeFileSync(join(dir, path), text);
   }
@@ -61,7 +61,18 @@ test('building58: a file that never ends fails after its time limit, and the oth
   }
 });
 
-test('building58: the time limit for each file is 600 seconds, as in run.js, unless TEST_FILE_SECONDS sets it', async () => {
-  const policy = await readPolicy(join(root, 'examples', 'building58'));
-  assert.match(policy.settings.test_command, /\$\{TEST_FILE_SECONDS:-600\}/);
-});
+// run.js reads the limit with Math.max(1, Number(value) || 600), so a value that is not a number,
+// or 0, gives 600. Here the files end at once, so with 600 they pass, and with a broken limit of
+// NaN or 0 seconds each file would fail at once.
+for (const value of ['abc', '0']) {
+  test(`building58: TEST_FILE_SECONDS=${value} gives the limit of 600 seconds, as in run.js`, async () => {
+    const files = { 'relay/test/pass.test.js': FILES['relay/test/pass.test.js'] };
+    const { dir, result, junit } = await runCommand(value, files);
+    try {
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(parseJUnit(junit).map(({ name, status }) => `${name}: ${status}`), ['adds: passed']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
