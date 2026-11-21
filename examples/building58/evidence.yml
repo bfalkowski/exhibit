@@ -19,15 +19,8 @@ settings:
     { echo '<?xml version="1.0" encoding="utf-8"?>'; echo '<testsuites>'; sed -e '/^<?xml/d' -e '/^<\/*testsuites>$/d' .exhibit/junit/*.xml; echo '</testsuites>'; } > .exhibit/junit.xml;
     exit $code; }
   test_results: .exhibit/junit.xml
-  # One run of the test command takes about 8 minutes. A test file that hangs would hold the check
-  # until the job's time limit, so each run gets 15 minutes. A hang in a phase A check run held a
-  # run for 40 minutes (docs/field/phase-a-labels.md in Exhibit).
-  test_timeout_seconds: 900
   # Titles start with a ticket key, such as "T-401: ...", so title_after_key skips it (spec 9.1).
   fix_signals: [label:bug, title_after_key:fix, branch:fix/]
-  # A PR that adds a file here is a feature (spec 9.1). PRs here have no labels, so this is how
-  # Exhibit sees one. The needs-you kind asks a feature for a test that fails before.
-  source_paths: ["relay/**", "office/**", "shared/**"]
   # The load probe of relay-tests runs the changed test files three times at once, so it gets 20
   # minutes, not the default 10.
   probe_timeout_seconds: 1200
@@ -55,7 +48,10 @@ kinds:
   # kept-alive connection, and passed alone but failed on a busy machine. The probe runs each test
   # file the PR added or changed three times at once, with no shared test slots, so the machine is
   # busy. It runs nothing when no such file changed. origin/main must be in the clone, as it is
-  # with the workflow's fetch-depth 0.
+  # with the workflow's fetch-depth 0. set -e makes any step that fails, such as git merge-base
+  # or npm ci, fail the probe, so it never passes without running the tests.
+  # The match is the whole folder, wider than the files the defects' PRs changed, because a
+  # flaky test can come in any new test file.
   relay-tests:
     match: ["relay/test/*.test.js"]
     risk: medium
@@ -63,11 +59,12 @@ kinds:
       - probe:
           name: load
           run: >-
-            base="$(git merge-base HEAD origin/main)" &&
-            files="$(git diff --name-only --diff-filter=AM "$base" HEAD | grep -E '^relay/test/[^/]+[.]test[.]js$' || true)" &&
-            if [ -z "$files" ]; then echo "No relay test file was added or changed."; exit 0; fi &&
-            npm ci --ignore-scripts --no-audit --no-fund > /dev/null &&
-            pids="" &&
+            set -e;
+            base="$(git merge-base HEAD origin/main)";
+            files="$(git diff --name-only --diff-filter=AM "$base" HEAD | grep -E '^relay/test/[^/]+[.]test[.]js$' || true)";
+            if [ -z "$files" ]; then echo "No relay test file was added or changed."; exit 0; fi;
+            npm ci --ignore-scripts --no-audit --no-fund > /dev/null;
+            pids="";
             for i in 1 2 3; do TEST_SLOTS=0 node relay/test/run.js $files > "load-$i.log" 2>&1 & pids="$pids $!"; done;
             code=0; for p in $pids; do wait "$p" || code=1; done;
             tail -n 20 load-1.log load-2.log load-3.log; exit $code
@@ -93,14 +90,16 @@ kinds:
 
   # Needs you: 2 labeled defects (category "Stale state"), both from PR 48, which made the Needs
   # you list. Each showed an old hand-over after the state had moved on. A test that fails before
-  # the change would have shown each case. PR 48 added these files, so with source_paths it is a
-  # feature. A change that only moves code here is neither, and needs no failing test.
+  # the change would have shown each case. The requirement has no when, so it applies to every
+  # PR here: PRs here have no labels, and the pinned release v0.1.0 cannot see a feature, so
+  # when: [fix, feature] would not have applied to PR 48. A refactor here will be asked for a
+  # failing test too. The setup note says how to narrow it once a newer release is pinned.
   needs-you:
     match: ["relay/needs-you-plan.js", "relay/needs-you.js", "office/needs-you.js"]
     risk: medium
     needs:
       - tests-before-after
-      - failing-before: { when: [fix, feature] }
+      - failing-before
     source: [D-120, D-053]
 
 # Any other file.

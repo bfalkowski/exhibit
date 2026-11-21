@@ -47,11 +47,11 @@ Building58's branch protection covers `main` only, so the publish job can push `
 | `docs` | `docs/` and every Markdown file | low | The manual's checks, the same ones CI runs for a docs-only change. |
 | `relay-tests` | `relay/test/*.test.js` | medium | The `load` probe: each test file the PR added or changed runs three times at once. |
 | `test-helpers` | `relay/test/helpers.js` | medium | The `room-settings` probe: the tests that start relays run with a room's settings set. |
-| `needs-you` | `relay/needs-you-plan.js`, `relay/needs-you.js`, `office/needs-you.js` | medium | The tests on the base and the head. For a fix or a feature, a test that fails before the change. |
+| `needs-you` | `relay/needs-you-plan.js`, `relay/needs-you.js`, `office/needs-you.js` | medium | The tests on the base and the head, and a test that fails before the change, for every PR. |
 
 The last three come from Building58's own escaped defects. The person labeled them in phase A of the field test, and [docs/field/phase-a-labels.md](../../docs/field/phase-a-labels.md) gives each rule with the defects behind it. Each rule names those defects in `source`.
 
-Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`. A PR is a feature when it has the label `feature`, or adds a file under `relay/`, `office/` or `shared/` (`source_paths`). Building58 PRs have no labels, so the second way is the one that works.
+Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`.
 
 The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run.js`) does: six files at a time, and each file with a new empty HOME of its own, so no test reads a room's files under `~/.office-world` or another file's. Exhibit reads the results from a JUnit file, and `run.js` writes none, so the command runs each file with `node --test` and its JUnit reporter, and then joins the files into `.exhibit/junit.xml`. It differs from `npm test` in three ways:
 
@@ -61,7 +61,14 @@ The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run
 
 A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 7.5 minutes on a Mac. The same files, one at a time with one shared HOME, took 39 minutes there, and more than 72 minutes for two runs on a GitHub runner, so this policy does not do that. A room ticket can make it simpler later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
 
-Each run of the test command has a time limit of 15 minutes (`test_timeout_seconds: 900`). A full run takes about 8 minutes. In a phase A check run, one test file hung for 40 minutes on an older commit, and without a limit the check would have waited until the job's own time limit.
+The `load` probe starts with `set -e`, so a step that fails, such as `git merge-base` with no `origin/main`, or `npm ci`, fails the probe. It never passes without running the tests. The probe is not the same each time: on one commit it passed in one run and failed in the next, when two test files timed out under the load. That is what it looks for, but it can also ask for a fix on a PR that only touched a test file that was flaky before.
+
+Two settings wait for a newer release. `v0.1.0` refuses both, so the policy leaves them out:
+
+- `test_timeout_seconds: 900`. A full test run takes about 8 minutes. In a phase A check run, `relay/test/lead-check.test.js` hung for 40 minutes on an older commit. Without a limit, a hang holds the check job until its own limit of 60 minutes.
+- `source_paths: ["relay/**", "office/**", "shared/**"]`, with `failing-before: { when: [fix, feature] }` in `needs-you`. Building58 PRs have no labels, so `v0.1.0` never sees a feature. So `needs-you` asks every PR for a failing test, a refactor too. With `source_paths`, a PR that adds a file there is a feature, as PR 48 was, and a PR that only changes the files there needs a failing test only when it is a fix.
+
+Once the setup note pins a release that has Exhibit tickets 162 and 178, add both in a PR of their own.
 
 The `load` probe finds the changed test files with `git merge-base HEAD origin/main`, so `origin/main` must be in the clone. The workflow's `fetch-depth: 0` gives it. It runs three copies of `relay/test/run.js` at once with `TEST_SLOTS=0`, so the copies do not wait on each other's slots, and the machine is busy. So the policy sets `probe_timeout_seconds` to 1200. The `room-settings` probe runs `node --test` and not `run.js`, because `run.js` takes the room's settings away.
 

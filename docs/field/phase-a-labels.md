@@ -65,7 +65,7 @@ The rule for keeping a rule comes from ticket 199 and spec section 9.9: a rule n
 
 **`relay-tests`: the `load` probe.** Category "flaky test". Source: D-144, D-139, D-136, D-131, D-088.
 - Each was a test that raced a timer or a kept-alive connection. It passed alone and failed on a busy machine. Each introducing PR (109, 129, 88, and the 7 of D-088) changed a file in `relay/test/*.test.js`.
-- Match: `relay/test/*.test.js`.
+- Match: `relay/test/*.test.js`. This is the one exception to the rule above, chosen by the person. The introducing PRs changed about 35 of the folder's 137 test files, but a flaky test can come in any new test file, and a list of the old files would never probe it.
 - Needs: a probe that runs each test file the PR added or changed three times at once, with no shared test slots.
 - Left out: D-066, a deferral. And D-052: it is a browser test in `relay/test/browser/`, which the probe does not run.
 
@@ -77,7 +77,7 @@ The rule for keeping a rule comes from ticket 199 and spec section 9.9: a rule n
 **`needs-you`: a test that fails before the change.** Category "Stale state". Source: D-120, D-053.
 - Both showed an old hand-over after the state had moved on, and both came from PR 48, which made the Needs you list in `relay/needs-you-plan.js`, `relay/needs-you.js` and `office/needs-you.js`.
 - Match: those three files.
-- Needs: the tests on the base and the head, and a test that fails before the change, for a fix or a feature (`failing-before: { when: [fix, feature] }`). Building58 PRs have no labels, so the policy sets `source_paths` to `relay/**`, `office/**` and `shared/**`: a PR that adds a file there is a feature (spec 9.1). PR 48 added `relay/needs-you-plan.js`, `relay/needs-you.js` and `office/needs-you.js`, so it was a feature. A PR that only changes these files is neither, and needs no failing test.
+- Needs: the tests on the base and the head, and a test that fails before the change, for every PR (`failing-before` with no `when`). PR 48 added these files, so it was a feature. But Building58 PRs have no labels, and the pinned release `v0.1.0` has no `source_paths` to see a feature (spec 9.1), so `when: [fix, feature]` would not have applied to PR 48. The cost is that a refactor here is asked for a failing test too. Once a newer release is pinned, the setup note says how to narrow it with `source_paths`.
 - Left out: D-060 (from PR 44, in `relay/autopilot.js`) and D-099 (from PR 12, in `relay/terminal.js`). Each is the only stale-state defect from its file.
 
 ### Categories with no rule
@@ -104,7 +104,9 @@ Each probe ran by hand on real Building58 commits, from a clean worktree with `n
 
 The run before the fix took 11 minutes, because many relays timed out. Without the settings, the same tests pass, so the settings are the cause. The commit before the fix has no `room-env.test.js`, so those runs used the other three files. The first run was made before `OFFICE_HOOK_URL` and `OFFICE_TICKET_TOKEN` joined the probe, because D-135's fix PR names them as the settings that leaked. The probe with both ran in `exhibit check` below.
 
-**`exhibit check` on PR 135 with the policy.** `exhibit check` reads the policy from the base commit (spec 8.1), so the run used two local commits in the clone, never pushed: PR 135's merge base (`d64a92a`) with the draft added as `evidence-257.yml`, and PR 135's head with the same file on top of it. The diff between them is PR 135's 9 files and nothing else.
+**The policy reads in the pinned release.** The setup note pins Exhibit `v0.1.0`. Its `readPolicy`, from a worktree of the tag, reads the policy with no error and finds the kinds `code`, `docs`, `relay-tests`, `test-helpers` and `needs-you`. An earlier draft of this PR also set `test_timeout_seconds` and `source_paths`. `v0.1.0` refused both, so they wait for a newer release (setup note).
+
+**`exhibit check` on PR 135 with the policy.** This run used Exhibit from `main` and the earlier draft, which also had `test_timeout_seconds: 900` and `source_paths`, and a `load` probe without `set -e`. `exhibit check` reads the policy from the base commit (spec 8.1), so the run used two local commits in the clone, never pushed: PR 135's merge base (`d64a92a`) with the draft added as `evidence-257.yml`, and PR 135's head with the same file on top of it. The diff between them is PR 135's 9 files and nothing else.
 
 ```
 exhibit check --base 1fe8769 --head 2f15aac --policy evidence-257.yml
@@ -113,14 +115,20 @@ Verdict: needs_person. 1 gap, listed with how to fix it in .exhibit/summary.md.
 
 It ran from 15:09:06Z to 15:42:26Z on 2026-11-21, on a Mac.
 
-- It read the policy with no error. The kinds were `code`, `relay-tests` and `test-helpers`. It was a feature, since the PR adds `relay/test/room-env.test.js` under `source_paths`.
+- It read the policy with no error. The kinds were `code`, `relay-tests` and `test-helpers`. It was a feature, since the PR adds `relay/test/room-env.test.js` under `source_paths`. Without `source_paths` it would not be one, and nothing in this run depends on that.
 - `probe load`: met. It ran the 6 test files that the PR added or changed, three copies at once. Each copy passed (55 tests).
 - `probe room-settings`: met. 75 tests, none failed.
 - `tests-before-after`: failed, for two reasons:
   - The base run passed the 900-second limit, and Exhibit stopped it. The test command sends each file's output to `/dev/null`, so the log does not name the file. See the hang below.
   - Two tests failed on the head, also when run again. Alone, at PR 135's head, both pass with a clean env. `lead-refresh.test.js` fails with this session's room settings (`OFFICE_*`, `RELAY_*`, `CLAUDE_CODE_*`), which the policy's test command does not take away (setup note). `review-desk.test.js` passes alone with those settings too, so it failed from the load of six files at once. The first is a test environment leak and the second a flaky test, the two categories that the probes are for. On CI there are no room settings.
 
-**A hang in the first check run.** The first `exhibit check` on PR 135 ran Exhibit from before ticket 178, which has no time limit for the test command, and used `f1da5ba` as the base. On the base, `relay/test/lead-check.test.js` hung at 0% CPU from about 11:08Z, past its 120-second `--test-timeout`, while every other file had ended. The Lead saw it at 11:48Z, and the run was stopped by hand at 11:48:57Z. So the policy now sets `test_timeout_seconds: 900`, and in the second run the limit stopped the base run after 15 minutes.
+**A hang in the first check run.** The first `exhibit check` on PR 135 ran Exhibit from before ticket 178, which has no time limit for the test command, and used `f1da5ba` as the base. On the base, `relay/test/lead-check.test.js` hung at 0% CPU from about 11:08Z, past its 120-second `--test-timeout`, while every other file had ended. The Lead saw it at 11:48Z, and the run was stopped by hand at 11:48:57Z. In the second run, `test_timeout_seconds: 900` stopped the base run after 15 minutes. The policy can set that limit only once a newer release is pinned.
+
+**The `load` probe after the review of this PR.** The review found that the probe passed when a step before the tests failed: `code` stayed 0 and no test ran. It now starts with `set -e`, and its steps are separate commands, since `sh` ignores a failure inside an `&&` list. Runs of the committed command, on 2026-11-21:
+
+- In a git repo with no `origin/main`: `fatal: Not a valid object name origin/main`, exit 128.
+- At PR 135's head (the commit from the check run), with a `package.json` that `npm ci` cannot install: exit 1, and no test ran.
+- At the same commit, as it is: exit 1 after 4 minutes 43 seconds. Each copy ran the 6 changed files. `review-link.test.js` failed in two copies ("the person is talking to it, so it stays") and `games.test.js` in one ("Timed out waiting for the game to get abort"). In the check run, the same probe on the same commit passed. So the probe is not the same each time. It finds tests that fail under load, which is what it is for. But it can ask a PR to fix a test that it only touched.
 
 ## What comes next
 
