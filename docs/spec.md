@@ -245,6 +245,7 @@ What each version fills:
   - When a comment gives a verdict only in quoted lines, `exhibit history` does not count it, and prints a warning on stderr that names the PR, the comment's author and time, and the verdict. Most such comments are replies, but the warning lets a person find a review that quoted its own verdict.
   - The first verdict in the comment counts. `fix` gives the state `CHANGES_REQUESTED`, so it is a round. `merge` gives the state `APPROVED`.
   - A comment that starts with an `<!-- office:` marker, such as `<!-- office:dev -->`, is a room note or a Dev's reply, not a review, even when it repeats the verdict.
+  - Exhibit's own summary comment (section 9.12) starts with `<!-- exhibit:pr-summary -->`, so it is not a review either. Its `Verdict: **needs_person**` line gives no verdict, and a skip reason from the PR body, such as `verdict: merge`, does not count.
   - A comment with no verdict is not a review, and is not in `reviews`.
   - The comment reviews and the GitHub reviews are merged into one list by time: the forge gives each comment and each review an `at`. At the same time, the review comes first. A pending review has no `at`, so it comes before every comment that is still left, even an older one.
 - **Head commit, forge and web page (ticket 78):** every line has `head_sha`, `forge` and `url`, and the schema requires all three.

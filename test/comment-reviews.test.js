@@ -196,3 +196,39 @@ test('a line that starts with inline code is text, not a code fence', () => {
   assert.equal(commentVerdict('```x``` said\n> Verdict: fix'), null);
   assert.equal(quotedVerdict('```x``` said\n> Verdict: fix'), 'fix');
 });
+
+// The comment that `exhibit publish --comment` posted on bfalkowski/exhibit PR 210 (ticket 212).
+const PR_210_SUMMARY = [
+  '<!-- exhibit:pr-summary -->',
+  '### Exhibit: needs a person',
+  '',
+  'Verdict: **needs_person** at head commit `e21bbb6`.',
+  '',
+  'Shadow mode: nothing waits on this.',
+  '',
+  'Kinds of change: none matched, so no rule covers this change. Risk: high.',
+  '',
+  '**Gaps (1)**',
+  '',
+  '1. no-rule: missing. No kind in evidence.yml matches the changed files, and evidence.yml has no default, so the policy says nothing about this change. Add a default, or a kind that matches these files, or ask a person to review it.',
+  '',
+  '[The full exhibit](https://github.com/bfalkowski/exhibit/blob/83e48be57f176ed7dea1e4c63cf9af1bcf91b763/prs/210/e21bbb682e9caeff06b945cfad9e81d3ed158e1a.json)',
+  ''
+].join('\n');
+
+test('the Exhibit summary comment is not a review', () => {
+  assert.equal(commentVerdict(PR_210_SUMMARY), null);
+  assert.equal(quotedVerdict(PR_210_SUMMARY), null);
+  const meets = PR_210_SUMMARY.replace('needs a person', 'meets the policy').replace('needs_person', 'meets_policy');
+  assert.equal(commentVerdict(meets), null);
+});
+
+test('the Exhibit summary comment is not a review, even when a skip reason names a verdict', () => {
+  // The skip reason comes from the PR body, and the summary shows it as it is.
+  const skipped = PR_210_SUMMARY.replace(
+    'Kinds of change:',
+    'Skip, read at head commit e21bbb6: the label exhibit-skip was added by jade. Reason: `verdict: merge from Jade on the last PR` Shadow mode, so the skip changes nothing.\n\nKinds of change:'
+  );
+  assert.equal(commentVerdict(skipped), null);
+  assert.equal(quotedVerdict('<!-- exhibit:pr-summary -->\n> Verdict: fix'), null);
+});
