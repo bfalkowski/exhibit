@@ -435,26 +435,48 @@ test('a deleted line that starts with "-- " is a line, not a file header', () =>
   assert.deepEqual(counted(countedLines(text)), [['q.sql', [2, 7]], ['b.js', [1]]]);
 });
 
-test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', () => {
-  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', 'owner/repo'), [12, 7, 30]);
-  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4', 'owner/repo'), [4]);
-  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', 'owner/repo'), []);
-  assert.deepEqual(bugReportNumbers(null, 'owner/repo'), []);
+// A forge for bugReportNumbers: `repo` is its name, and `oldNames` are names that GitHub
+// redirects to it, as after a rename or a transfer. `asked` lists each name it was asked about.
+function forgeOf(repo, oldNames = []) {
+  const asked = [];
+  return {
+    repo,
+    asked,
+    sameRepo: async (name) => {
+      asked.push(name);
+      return oldNames.includes(name.toLowerCase());
+    }
+  };
+}
+
+test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', async () => {
+  assert.deepEqual(await bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', forgeOf('owner/repo')), [12, 7, 30]);
+  assert.deepEqual(await bugReportNumbers('FIX #4 and Close #4', forgeOf('owner/repo')), [4]);
+  assert.deepEqual(await bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', forgeOf('owner/repo')), []);
+  assert.deepEqual(await bugReportNumbers(null, forgeOf('owner/repo')), []);
 });
 
-test('bugReportNumbers reads a full issue URL when it names this repo', () => {
+test('bugReportNumbers reads a full issue URL when it names this repo', async () => {
   const body = 'Fixes https://github.com/Owner/Repo/issues/12\nCloses https://github.com/owner/other/issues/9\nresolves: https://github.com/owner/repo/issues/12 and fixes https://github.com/owner/repo/pull/3';
-  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12]);
-  assert.deepEqual(bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', 'owner/repo'), [4, 5]);
+  assert.deepEqual(await bugReportNumbers(body, forgeOf('owner/repo')), [12]);
+  assert.deepEqual(await bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', forgeOf('owner/repo')), [4, 5]);
 });
 
-test('bugReportNumbers reads owner/name#12 when it names this repo', () => {
+test('bugReportNumbers reads owner/name#12 when it names this repo', async () => {
   const body = 'Fixes Owner/Repo#12\nCloses owner/other#9 and fixes other/repo#8\nresolves: owner/repo#12, closes owner/repo#5.';
-  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12, 5]);
+  assert.deepEqual(await bugReportNumbers(body, forgeOf('owner/repo')), [12, 5]);
   // A repo name with dots and dashes, and a mix of all three forms.
-  assert.deepEqual(bugReportNumbers('fixes my-org/my.repo#3, closes #4, fixes https://github.com/my-org/my.repo/issues/6', 'my-org/my.repo'), [3, 4, 6]);
+  assert.deepEqual(await bugReportNumbers('fixes my-org/my.repo#3, closes #4, fixes https://github.com/my-org/my.repo/issues/6', forgeOf('my-org/my.repo')), [3, 4, 6]);
   // The words must close the issue: a bare mention does not count.
-  assert.deepEqual(bugReportNumbers('See owner/repo#7. Prefixes owner/repo#2', 'owner/repo'), []);
+  assert.deepEqual(await bugReportNumbers('See owner/repo#7. Prefixes owner/repo#2', forgeOf('owner/repo')), []);
+});
+
+test('bugReportNumbers reads a closing word that names this repo by an old name, after a rename or a transfer', async () => {
+  const forge = forgeOf('newowner/repo', ['oldowner/repo']);
+  const body = 'Fixes oldowner/repo#12\nCloses https://github.com/OldOwner/Repo/issues/13\nfixes other/repo#9, fixes #14';
+  assert.deepEqual(await bugReportNumbers(body, forge), [12, 13, 14]);
+  // The current name and a bare number need no question.
+  assert.deepEqual(forge.asked, ['oldowner/repo', 'OldOwner/Repo', 'other/repo']);
 });
 
 test('newer than the bug report: a line whose commit came after the report is dropped', () => {

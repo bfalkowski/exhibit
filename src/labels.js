@@ -15,6 +15,22 @@ export const LABELS = '.exhibit/labels.jsonl';
 
 const schema = JSON.parse(readFileSync(new URL('../schema/labels-line.schema.json', import.meta.url), 'utf8'));
 
+// The replies that an answer source gives to skip a defect or to quit. The keyboard in
+// src/commands/label.js gives them, and labelDefects reads them, so both use these names.
+export const SKIP = 'skip';
+export const QUIT = 'quit';
+
+// The most characters that each typed answer can have. They come from the schema's patterns,
+// such as ^\S[^\r\n]{0,199}$ for code, so the keyboard can ask again before the schema check.
+export const ANSWER_LIMITS = Object.fromEntries(['code', 'category', 'would_have_caught'].map((field) => [field, longest(schema.properties[field].pattern)]));
+
+// A pattern that ends in {0,n}$ allows one first character and then at most n more: n + 1 in all.
+function longest(pattern) {
+  const match = /\{0,(\d+)\}\$$/.exec(pattern);
+  if (match === null) throw new Error(`the labels schema pattern ${pattern} has no length limit`);
+  return Number(match[1]) + 1;
+}
+
 // The id of the escaped defect that fix PR `fixPr` fixed, such as D-004 for PR 4. A PR number
 // never changes, so the id stays the same when exhibit history runs again, and policy rules can
 // cite it in `source` (spec 8.1).
@@ -43,7 +59,7 @@ export function checkLabelLine(line) {
  * keyboard, or a script in a test. `defect` has `id`, `fix_pr`, `introducing_prs` and `links`,
  * which holds `pr` and `confidence` for each SZZ link, and `found_by: 'revert'` for a link that
  * SZZ found from a revert with no blame. `text` shows the defect with its SZZ evidence. `categories` are the categories used so far. It returns
- * { code, category, would_have_caught, rejected_prs }, or 'skip', or 'quit'. `rejected_prs` names
+ * { code, category, would_have_caught, rejected_prs }, or SKIP, or QUIT. `rejected_prs` names
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
  *
@@ -62,6 +78,7 @@ export function checkLabelLine(line) {
  */
 export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
   const history = await readHistory(cwd);
+  // endsWithBreak: the file ends in a line break.
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
   const categories = [...new Set(labels.map((label) => label.category))];
@@ -71,6 +88,7 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   let shown = 0;
   let labeled = 0;
   let skipped = 0;
+  // needsBreak: add a line break before the next line, so it does not join the file's last line.
   let needsBreak = !endsWithBreak;
   const written = [];
   for (const defect of open) {
@@ -78,8 +96,8 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
     const { drafted, draftError } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
     const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError });
-    if (reply === 'quit') break;
-    if (reply === 'skip') {
+    if (reply === QUIT) break;
+    if (reply === SKIP) {
       skipped += 1;
       continue;
     }

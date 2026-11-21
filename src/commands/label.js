@@ -4,12 +4,19 @@ import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { DEFAULT_MODEL, createDrafter } from '../claude.js';
 import { draftAgreementText } from '../draft-agreement.js';
-import { LABELS, labelDefects } from '../labels.js';
+import { ANSWER_LIMITS, LABELS, QUIT, SKIP, labelDefects } from '../labels.js';
 import { ToolError } from '../tool-error.js';
 
 const USAGE = 'Usage: exhibit label [--json] [--claude]';
 // Its presence means the note about what --claude sends was shown in this repo.
 const NOTICE_SHOWN = '.exhibit/claude-notice-shown';
+// What each too-long answer is called in the message that asks again.
+const ANSWER_NAMES = { code: 'A code', category: 'A category', would_have_caught: 'The evidence' };
+
+// `word` for 1, and `words` for any other count: plural(2, 'defect') is 'defects'.
+function plural(n, word, words = `${word}s`) {
+  return n === 1 ? word : words;
+}
 
 // `exhibit label [--json] [--claude]`
 // Shows each escaped defect in .exhibit/history.jsonl that has no label yet, with its SZZ
@@ -44,8 +51,8 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
   }
   const left = summary.open === 0
     ? 'Every escaped defect has a code now.'
-    : `${summary.open} still ${summary.open === 1 ? 'has' : 'have'} no code. Run exhibit label again to label ${summary.open === 1 ? 'it' : 'them'}.`;
-  stdout.write(`\nLabeled ${summary.labeled} escaped ${summary.labeled === 1 ? 'defect' : 'defects'}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+    : `${summary.open} still ${plural(summary.open, 'has', 'have')} no code. Run exhibit label again to label ${plural(summary.open, 'it', 'them')}.`;
+  stdout.write(`\nLabeled ${summary.labeled} escaped ${plural(summary.labeled, 'defect')}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
 }
 
 // With --claude, how often the person kept Claude's draft, in this run and in the whole file.
@@ -78,8 +85,10 @@ function createKeyboard({ input, output }) {
   let introduced = false;
 
   // Returns the trimmed answer, or null when the person quits: q, or the end of the input.
-  // An empty answer is asked again, unless `emptyOk` is set.
-  async function question(text, { emptyOk = false } = {}) {
+  // An empty answer is asked again, unless `emptyOk` is set. With `field`, an answer longer than
+  // that field's limit in the labels schema is asked again too, so the person types only that one.
+  // With `check`, an answer that `check` gives a message for is asked again with that message.
+  async function question(text, { emptyOk = false, field, check } = {}) {
     for (;;) {
       output.write(`${text}\n> `);
       const { value, done } = await lines.next();
@@ -89,14 +98,19 @@ function createKeyboard({ input, output }) {
       }
       const answer = value.trim();
       if (answer.toLowerCase() === 'q') return null;
-      if (answer !== '' || emptyOk) return answer;
-      output.write('Please type an answer.\n');
+      if (answer === '' && !emptyOk) {
+        output.write('Please type an answer.\n');
+        continue;
+      }
+      const problem = (field && tooLong(answer, field)) || (check && answer !== '' && check(answer));
+      if (!problem) return answer;
+      output.write(`${problem}\n`);
     }
   }
 
   async function ask(defect, { categories, text, position, open, draft, draftError }) {
     if (!introduced) {
-      output.write(`${open} escaped ${open === 1 ? 'defect has' : 'defects have'} no code yet. For each one, keep or reject each SZZ link, then type what went wrong, its category, and the evidence that would have caught it. ` +
+      output.write(`${open} escaped ${plural(open, 'defect has', 'defects have')} no code yet. For each one, keep or reject each SZZ link, then type what went wrong, its category, and the evidence that would have caught it. ` +
         `Each label is saved as soon as you give it. Type s to skip a defect for now, or q at any question to quit.\n`);
       introduced = true;
     }
@@ -105,64 +119,66 @@ function createKeyboard({ input, output }) {
     const rejected = [];
     for (const link of defect.links) {
       const choice = await keepOrReject(link);
-      if (choice === null) return 'quit';
-      if (choice === 's') return 'skip';
+      if (choice === null) return QUIT;
+      if (choice === 's') return SKIP;
       if (choice === 'r') rejected.push(link.pr);
     }
     if (rejected.length > 0 && rejected.length === defect.links.length) {
       output.write('You rejected every link, so this bug has no known introducing PR. It is still a real bug: give it a code, or s to skip it.\n');
     }
     const answer = draft ? await fromDraft(draft, categories) : await byHand(categories);
-    if (answer === 'quit' || answer === 'skip') return answer;
-    const caught = await question('Would have caught it: the evidence that would have caught this bug.');
-    if (caught === null) return 'quit';
+    if (answer === QUIT || answer === SKIP) return answer;
+    const caught = await question('Would have caught it: the evidence that would have caught this bug.', { field: 'would_have_caught' });
+    if (caught === null) return QUIT;
     output.write(`Saved ${defect.id}.\n`);
     return { ...answer, would_have_caught: caught, rejected_prs: rejected };
   }
 
-  // Asks for the code and the category with no draft. Returns { code, category }, 'skip' or 'quit'.
+  // Asks for the code and the category with no draft. Returns { code, category }, SKIP or QUIT.
   async function byHand(categories) {
-    const code = await question('Code: what went wrong, in a few words. Or s to skip.');
-    if (code === null) return 'quit';
-    if (code.toLowerCase() === 's') return 'skip';
+    const code = await question('Code: what went wrong, in a few words. Or s to skip.', { field: 'code' });
+    if (code === null) return QUIT;
+    if (code.toLowerCase() === 's') return SKIP;
     const category = await pickCategory(categories, null);
-    if (category === null) return 'quit';
+    if (category === null) return QUIT;
     return { code, category };
   }
 
   // Shows Claude's draft, marked as a draft, and asks what to do with it. Returns
-  // { code, category, draft }, 'skip' or 'quit'.
+  // { code, category, draft }, SKIP or QUIT.
   async function fromDraft(draft, categories) {
     output.write(`Claude's draft, not saved yet:\n  Code: ${draft.code}\n  Category: ${draft.category}\n`);
     let choice;
     for (;;) {
       const answer = await question('c to confirm the draft, e to edit it, or t to throw it away and type your own. Or s to skip this defect.');
-      if (answer === null) return 'quit';
+      if (answer === null) return QUIT;
       choice = answer.toLowerCase();
       if (['c', 'e', 't', 's'].includes(choice)) break;
       output.write('Please type c, e, t or s.\n');
     }
-    if (choice === 's') return 'skip';
+    if (choice === 's') return SKIP;
     if (choice === 'c') return { code: draft.code, category: draft.category, draft: 'confirmed' };
     if (choice === 't') {
       const answer = await byHand(categories);
       return typeof answer === 'string' ? answer : { ...answer, draft: 'replaced' };
     }
-    const typed = await question(`Code. Press Enter to keep the draft's code, or type a new one.\n  ${draft.code}`, { emptyOk: true });
-    if (typed === null) return 'quit';
+    const typed = await question(`Code. Press Enter to keep the draft's code, or type a new one.\n  ${draft.code}`, { emptyOk: true, field: 'code' });
+    if (typed === null) return QUIT;
     const category = await pickCategory(categories, draft.category);
-    if (category === null) return 'quit';
+    if (category === null) return QUIT;
     return { code: typed === '' ? draft.code : typed, category, draft: 'edited' };
   }
 
   // Asks for the category from the list used so far. With `kept`, an empty answer keeps it.
+  // An answer of only digits picks from the list, and a number that is not in the list is asked
+  // again. So a new category cannot be only digits.
   async function pickCategory(categories, kept) {
     const list = categories.length === 0 ? 'No categories yet, so type a new one.' : `Pick a number, or type a new one:\n${categories.map((name, i) => `  ${i + 1}. ${name}`).join('\n')}`;
     const keep = kept === null ? '' : `\nPress Enter to keep the draft's category: ${kept}`;
-    const picked = await question(`Category. ${list}${keep}`, { emptyOk: kept !== null });
+    const picked = await question(`Category. ${list}${keep}`, { emptyOk: kept !== null, field: 'category', check: (answer) => notInList(answer, categories) });
     if (picked === null) return null;
     if (picked === '') return kept;
-    return /^\d+$/.test(picked) && categories[Number(picked) - 1] !== undefined ? categories[Number(picked) - 1] : picked;
+    return /^\d+$/.test(picked) ? categories[Number(picked) - 1] : picked;
   }
 
   // Returns k to keep the link, r to reject it, s to skip the defect, or null to quit.
@@ -178,6 +194,21 @@ function createKeyboard({ input, output }) {
   }
 
   return { ask, close: () => reader.close() };
+}
+
+// The message for an answer longer than `field` may be in the labels schema, or null. It counts
+// characters as the schema does, so an emoji counts as one.
+function tooLong(answer, field) {
+  const length = [...answer].length;
+  const limit = ANSWER_LIMITS[field];
+  return length > limit ? `That answer has ${length} characters. ${ANSWER_NAMES[field]} can have at most ${limit}. Please type a shorter one.` : null;
+}
+
+// The message for a category answer that is only digits but names no category in the list, or null.
+function notInList(answer, categories) {
+  if (!/^\d+$/.test(answer) || categories[Number(answer) - 1] !== undefined) return null;
+  if (categories.length === 0) return `There are no categories yet, so ${answer} is not one. Type a new category in words.`;
+  return `There is no category ${answer}. Pick a number from 1 to ${categories.length}, or type a new category in words.`;
 }
 
 function parseOptions(argv) {

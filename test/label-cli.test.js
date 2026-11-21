@@ -115,12 +115,27 @@ test('the end of the typed input quits and keeps the labels given so far', (t) =
   assert.deepEqual(readLabels(cwd).map((l) => l.id), ['D-012']);
 });
 
-test('a label that fails the schema exits 2, and the file keeps its earlier lines', (t) => {
+test('a code, category or evidence that is too long is asked again at once, and the other answers are kept', (t) => {
   const cwd = withHistory(t, shopText());
-  const run = label(cwd, [], `k\nk\nfirst\nx\na test\nk\nk\n${'y'.repeat(201)}\nx\na test\n`);
-  assert.equal(run.status, 2);
-  assert.match(run.stderr, /the label for D-007 does not fit the labels schema, so it was not written/);
-  assert.deepEqual(readLabels(cwd).map((l) => l.code), ['first']);
+  const typed = ['k', 'k', 'y'.repeat(201), 'first', 'z'.repeat(61), 'x', 'w'.repeat(501), 'a test', 'q'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /That answer has 201 characters\. A code can have at most 200\. Please type a shorter one\./);
+  assert.match(run.stdout, /That answer has 61 characters\. A category can have at most 60\. Please type a shorter one\./);
+  assert.match(run.stdout, /That answer has 501 characters\. The evidence can have at most 500\. Please type a shorter one\./);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.code, l.category, l.would_have_caught]), [['first', 'x', 'a test']]);
+});
+
+test('a category number that is not in the list is asked again, and never becomes a new category', (t) => {
+  const cwd = withHistory(t, shopText());
+  // D-012: no categories yet, so 2 is asked again. D-007: 99 and 0 are asked again, then 1 picks arithmetic.
+  const typed = ['k', 'k', 'first', '2', 'arithmetic', 'a test', 'k', 'k', 'second', '99', '0', '1', 'a test', 'q'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /There are no categories yet, so 2 is not one\. Type a new category in words\./);
+  assert.match(run.stdout, /There is no category 99\. Pick a number from 1 to 1, or type a new category in words\./);
+  assert.match(run.stdout, /There is no category 0\./);
+  assert.deepEqual(readLabels(cwd).map((l) => l.category), ['arithmetic', 'arithmetic']);
 });
 
 // The fixture repo with a remote, and `history(args)` to run exhibit history in it with replayed
@@ -278,4 +293,12 @@ test('without --claude, label prints no draft numbers and its --json has no draf
   const run = label(withHistory(t, shopText()), ['--json'], 'q\n');
   assert.equal(run.status, 0, run.stderr);
   assert.equal(JSON.parse(run.stdout).drafts, undefined);
+});
+
+test('--claude: an edited code that is too long is asked again', (t) => {
+  const cwd = withHistory(t, shopText());
+  const run = labelWithClaude(cwd, ['k', 'k', 'e', 'y'.repeat(201), 'Shorter code', '', 'a test', 'q'].join('\n') + '\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /A code can have at most 200/);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.code, l.labeled_by]), [['Shorter code', 'claude_draft_edited']]);
 });

@@ -305,13 +305,16 @@ test('SZZ gives szz: null and a warning when the fix merge commit is not in the 
 });
 
 // Runs SZZ on fix PR 6 with a body that links issues, and a GitHub that also answers for them.
-// PR 1 added the line that PR 6 fixes, in a commit written at 2026-01-05T10:00:00Z.
-async function szzWithIssues(t, body, issues) {
+// PR 1 added the line that PR 6 fixes, in a commit written at 2026-01-05T10:00:00Z. `repos`
+// gives GitHub's reply for each repo path, such as an old name that leads to this repo.
+async function szzWithIssues(t, body, issues, repos = {}) {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const pulls = commitPullsFetch(repo, REPO);
   const fetch = async (url, init) => {
-    const number = /\/issues\/(\d+)$/.exec(new URL(url).pathname)?.[1];
+    const { pathname } = new URL(url);
+    if (pathname in repos) return new Response(JSON.stringify(repos[pathname]), { status: 200, headers: { 'content-type': 'application/json' } });
+    const number = /\/issues\/(\d+)$/.exec(pathname)?.[1];
     if (number === undefined) return pulls(url, init);
     const issue = issues[number];
     return new Response(JSON.stringify(issue ?? { message: 'Not Found' }), { status: issue ? 200 : 404, headers: { 'content-type': 'application/json' } });
@@ -333,6 +336,19 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
     const { szz } = await szzWithIssues(t, 'Closes #50', { 50: { number: 50, created_at: '2026-01-05T11:00:00Z' } });
     assert.deepEqual(szz.links.map((link) => [link.pr, link.confidence]), [[1, 1]]);
     assert.deepEqual(szz.dropped_lines, []);
+  });
+
+  await t.test('a report named by the repo\'s old name, after a rename or a transfer, drops the line too', async (t) => {
+    // GitHub redirects the old name to the repo, so both replies have the same id.
+    const renamed = { [`/repos/${REPO}`]: { id: 9, full_name: REPO, default_branch: 'main' }, '/repos/oldowner/shop': { id: 9, full_name: REPO } };
+    const issue = { 50: { number: 50, created_at: '2026-01-05T09:30:00Z' } };
+    for (const body of ['Fixes oldowner/shop#50', 'Fixes https://github.com/oldowner/shop/issues/50']) {
+      const { szz } = await szzWithIssues(t, body, issue, renamed);
+      assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']], body);
+    }
+    // Another repo has another id, so its issue 50 gives no date.
+    const { szz } = await szzWithIssues(t, 'Fixes other/shop#50', issue, { ...renamed, '/repos/other/shop': { id: 10, full_name: 'other/shop' } });
+    assert.deepEqual(szz.links.map((link) => link.pr), [1]);
   });
 
   await t.test('a linked PR, or an issue GitHub does not know, gives no date', async (t) => {

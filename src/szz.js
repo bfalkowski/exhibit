@@ -352,8 +352,11 @@ function noLinkReason(dropped) {
 
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
 // "Fixes #12", "closes: #7", "Fixes owner/name#12" or "Fixes https://github.com/owner/name/issues/12".
-// Only issues in `repo` ("owner/name") count. Case does not matter in the repo name.
-export function bugReportNumbers(body, repo) {
+// Only issues in the forge's repo count. Case does not matter in the repo name. A name that is
+// not the repo's current name, such as its name before a rename or a transfer, counts when the
+// forge says it leads to the same repo (forge.sameRepo). GitHub follows that redirect and closes
+// the issue, so SZZ reads it too.
+export async function bugReportNumbers(body, forge) {
   const numbers = [];
   const name = '[\\w.-]+\\/[\\w.-]+';
   const closing = new RegExp(
@@ -362,7 +365,7 @@ export function bugReportNumbers(body, repo) {
   );
   for (const [, short, refRepo, refNumber, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
     const named = refRepo ?? urlRepo;
-    if (named !== undefined && named.toLowerCase() !== repo.toLowerCase()) continue;
+    if (named !== undefined && named.toLowerCase() !== forge.repo.toLowerCase() && !(await forge.sameRepo(named))) continue;
     const number = Number(short ?? refNumber ?? urlNumber);
     if (!numbers.includes(number)) numbers.push(number);
   }
@@ -375,7 +378,7 @@ export function bugReportNumbers(body, repo) {
 // it came before the newest one.
 async function bugReportDate(fix, forge) {
   let newest = null;
-  for (const number of bugReportNumbers(fix.body, forge.repo)) {
+  for (const number of await bugReportNumbers(fix.body, forge)) {
     const issue = await forge.issue(number);
     if (issue === null || issue.isPull || issue.createdAt === null) continue;
     if (newest === null || Date.parse(issue.createdAt) > Date.parse(newest)) newest = issue.createdAt;

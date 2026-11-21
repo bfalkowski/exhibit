@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Finds links in the docs that point to a file that is not there. evidence.yml runs it as the
-// probe for the docs kind: node scripts/check-links.js README.md CLAUDE.md docs
+// probe for the docs kind: node scripts/check-links.js README.md CLAUDE.md docs examples
 // Each argument is a file, or a folder whose .md and .html files it reads. It checks only links
 // to files in the repo. It does not check web links or anchors.
 // It exits 0 when every link works, and 1 with one line for each broken link.

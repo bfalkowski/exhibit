@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolError } from '../src/tool-error.js';
-import { checkLabelLine, defectId, labelDefects } from '../src/labels.js';
+import { ANSWER_LIMITS, checkLabelLine, defectId, labelDefects } from '../src/labels.js';
 import { DraftError } from '../src/claude.js';
 import { SHOP_HISTORY } from './fixtures/report/shop-history.js';
 
@@ -127,6 +127,15 @@ test('a line that fails the labels schema is refused, and the file keeps its ear
 test('a code longer than 200 characters is refused', async (t) => {
   const cwd = folderWithHistory(t);
   await assert.rejects(labelDefects({ cwd, ask: scripted([answer('x'.repeat(201), 'x', 'y')]).ask, now: () => NOW }), ToolError);
+});
+
+test('the answer limits are the lengths that the labels schema allows', () => {
+  assert.deepEqual(ANSWER_LIMITS, { code: 200, category: 60, would_have_caught: 500 });
+  const line = (fields) => ({ id: 'D-004', fix_pr: 4, introducing_prs: [1], code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-01-01T00:00:00Z', ...fields });
+  for (const [field, limit] of Object.entries(ANSWER_LIMITS)) {
+    assert.deepEqual(checkLabelLine(line({ [field]: 'x'.repeat(limit) })), [], field);
+    assert.notDeepEqual(checkLabelLine(line({ [field]: 'x'.repeat(limit + 1) })), [], field);
+  }
 });
 
 test('a labels file with a broken line is refused, and stays as it was', async (t) => {

@@ -4,9 +4,9 @@
 # minutes, and the publish job one of 10 minutes, so a run that hangs does not take a runner for
 # 6 hours, GitHub's limit. The example leaves the limits out: each repo's tests take their own time.
 #
-# Both jobs run Exhibit from a fixed commit on main, never ./ from the PR. With ./, a PR could
-# change the code that the publish job runs with its write token. To move to a newer Exhibit,
-# change the SHA in both jobs, in a PR of its own.
+# Both jobs run the Exhibit release v0.1.0, never ./ from the PR. With ./, a PR could change the
+# code that the publish job runs with its write token. To move to a newer release, change the tag
+# in both jobs, and in examples/pull-request.yml, in a PR of its own.
 name: Exhibit
 
 # Never pull_request_target: that runs with a write token and the base repo's secrets, on a run
@@ -46,8 +46,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Shadow mode: the step succeeds whatever the verdict. enforce: true is the person's decision.
-      # 6f6de5a is main after #220, the PR that added the Action.
-      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+      - uses: bfalkowski/exhibit@v0.1.0
         with:
           command: check
           enforce: false
@@ -74,8 +73,8 @@ jobs:
           name: exhibit
           path: .exhibit
 
-      # The same commit of Exhibit as the check job, and the same enforce.
-      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+      # The same Exhibit release as the check job, and the same enforce.
+      - uses: bfalkowski/exhibit@v0.1.0
         with:
           command: publish
           comment: true

@@ -7,11 +7,10 @@
 # Copy this file to .github/workflows/exhibit.yml, and add evidence.yml at the top of the repo
 # (docs/spec.md section 8.1). The README lists the steps.
 #
-# Both jobs pin Exhibit to one commit SHA on Exhibit's main branch, because Exhibit has no release
-# tag yet. Keep the same SHA, or a release tag, in both jobs. Never use a branch such as main: it
-# moves, so in one run the check job and the publish job could run different Exhibit code, and the
-# job with the write token would run whatever main is at that time. Never use ./ either: that is
-# the PR's own copy of the code.
+# Both jobs pin Exhibit to the release v0.1.0. Keep the same release in both jobs. Never use a
+# branch such as main, or the major tag v0: they move, so in one run the check job and the publish
+# job could run different Exhibit code, and the job with the write token would run whatever that
+# branch or tag points to at that time. Never use ./ either: that is the PR's own copy of the code.
 #
 # The check job runs your tests with the node on its PATH. If your tests need a certain Node, set
 # it up with actions/setup-node before the Exhibit step.
@@ -57,7 +56,7 @@ jobs:
       # enforce: false is shadow mode. The step succeeds whatever the verdict, and the job summary
       # shows the verdict. Set it to true to fail the step on needs_person and on error, and set
       # it to the same value in the publish job.
-      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+      - uses: bfalkowski/exhibit@v0.1.0
         with:
           command: check
           enforce: false
@@ -88,7 +87,7 @@ jobs:
           path: .exhibit
 
       # enforce must be the same as in the check job, so the comment says the right mode.
-      - uses: bfalkowski/exhibit@6f6de5ae57f34a3e82d531f93dbe908ab49c6991
+      - uses: bfalkowski/exhibit@v0.1.0
         with:
           command: publish
           comment: true
