@@ -72,7 +72,7 @@ function failure(outcome, missing, timeoutSeconds) {
 }
 
 // The process groups that runInGroup has started and not yet killed: probes, test runs,
-// settings.mutation_setup and Stryker. Each one is a function that kills its group.
+// settings.mutation_setup, Stryker and mutmut. Each one is a function that kills its group.
 const liveGroups = new Set();
 const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 let stopping = false;

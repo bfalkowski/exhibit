@@ -21,7 +21,7 @@ export function exitCode(exhibit, { shadow = false } = {}) {
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
 // how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The mutation
-// collector runs Stryker in a worktree of the head of its own (src/mutation.js). The probe
+// collector runs Stryker and mutmut in a worktree of the head of its own (src/mutation.js). The probe
 // collector shares the head worktree of the check command, so the command adds it (src/probe.js).
 export const COLLECTORS = Object.freeze({
   'tests-before-after': testsBeforeAfter,

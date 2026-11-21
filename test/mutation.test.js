@@ -406,10 +406,10 @@ test('the collector does not run Stryker when nothing can be mutated, or the pol
   assert.equal(met.status, 'met');
   assert.match(met.details.reason, /nothing to mutate/);
 
-  const python = collectorRepo(t, { 'tool/run.py': 'print(1)\n', 'src/inside.js': NEW_CODE });
-  const skipped = await never({ params: { min: 0.9 } }, python);
+  const go = collectorRepo(t, { 'tool/run.go': 'package main\n', 'src/inside.js': NEW_CODE });
+  const skipped = await never({ params: { min: 0.9 } }, go);
   assert.equal(skipped.status, 'skipped');
-  assert.deepEqual(skipped.details.no_adapter, ['tool/run.py']);
+  assert.deepEqual(skipped.details.no_adapter, ['tool/run.go']);
 
   const noGlobs = collectorRepo(t, { 'src/inside.js': NEW_CODE }, {});
   const missing = await never({ params: { min: 0.9 } }, noGlobs);
