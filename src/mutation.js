@@ -46,8 +46,9 @@ export function mutationCollector({ runStryker = runStrykerProcess } = {}) {
     if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker }));
     const runResult = await runs.get(context);
     const result = judge(runResult, requirement.params.min);
-    // A test that failed in Stryker's first run and passed in the second is flaky (spec 9.3).
-    return runResult.failedInFirstRun ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
+    // A test that failed in the coverage run of Exhibit's first Stryker run, and passed in the
+    // coverage run of the second, is flaky (spec 9.3 and 9.5).
+    return passedInSecondCoverageRun(result.details) ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
   };
 }
 
@@ -114,9 +115,10 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
     const firstOutput = `${MUTATION_DIR}/output.log`;
     let outcome = await strykerRun('output.log');
     let output = firstOutput;
-    // Stryker stops when a test fails in its first run, the run that records coverage. A test
-    // can fail there now and then, for example under load, so Exhibit runs Stryker once more, as
-    // it runs the test command once more (spec 9.3). A test that fails only in the first run is
+    // Stryker starts with its coverage run, which runs every test file once and records which
+    // lines each one reaches. It stops when a test fails there. A test can fail there now and
+    // then, for example under load, so Exhibit runs Stryker a second time, as it runs the test
+    // command once more (spec 9.3). A test that fails only in the first run's coverage run is
     // flaky.
     const failedFirst = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
     if (failedFirst.length > 0) {
@@ -129,8 +131,8 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
       if (failedFirst.length > 0) {
         const failedAgain = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
         const what = failedAgain.length > 0
-          ? `Stryker's first run, which records coverage, failed a test on both runs. On the first run: ${nameFailures(failedFirst)}. On the second run: ${nameFailures(failedAgain)}. Stryker stops on any failed test there, so fix the test on the head, or the code it tests.`
-          : `Stryker's first run, which records coverage, failed a test: ${nameFailures(failedFirst)}. Exhibit ran Stryker once more, and it ${why} again, for another reason.`;
+          ? `Exhibit ran Stryker twice, and both times a test failed in Stryker's coverage run, the run that records which lines each test reaches. In the first run: ${nameFailures(failedFirst)}. In the second run: ${nameFailures(failedAgain)}. Stryker stops on any failed test in its coverage run, so fix the test on the head, or the code it tests.`
+          : `In Exhibit's first run of Stryker, a test failed in Stryker's coverage run, the run that records which lines each test reaches: ${nameFailures(failedFirst)}. Exhibit ran Stryker a second time, and it ${why} again, for another reason.`;
         return fixed('error', details,
           `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. ${what} Read ${firstOutput} and ${output}, and run exhibit check again.`);
       }
@@ -152,9 +154,17 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
   }
 }
 
-// True when Stryker stopped because a test failed in its first run.
+// True when Stryker stopped because a test failed in its coverage run.
 function stoppedByTests(outcome) {
   return !outcome.complete && !outcome.timedOut && (outcome.failedInFirstRun?.length ?? 0) > 0;
+}
+
+// True when a requirement's details show that the second Stryker run got past its coverage run:
+// the run is complete, or it tested a mutant. A second run that the budget stopped in its
+// coverage run did not show that the failed tests pass, so they are not flaky.
+function passedInSecondCoverageRun(details) {
+  if (!details?.failed_in_first_run || details.n === undefined) return false;
+  return details.complete === true || details.n + details.not_valid + details.ignored > 0;
 }
 
 // The failed tests as "test/a.test.js (what failed)", joined for a gap.
@@ -400,7 +410,7 @@ async function isFile(path) {
 // reporter writes each mutant to a file as soon as it is done, so a stopped run still gives the
 // mutants it finished. Gives back { mutants, complete, timedOut, code, signal, failedInFirstRun }.
 // `complete` is true when Stryker exited 0 and wrote its done line. `failedInFirstRun` lists the
-// tests that failed in Stryker's first run, from its log.
+// tests that failed in Stryker's coverage run, from its log.
 async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFile, env }) {
   const dir = await mkdtemp(join(tmpdir(), 'exhibit-stryker-'));
   try {
@@ -448,7 +458,8 @@ async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFi
 
 const FIRST_RUN_FAILED = 'One or more tests failed in the initial test run:';
 
-// The tests that failed in Stryker's first run, as [{ test, message }], read from Stryker's log.
+// The tests that failed in Stryker's coverage run (its first step, which Stryker's log calls the
+// initial test run), as [{ test, message }], read from Stryker's log.
 // When a test fails there, Stryker logs the line FIRST_RUN_FAILED, then for each failed test a
 // line with a tab and its name, and a line with two tabs and what failed. The tap runner names a
 // test by its file, and gives the names of the failed tests in the file as what failed. A log
@@ -525,7 +536,11 @@ export function describeMutation(details) {
   }
   if (details.complete === false) parts.push(` The budget of ${details.budget_seconds} seconds ran out, so this is a sample.`);
   if (details.not_valid > 0) parts.push(` ${details.not_valid} mutants did not compile or broke the code at load, so they do not count.`);
-  if (details.failed_in_first_run?.length > 0) parts.push(` Stryker's first run failed ${details.failed_in_first_run.map((failure) => failure.test).join(', ')}, so Exhibit ran Stryker once more, and this is the second run. Those tests are flaky.`);
+  if (details.failed_in_first_run?.length > 0) {
+    const tests = details.failed_in_first_run.map((failure) => failure.test).join(', ');
+    const flaky = passedInSecondCoverageRun(details) ? ' They passed there, so they are flaky.' : '';
+    parts.push(` In Exhibit's first run of Stryker, these tests failed in Stryker's coverage run: ${tests}. So Exhibit ran Stryker a second time, and these counts come from the second run.${flaky}`);
+  }
   const lines = [parts.join('')];
   const show = (title, mutants) => {
     if (!mutants?.length) return;
