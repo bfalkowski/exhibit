@@ -372,6 +372,14 @@ test('check --pr N marks the PR as a fix when fix_signals has pr:N', async (t) =
   assert.deepEqual([fix, fixSignal], [true, 'pr:7']);
 });
 
+test('check without --pr knows no PR number, so a pr:N signal does not match', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [pr:7]\n'));
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
+  assert.deepEqual([fix, fixSignal], [false, null]);
+});
+
 test('a bad argument removes the old evidence.json too, and summary.md says error and why', (t) => {
   const fixture = buildRepo(t);
   mkdirSync(join(fixture.repo, '.exhibit'));
