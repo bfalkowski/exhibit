@@ -1,5 +1,5 @@
 {
-  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"nothing-here\",\"after\":null}": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"nothing-here\",\"after\":null,\"first\":50}": {
     "status": 200,
     "headers": {},
     "body": {

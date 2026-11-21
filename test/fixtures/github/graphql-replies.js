@@ -14,7 +14,10 @@
 //   { __typename: 'StatusContext', context, state, targetUrl }, as GitHub gives them, in capitals.
 //
 // `pullsPerPage` and `itemsPerPage` split the lists into pages, as GitHub does when a list is
-// longer than a page. A page that is not the last one has hasNextPage true, and the next page is
+// longer than a page. `first` is how many PRs the MergedPulls and RecentMergedPulls queries ask
+// for: it is in their keys. It is 50 when left out, the number Exhibit asks for first.
+// `pullsPerPage` is `first` when left out. A test can give a smaller `pullsPerPage` and keep
+// `first` at 50, for short pages that the run asks for with its usual number. A page that is not the last one has hasNextPage true, and the next page is
 // recorded under the query that asks for it with the page's end cursor.
 
 import { graphqlKey } from '../../../test-support/replay-fetch.js';
@@ -22,7 +25,7 @@ import { graphqlKey } from '../../../test-support/replay-fetch.js';
 const LISTS = { labels: 'PullLabels', files: 'PullFiles', reviews: 'PullReviews', comments: 'PullComments' };
 
 // Returns { [key]: reply } for every query that history sends for the repo `repo`.
-export function graphqlReplies(repo, pulls, { pullsPerPage = 50, itemsPerPage = 100 } = {}) {
+export function graphqlReplies(repo, pulls, { first = 50, pullsPerPage = first, itemsPerPage = 100 } = {}) {
   const [owner, name] = repo.split('/');
   const replies = {};
   const ok = (data) => ({ status: 200, headers: {}, body: { data: { rateLimit: { cost: 1 }, ...data } } });
@@ -37,7 +40,7 @@ export function graphqlReplies(repo, pulls, { pullsPerPage = 50, itemsPerPage = 
       const after = index === 0 ? null : `${cursor}-${index}`;
       const pageInfo = { hasNextPage: index < pullPages.length - 1, endCursor: `${cursor}-${index + 1}` };
       const nodes = page.map((pull) => pullNode(pull, itemsPerPage));
-      replies[graphqlKey(query, { owner, name, after })] = ok({ repository: { pullRequests: { pageInfo, nodes } } });
+      replies[graphqlKey(query, { owner, name, after, first })] = ok({ repository: { pullRequests: { pageInfo, nodes } } });
     });
   }
 

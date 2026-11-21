@@ -118,7 +118,7 @@ test('the run finds a PR that someone updated while it read the pages, and that 
   const moved = [17, '11-12', '11-13'];
   const before = graphqlReplies(REPO, [...PULLS.slice(0, 4), moved, ...PULLS.slice(4)].map(pull), { pullsPerPage: 2 });
   const after = graphqlReplies(REPO, [[17, '11-12', '11-22'], ...PULLS].map(pull), { pullsPerPage: 2 });
-  const firstPage = 'graphql RecentMergedPulls {"owner":"acme","name":"stops","after":null}';
+  const firstPage = 'graphql RecentMergedPulls {"owner":"acme","name":"stops","after":null,"first":50}';
   const fetchBefore = replay(before);
   const fetchAfter = replay(after);
   let pages = 0;
