@@ -237,6 +237,40 @@ test('the older-file note keeps the path when the problem is deeper in the line'
   assert.match(note, /\(PR 4 \/reviews: misses the field list\)\.$/);
 });
 
+// A null line has no fields, so the note names it by its line number, not by a PR number.
+test('a null line in the old file forces a full run, with one note that names the line', async () => {
+  const cwd = newFolder();
+  const gh = repo();
+  await run(cwd, gh);
+  const rows = readFileSync(join(cwd, '.exhibit', 'history.jsonl'), 'utf8').split('\n');
+  rows[2] = 'null';
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), rows.join('\n'));
+
+  const second = await run(cwd, gh);
+  assert.deepEqual(prsAsked(second.asked), [1, 2, 3, 4]);
+  const notes = second.stderr.split('\n').filter((text) => text.includes('reads every merged PR again'));
+  assert.equal(notes.length, 1, second.stderr);
+  assert.match(notes[0], /older version of Exhibit does \(line 3 must be object, not null\)\.$/);
+  for (const line of readLines(cwd)) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+});
+
+// An array is not an object either. The note counts blank rows, so it gives the line a person
+// sees in an editor: the array after one blank row is line 4.
+test('an array line after a blank row forces a full run, with a note that names its line in the file', async () => {
+  const cwd = newFolder();
+  const gh = repo();
+  await run(cwd, gh);
+  const rows = readFileSync(join(cwd, '.exhibit', 'history.jsonl'), 'utf8').split('\n');
+  rows.splice(2, 1, '', '[]');
+  writeFileSync(join(cwd, '.exhibit', 'history.jsonl'), rows.join('\n'));
+
+  const second = await run(cwd, gh);
+  assert.deepEqual(prsAsked(second.asked), [1, 2, 3, 4]);
+  const notes = second.stderr.split('\n').filter((text) => text.includes('reads every merged PR again'));
+  assert.equal(notes.length, 1, second.stderr);
+  assert.match(notes[0], /older version of Exhibit does \(line 4 must be object, not array\)\.$/);
+});
+
 test('a file from another repo forces a full run', async () => {
   const cwd = newFolder();
   const gh = repo();
