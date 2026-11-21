@@ -108,14 +108,18 @@ function createKeyboard({ input, output }) {
     }
   }
 
-  async function ask(defect, { categories, text, position, open, draft, draftError }) {
+  async function ask(defect, { categories, text, position, open, draft, draftError, draftStopped }) {
     if (!introduced) {
       output.write(`${open} escaped ${plural(open, 'defect has', 'defects have')} no code yet. For each one, keep or reject each SZZ link, then type what went wrong, its category, and the evidence that would have caught it. ` +
         `Each label is saved as soon as you give it. Type s to skip a defect for now, or q at any question to quit.\n`);
       introduced = true;
     }
     output.write(`\n${defect.id}, ${position} of ${open} with no code yet\n${text}\n`);
-    if (draftError) output.write(`Claude could not draft ${defect.id}: ${draftError}. Label it by hand.\n`);
+    if (draftStopped) {
+      output.write(`Claude could not draft ${defect.id}: ${draftError}. ${draftStopped} Drafting is stopped for the rest of this run, so label this defect and the rest by hand. The labels already written stay.\n`);
+    } else if (draftError) {
+      output.write(`Claude could not draft ${defect.id}: ${draftError}. Label it by hand.\n`);
+    }
     const rejected = [];
     for (const link of defect.links) {
       const choice = await keepOrReject(link);

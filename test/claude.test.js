@@ -56,6 +56,13 @@ test('an API error is a DraftError with a plain message', async () => {
   });
 });
 
+test('a bad key or a wrong model is a DraftError that stops drafting, and says what to fix', async () => {
+  await assert.rejects(recorded('bad-key').draft(defect), (error) => error instanceof DraftError && /^the Anthropic API answered 401: invalid x-api-key$/.test(error.message) && /ANTHROPIC_API_KEY/.test(error.stopsDrafting));
+  await assert.rejects(recorded('bad-model').draft(defect), (error) => error instanceof DraftError && /answered 404/.test(error.message) && /EXHIBIT_CLAUDE_MODEL/.test(error.stopsDrafting));
+  // An overloaded API can work on the next defect, so it does not stop drafting.
+  await assert.rejects(recorded('server-error').draft(defect), (error) => error instanceof DraftError && error.stopsDrafting === null);
+});
+
 test('a refusal is a DraftError', async () => {
   await assert.rejects(recorded('refusal').draft(defect), (error) => error instanceof DraftError && /declined/.test(error.message));
 });

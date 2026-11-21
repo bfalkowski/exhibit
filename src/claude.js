@@ -9,9 +9,23 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 
 // The draft could not be made: the API failed, Claude declined, or the draft did not fit the
 // labels schema. The message is plain, so exhibit label can show it and go on by hand.
+// `stopsDrafting` is null, or what the person must fix when no later draft can work either: a bad
+// key or a wrong model. exhibit label then stops drafting for the rest of the run.
 export class DraftError extends Error {
   name = 'DraftError';
+
+  constructor(message, { stopsDrafting = null } = {}) {
+    super(message);
+    this.stopsDrafting = stopsDrafting;
+  }
 }
+
+// The API replies that every later request would get too, and what the person must fix for each.
+const STOPS_DRAFTING = {
+  401: 'Check ANTHROPIC_API_KEY.',
+  403: 'Check ANTHROPIC_API_KEY.',
+  404: 'Check that EXHIBIT_CLAUDE_MODEL names a model.'
+};
 
 // The same rules as `code` and `category` in schema/labels-line.schema.json.
 const DRAFT_SCHEMA = {
@@ -64,7 +78,7 @@ export function createDrafter({ apiKey, model = DEFAULT_MODEL, fetch = globalThi
       });
     } catch (error) {
       if (error instanceof Anthropic.APIConnectionError) throw new DraftError(`could not reach the Anthropic API: ${error.message}`);
-      if (error instanceof Anthropic.APIError) throw new DraftError(`the Anthropic API answered ${error.status}: ${apiMessage(error)}`);
+      if (error instanceof Anthropic.APIError) throw new DraftError(`the Anthropic API answered ${error.status}: ${apiMessage(error)}`, { stopsDrafting: STOPS_DRAFTING[error.status] ?? null });
       throw error;
     }
     if (response.stop_reason === 'refusal') throw new DraftError('Claude declined to draft this defect');

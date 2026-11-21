@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolError } from '../src/tool-error.js';
 import { ANSWER_LIMITS, checkLabelLine, defectId, labelDefects } from '../src/labels.js';
-import { DraftError } from '../src/claude.js';
+import { fileURLToPath } from 'node:url';
+import { DraftError, createDrafter } from '../src/claude.js';
+import { replayFetch } from '../test-support/replay-fetch.js';
 import { SHOP_HISTORY } from './fixtures/report/shop-history.js';
 
 const NOW = new Date('2026-11-19T10:00:00Z');
@@ -288,6 +290,57 @@ test('an API error on one defect keeps the earlier labels, and the person labels
   const lines = readLabels(cwd);
   assert.deepEqual(lines.map((l) => [l.id, l.labeled_by, 'claude_draft' in l]), [['D-012', 'claude_draft_confirmed', true], ['D-007', 'person', false]]);
   for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
+});
+
+for (const [status, reason] of [[401, /ANTHROPIC_API_KEY/], [403, /ANTHROPIC_API_KEY/], [404, /EXHIBIT_CLAUDE_MODEL/]]) {
+  test(`a ${status} stops drafting for the rest of the run, and the person labels the next defects by hand`, async (t) => {
+    const cwd = folderWithHistory(t);
+    const calls = [];
+    const draft = async (input) => {
+      calls.push(input.id);
+      if (calls.length === 1) return DRAFT;
+      throw new DraftError(`the Anthropic API answered ${status}: no`, { stopsDrafting: status === 404 ? 'Check EXHIBIT_CLAUDE_MODEL.' : 'Check ANTHROPIC_API_KEY.' });
+    };
+    const { ask } = scripted([
+      { code: DRAFT.code, category: DRAFT.category, would_have_caught: 'a test', draft: 'confirmed' },
+      answer('Stock went below zero', 'state', 'A test that sells the last item twice'),
+      answer('Tax used the wrong base', 'arithmetic', 'A test with tax'),
+      'quit'
+    ]);
+    const seen = [];
+    const spy = async (defect, context) => {
+      seen.push(context);
+      return ask(defect, context);
+    };
+    await labelDefects({ cwd, ask: spy, draft, now: () => NOW });
+    // D-012 drafted, D-007 failed and stopped drafting, D-006 and on were never sent.
+    assert.deepEqual(calls, ['D-012', 'D-007']);
+    assert.match(seen[1].draftError, new RegExp(String(status)));
+    assert.match(seen[1].draftStopped, reason);
+    for (const context of seen.slice(2)) assert.deepEqual([context.draft, context.draftError, context.draftStopped], [null, null, null]);
+    // The label written before the failure stays.
+    assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by]), [['D-012', 'claude_draft_confirmed'], ['D-007', 'person'], ['D-006', 'person']]);
+  });
+}
+
+test('with the recorded 401 reply, exhibit sends one request, and the next defect is labeled by hand', async (t) => {
+  const cwd = folderWithHistory(t);
+  const fetch = replayFetch(fileURLToPath(new URL('./fixtures/anthropic/bad-key.json', import.meta.url)));
+  // The SDK's own retries stay on, as in a real run.
+  const draft = createDrafter({ apiKey: 'bad-key', fetch });
+  const { ask, asked } = scripted([answer('Count ignored the quantity', 'arithmetic', 'a test'), answer('Stock went below zero', 'state', 'a test'), 'quit']);
+  const seen = [];
+  const spy = async (defect, context) => {
+    seen.push(context);
+    return ask(defect, context);
+  };
+  await labelDefects({ cwd, ask: spy, draft, now: () => NOW });
+  assert.equal(fetch.calls.length, 1);
+  assert.deepEqual(asked.map((a) => a.id), ['D-012', 'D-007', 'D-006']);
+  assert.match(seen[0].draftError, /401/);
+  assert.match(seen[0].draftStopped, /ANTHROPIC_API_KEY/);
+  assert.deepEqual([seen[1].draft, seen[1].draftError, seen[1].draftStopped], [null, null, null]);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by, 'claude_draft' in l]), [['D-012', 'person', false], ['D-007', 'person', false]]);
 });
 
 test('the labels schema checks that a Claude label has its draft, and that a confirmed label matches it', () => {

@@ -66,7 +66,10 @@ export function checkLabelLine(line) {
  * `draft({ id, title, body, text, categories })` is optional: Claude, or a script in a test. It
  * returns { code, category, model } before the defect is shown, and the answer source gets it in
  * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
- * holds the message, so the person labels that defect by hand. With a draft, the reply also says
+ * holds the message, so the person labels that defect by hand. When that DraftError has
+ * `stopsDrafting` (a 401, 403 or 404: a bad key or a wrong model), `context.draftStopped` holds
+ * what to fix, and no later defect in this run is sent: each gets `draft`, `draftError` and
+ * `draftStopped` as null, and the person labels it by hand. With a draft, the reply also says
  * `draft: 'confirmed' | 'edited' | 'replaced'`. A replaced draft is always the person's own label,
  * even when they type the draft's words again. Otherwise a reply with the draft's code and
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
@@ -91,11 +94,14 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   // needsBreak: add a line break before the next line, so it does not join the file's last line.
   let needsBreak = !endsWithBreak;
   const written = [];
+  // stopped: a draft failed in a way that every later draft would fail too.
+  let stopped = false;
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const { drafted, draftError } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError });
+    const { drafted, draftError, draftStopped } = await askForDraft(stopped ? undefined : draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
+    if (draftStopped !== null) stopped = true;
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped });
     if (reply === QUIT) break;
     if (reply === SKIP) {
       skipped += 1;
@@ -133,14 +139,14 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
-// Returns { drafted, draftError }. Both are null when there is no drafter.
+// Returns { drafted, draftError, draftStopped }. All three are null when there is no drafter.
 async function askForDraft(draft, input) {
-  if (draft === undefined) return { drafted: null, draftError: null };
+  if (draft === undefined) return { drafted: null, draftError: null, draftStopped: null };
   try {
-    return { drafted: await draft(input), draftError: null };
+    return { drafted: await draft(input), draftError: null, draftStopped: null };
   } catch (error) {
     if (!(error instanceof DraftError)) throw error;
-    return { drafted: null, draftError: error.message };
+    return { drafted: null, draftError: error.message, draftStopped: error.stopsDrafting ?? null };
   }
 }
 
