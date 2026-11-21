@@ -27,6 +27,14 @@ on:
 # No job gets a permission that it does not name below.
 permissions: {}
 
+# One run at a time for each PR. A new push cancels the older run of the same PR, so a slow run
+# for an older head cannot finish last and put its verdict in the summary comment. The publish job
+# of a cancelled run does not start, because of its !cancelled(), and GitHub marks it cancelled.
+# This group is not the publish job's group.
+concurrency:
+  group: exhibit-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Exhibit check
