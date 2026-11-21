@@ -288,3 +288,12 @@ test('readPolicy refuses a mark with no reason, an empty reason or an unknown fi
   await refuses(t, mark(MARK.replace(/reason: .*/, 'reason: ""')), /^evidence\.yml equivalent_mutants\[0\]\.reason /);
   await refuses(t, mark(`${MARK}\n    line: 3`), /^evidence\.yml equivalent_mutants\[0\] has a field the schema does not allow: line\.$/);
 });
+
+test('readPolicy refuses code that YAML reads as another type or as empty text, so a mark that never matches does not hide', async (t) => {
+  // Stryker's replacements true, [] and "" need the quotes that evidence.json gives them.
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: true')), /^evidence\.yml equivalent_mutants\[0\]\.replacement must be string, not boolean\.$/);
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: []')), /^evidence\.yml equivalent_mutants\[0\]\.replacement /);
+  await refuses(t, mark(MARK.replace('replacement: a >= 0', 'replacement: ""')), /^evidence\.yml equivalent_mutants\[0\]\.replacement must have at least 1 character\.$/);
+  const quoted = await readPolicy(folderWith(t, mark(MARK.replace('replacement: a >= 0', 'replacement: "\\"\\""'))));
+  assert.equal(quoted.equivalent_mutants[0].replacement, '""');
+});

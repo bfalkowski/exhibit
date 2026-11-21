@@ -194,6 +194,17 @@ test('mutants marked as equivalent in the base policy drop out of a later run, a
   assert.equal(details.equivalent, survivors.length);
   assert.deepEqual(details.equivalent_mutants.map(({ line, mutator, replacement }) => ({ line, mutator, replacement })), survivors.map(({ line, mutator, replacement }) => ({ line: line + 1, mutator, replacement })));
   assert.match(read(later.repo, 'summary.md'), /Marked as equivalent, so they do not count:\n {4}- src\/inside\.js:3 /);
+
+  // A PR that marks its own survivors: the marks are only on the head, so they are not used, and
+  // the change to the policy needs a person.
+  const own = buildRepo(t, { heads: { selfmark: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST, 'evidence.yml': `${policy()}${stringifyYaml({ equivalent_mutants: marks })}` } } });
+  const selfmark = exhibitCheck(own, 'selfmark');
+  assert.equal(selfmark.status, 1, selfmark.stderr + selfmark.stdout);
+  const ownEvidence = JSON.parse(read(own.repo, 'evidence.json'));
+  assert.equal(ownEvidence.requirements[0].status, 'failed');
+  assert.equal(ownEvidence.requirements[0].details.equivalent, 0);
+  assert.equal(ownEvidence.requirements[0].details.survived, survivors.length);
+  assert.deepEqual(ownEvidence.gaps.map((gap) => gap.type), ['mutation', 'policy-change']);
 });
 
 test('when Stryker fails, here because a test fails on the head, the verdict is error, never meets_policy', async (t) => {

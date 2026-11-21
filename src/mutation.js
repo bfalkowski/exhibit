@@ -271,8 +271,8 @@ function listed(mutants, status) {
 }
 
 // Gives each mutant from Stryker its path relative to the repo, its line and column, the text of
-// its first line, and the code it replaced, read from the head worktree. Long code is cut short, and runs of white space become
-// one space, so each mutant fits on one line of summary.md.
+// its first line, and the code it replaced, read from the head worktree. Long code is cut short,
+// and runs of white space become one space, so each mutant fits on one line of summary.md.
 async function describeMutants(root, mutants) {
   const roots = [root, await realpath(root)];
   const texts = new Map();

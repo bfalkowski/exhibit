@@ -427,7 +427,7 @@
         "array",
         "null"
       ],
-      "description": "Surviving mutants that a person marked as equivalent: a change that cannot alter what the code does (spec 9.5). A mutant that survived, or that no test reached, and that matches a mark in all five of file, line_text, mutator, original and replacement, does not count in the catch rate. exhibit check reads the marks from the base commit, as it reads the rest of this file, so a change to them needs a person.",
+      "description": "Surviving mutants that a person marked as equivalent: a change that cannot alter what the code does (spec 9.5). A mutant that survived, or that no test reached, and that matches a mark in all five of file, line_text, mutator, original and replacement, does not count in the catch rate. exhibit check reads the marks from the base commit, as it reads the rest of this file, so a change to them needs a person. Copy each of the five values as the quoted JSON string that evidence.json gives, so YAML reads it as the same text.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -457,11 +457,13 @@
           },
           "original": {
             "type": "string",
-            "description": "The code that the mutant replaced, as evidence.json gives it."
+            "description": "The code that the mutant replaced, as evidence.json gives it. Copy it as the quoted JSON string from evidence.json, such as \"\\\"\\\"\", because YAML reads some code without quotes as another type: true as a boolean, [] as a list, and \"\" as empty text.",
+            "minLength": 1
           },
           "replacement": {
             "type": "string",
-            "description": "The code the mutant put in its place, as evidence.json gives it."
+            "description": "The code the mutant put in its place, as evidence.json gives it. Copy it as the quoted JSON string from evidence.json, such as \"\\\"\\\"\", because YAML reads some code without quotes as another type: true as a boolean, [] as a list, and \"\" as empty text.",
+            "minLength": 1
           },
           "reason": {
             "type": "string",

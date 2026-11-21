@@ -39,8 +39,8 @@ export const COLLECTORS = Object.freeze({
 // from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
-// `settings` and `equivalentMutants`, and `testRuns()`, which runs the tests on the base and the head the first time it is
-// called and gives back the same per-test results after that. So a later collector, such as
+// `settings` and `equivalentMutants`, and `testRuns()`, which runs the tests on the base and the
+// head the first time it is called and gives back the same per-test results after that. So a later collector, such as
 // failing-before, uses the same results and does not run the tests again. `runTests` makes those
 // results. `baseWithPrTests(paths)` runs the tests on the base with those paths as they are on the
 // head (spec 9.4). `runBaseWithPrTests` makes that run. It runs once for each set of paths, so two
