@@ -3,15 +3,18 @@ export const DEFAULT_FIX_SIGNALS = Object.freeze(['label:bug', 'title:fix', 'bra
 
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 // One or more ticket keys at the start of a title, such as "T-170: ", "KEY-123 ", "[KEY-123] ",
-// "(KEY-123): ", "T-170 - ", "T-170, T-171: ", "ZOOKEEPER-123. " or "#79: ". A key is letters and
-// digits, a hyphen and digits, or "#" and digits. After a key in brackets, a colon, a comma or a
-// dash may follow. A bare key needs a colon, a comma, a period and a space, or a space after it,
-// so "T-170Fix" and "T-170.Fix" keep their key, and a dash after a bare key needs a space before
-// it, so "T-170-Fix" keeps its key too. Titles are lowercase by the time they get here.
+// "(KEY-123): ", "T-170 - ", "T-170, T-171: ", "ZOOKEEPER-123. ", "#79: " or "192: ". A key is
+// letters and digits, a hyphen and digits, or "#" and digits. After a key in brackets, a colon, a
+// comma or a dash may follow. A bare key needs a colon, a comma, a period and a space, or a space
+// after it, so "T-170Fix" and "T-170.Fix" keep their key, and a dash after a bare key needs a space
+// before it, so "T-170-Fix" keeps its key too. A ticket number alone, such as "192", is a key only
+// bare and with a colon after it, so "79 fixes" and "1.2: fix" keep their number. Titles are
+// lowercase by the time they get here.
 const KEY = '(?:[a-z][a-z0-9_]*-\\d+|#\\d+)';
 const BRACKETED = `(?:\\[${KEY}\\]|\\(${KEY}\\))\\s*(?:[:,-]\\s*)?`;
 const BARE = `${KEY}(?:\\s*[:,]\\s*|\\.\\s+|\\s+-\\s*|\\s+)`;
-const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE})+`);
+const NUMBER = '\\d+\\s*:\\s*';
+const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE}|${NUMBER})+`);
 
 // A Jira issue key, such as PAY-482: letters and digits, a hyphen, and digits.
 const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
