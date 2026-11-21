@@ -29,6 +29,8 @@ test('action.yml is a composite action with exactly the inputs of spec 10, and t
   assert.equal(action.runs.using, 'composite');
   assert.deepEqual(Object.keys(action.inputs), ['command', 'policy', 'data-branch', 'comment', 'enforce', 'token']);
   assert.equal(action.inputs.command.default, 'check');
+  // Empty, so the run step can tell a given path from the default (spec 10).
+  assert.equal(action.inputs.policy.default, '');
   assert.equal(action.inputs.enforce.default, 'false');
   assert.equal(action.inputs.token.default, '${{ github.token }}');
 });
@@ -66,7 +68,7 @@ test('no step decides anything: the steps are install, run, summary and upload, 
 // Runs the run step's script with bash. `node` is the first `node` on PATH, so a test can put a
 // stand-in there.
 function runScript(script, { inputs = {}, env = {}, cwd, pathDir }) {
-  const all = { command: 'check', policy: 'evidence.yml', 'data-branch': '', comment: 'false', enforce: 'false', ...inputs };
+  const all = { command: 'check', policy: '', 'data-branch': '', comment: 'false', enforce: 'false', ...inputs };
   return spawnSync('bash', ['-c', script], {
     cwd,
     encoding: 'utf8',
@@ -109,17 +111,20 @@ const bin = join(root, 'bin', 'exhibit.js');
 
 test('check maps policy to --policy and enforce false to --shadow, with the PR from the event', (t) => {
   const map = stubNode(t);
-  assert.deepEqual(map({}).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
+  // An empty policy input passes no --policy, so a missing evidence.yml stays an empty policy.
+  assert.deepEqual(map({}).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--shadow']);
   assert.deepEqual(map({ enforce: 'true', policy: 'ci/policy.yml' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'ci/policy.yml']);
+  assert.deepEqual(map({ policy: 'evidence.yml' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
   // comment and data-branch are for publish. check does not take them.
-  assert.deepEqual(map({ comment: 'true', 'data-branch': 'store' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
+  assert.deepEqual(map({ comment: 'true', 'data-branch': 'store' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--shadow']);
 });
 
 test('publish maps data-branch, comment and enforce to their flags, each on its own', (t) => {
   const map = stubNode(t);
   // --pr and --repo let publish post the error on the PR when the check wrote no evidence.json.
-  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml'];
+  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name'];
   assert.deepEqual(map({ command: 'publish' }).argv, base);
+  assert.deepEqual(map({ command: 'publish', policy: 'ci/policy.yml' }).argv, [...base, '--policy', 'ci/policy.yml']);
   assert.deepEqual(map({ command: 'publish', 'data-branch': 'store', comment: 'true', enforce: 'true' }).argv, [...base, '--data-branch', 'store', '--comment', '--enforce']);
   assert.deepEqual(map({ command: 'publish', enforce: 'true' }).argv, [...base, '--enforce']);
   // A value with spaces or a $ stays one argument, and nothing in it runs.

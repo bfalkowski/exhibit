@@ -236,10 +236,25 @@ test('a policy path that goes through a linked folder is refused, and does not r
   assert.equal(run.status, 2, run.stderr);
   assert.match(run.stderr, /\.github in the base commit [0-9a-f]{7} is a symlink, so \.github\/evidence\.yml goes through it\. Exhibit does not follow it\. Give --policy the path of the real file\./);
   assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'config/evidence.yml']).status, 0);
-  // A path whose folder is not in the base at all is still no policy, not an error.
-  const missing = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'nowhere/evidence.yml']);
-  assert.equal(missing.status, 1, missing.stderr);
-  assert.equal(readEvidence(fixture.repo).policy.sha256, null);
+});
+
+// The review of PR 220, finding 4: a --policy path with a typo read as an empty policy, so the
+// run gave needs_person and the gap "No kind in .github/evidnce.yml matches the changed files".
+test('a --policy file that the base commit does not have exits 2 and says the file is missing', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, '.github/evidence.yml');
+  for (const path of ['.github/evidnce.yml', 'nowhere/evidence.yml']) {
+    const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', path]);
+    assert.equal(run.status, 2, run.stderr);
+    const message = new RegExp(`--policy names ${path.replaceAll('.', '\\.')}, but the base commit [0-9a-f]{7} has no such file\\. Check the path\\.`);
+    assert.match(run.stderr, message);
+    assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+    const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+    assert.match(summary, /error/);
+    assert.match(summary, message);
+  }
+  // The real path still works.
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']).status, 0);
 });
 
 test('the policy is read from the top of the repo, also when exhibit check runs in a subfolder', (t) => {

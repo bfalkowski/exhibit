@@ -47,7 +47,7 @@ export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   // With no exhibit, nothing is stored, so the policy's storage settings are not read. The usual
   // reason for no exhibit is a bad policy, and the publish job checks out the same base commit.
   if (text === null) return publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout });
-  const { settings } = await readPolicy(cwd, options.policy);
+  const { settings } = await readPolicy(cwd, options.policy, { given: options.policyGiven });
   const storage = options.storage ?? settings.storage ?? 'data-branch';
   let exhibit;
   try {
@@ -190,6 +190,7 @@ function parseOptions(argv, forgeModule) {
   return {
     evidence: values.evidence,
     policy: policyPath(values.policy ?? DEFAULT_POLICY),
+    policyGiven: values.policy !== undefined,
     storage: values.storage,
     dataBranch: values['data-branch'],
     remote: values.remote ?? 'origin',

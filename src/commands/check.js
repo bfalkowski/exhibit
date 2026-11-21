@@ -10,7 +10,7 @@ import { checkExhibit } from '../exhibit-schema.js';
 import { classifyWithTracker } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
 import { connectTracker } from '../jira.js';
-import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
+import { DEFAULT_POLICY, missingPolicy, parsePolicy, policyPath } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
 import { readSkip, SKIP_LABEL, skipApplies } from '../skip.js';
 import { describeError, ToolError } from '../tool-error.js';
@@ -99,7 +99,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   const head = await commitSha(cwd, refs.head, refs.hint);
   // Only a PR can carry a skip: without --pr, Exhibit knows no labels and no body.
   const skip = refs.labelAddedBy ? await readSkip(refs.pr, { head, labelAddedBy: refs.labelAddedBy }) : null;
-  const { policy, policyFile } = await policyAtBase(cwd, base, options.policy);
+  const { policy, policyFile } = await policyAtBase(cwd, base, options.policy, options.policyGiven);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
   // The new files, for the feature rule (spec 9.1). Here git looks for renames, so a file that
   // only moves is not a new file.
@@ -211,7 +211,7 @@ async function git(cwd, args) {
 // change the rules that check it (spec 8.1 and 15). A change to the policy file is still a
 // policy-change gap. It returns the policy, as parsePolicy gives it, and policyFile: the path and
 // the SHA-256 of the file's bytes in the base commit, or null when the base has no such file.
-async function policyAtBase(cwd, base, path) {
+async function policyAtBase(cwd, base, path, given) {
   const short = base.slice(0, 7);
   let bytes = null;
   const entry = await treeEntry(cwd, base, path);
@@ -231,6 +231,7 @@ async function policyAtBase(cwd, base, path) {
       if (parent === null) break;
       if (parent.mode === '120000') throw new ToolError(`${folder} in the base commit ${short} is a symlink, so ${path} goes through it. Exhibit does not follow it. Give --policy the path of the real file.`);
     }
+    if (given) throw new ToolError(missingPolicy(path, `the base commit ${short} has no such file`));
   }
   try {
     const policy = parsePolicy(bytes === null ? null : bytes.toString('utf8'), path);
@@ -297,5 +298,5 @@ function parseOptions(argv, forgeModule) {
   } else if (values.base === undefined) {
     throw new ToolError(`give --base REF, the commit the change starts from, such as main, or --pr N. ${USAGE}`);
   }
-  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, policy: policyPath(values.policy ?? DEFAULT_POLICY), json: values.json === true };
+  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, policy: policyPath(values.policy ?? DEFAULT_POLICY), policyGiven: values.policy !== undefined, json: values.json === true };
 }
