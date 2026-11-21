@@ -5,7 +5,7 @@ import { REVERT_SIGNAL } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache, removeOldEntries } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
-import { JIRA_TRACKER } from '../jira.js';
+import { connectTracker, JIRA_TRACKER } from '../jira.js';
 import { readLabelsToCount } from '../labels.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { DEFAULT_POLICY, readPolicy } from '../policy.js';
@@ -61,7 +61,10 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     stderr.write(`exhibit: note: ${why}, so the kinds of every PR in ${OUTPUT} are empty, which means default.\n`);
   }
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const tracker = connectTracker(policy.settings, { env, fetch });
+  // Without a token, history still reads the Jira answers saved in the old file (spec 8.3), so it
+  // takes a tracker that cannot ask, and says so in its own note after the PRs are classified.
+  const connected = connectTracker(policy.settings, { env, fetch });
+  const tracker = connected.note ? JIRA_TRACKER.connect({ settings: policy.settings.jira, fetch }) : connected.tracker;
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
   const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
@@ -80,14 +83,6 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   }
 }
 
-// Returns the Jira tracker when the fix signals hold tracker:jira, or null when they do not.
-// Without JIRA_API_TOKEN, the tracker cannot ask Jira (canAsk is false), but it still reads the
-// answers saved in the old history file, and every other signal still works.
-function connectTracker(settings, { env, fetch }) {
-  if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return null;
-  return JIRA_TRACKER.connect({ settings: settings.jira, token: env[JIRA_TRACKER.tokenEnv] || undefined, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch });
-}
-
 // The one note for a run with tracker:jira and no token. It says how many lines kept the Jira
 // answer that the old history file saved, when there are any.
 function noTokenNote(lines) {
@@ -97,7 +92,6 @@ function noTokenNote(lines) {
     : `so Exhibit did not ask Jira. ${saved === 1 ? '1 PR keeps' : `${saved} PRs keep`} the Jira answer saved in ${OUTPUT}, and the tracker:jira fix signal matched no other PR`;
   return `exhibit: note: ${JIRA_TRACKER.tokenEnv} is not set, ${what}. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.\n`;
 }
-
 async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, kinds, tracker, warn });
