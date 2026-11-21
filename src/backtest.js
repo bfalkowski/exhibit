@@ -4,6 +4,7 @@
 import { bodyStatus, evidenceSection } from './body-evidence.js';
 import { classifyChange } from './classify.js';
 import { clopperPearson } from './interval.js';
+import { DEFAULT_POLICY } from './policy.js';
 import { escapedDefects } from './report.js';
 
 // The name a PR is counted under when it matches no kind, so the policy's default applies.
@@ -79,7 +80,7 @@ export function judge(line, rules, exhibit) {
   const files = line.files.map((file) => file.path);
   const fixed = { fix: line.classification.fix, fix_signal: line.classification.fix_signal };
   // history.jsonl does not say which files a PR added, so only the feature label marks a feature.
-  const { classification, requirements } = classifyChange(rules, files, { title: line.title, labels: line.labels, branch: '' }, 'evidence.yml', [], fixed);
+  const { classification, requirements } = classifyChange(rules, files, { title: line.title, labels: line.labels, branch: '' }, DEFAULT_POLICY, [], fixed);
   const section = typeof line.evidence_section === 'string' ? line.evidence_section : evidenceSection(line.body);
   const judged = requirements.filter((requirement) => !requirement.not_needed).map((requirement) => {
     const found = exhibit?.requirements?.find((item) => item.type === requirement.type && sameParams(item.params, requirement.params));
@@ -179,14 +180,15 @@ function sourceCategories(defects) {
   };
 }
 
-// A strong catch: a requirement that would have been missing belongs to a rule whose `source`
-// names a defect of the same category as this one (spec 9.9). So the policy would have stopped
-// the PR for the reason it was built to catch this kind of bug.
+// A strong catch: a requirement that is missing belongs to a rule whose `source` names a defect of
+// the same category as this one (spec 9.9). So the policy would have stopped the PR for the reason
+// it was built to catch this kind of bug. An unknown requirement only means Exhibit could not
+// tell, so it never makes a catch strong.
 function isStrong(verdict, defect, rules, categories) {
   if (verdict.verdict !== 'needs_person') return false;
   const ruleNames = categories(rules).get(defect.category);
   if (!ruleNames) return false;
-  return verdict.requirements.some((requirement) => requirement.status !== 'met' && requirement.kinds.some((kind) => ruleNames.has(kind)));
+  return verdict.requirements.some((requirement) => requirement.status === 'missing' && requirement.kinds.some((kind) => ruleNames.has(kind)));
 }
 
 /**

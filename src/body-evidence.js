@@ -10,7 +10,9 @@
 // test_command, shows a test run.
 const TEST_COMMANDS = ['npm test', 'npm run test', 'node --test', 'yarn test', 'pnpm test', 'pytest', 'go test', 'cargo test'];
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
-const FENCE = /^ {0,3}(```|~~~)/;
+// A fence opens with 3 or more backticks or tildes. Only a run of the same mark, at least as long,
+// with nothing after it but spaces, closes it, so a ``` line inside a ```` fence stays in the fence.
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**
  * Returns the text of the body's evidence sections, joined, or null when the body has none.
@@ -22,13 +24,19 @@ export function evidenceSection(body) {
   if (typeof body !== 'string') return null;
   const parts = [];
   let level = 0;
+  // fence: the run of marks that opened the code fence we are in, or null.
   let fence = null;
   let current = null;
   for (const line of body.split(/\r?\n/)) {
-    const fenceMark = FENCE.exec(line)?.[1];
-    if (fence === null && fenceMark) fence = fenceMark;
-    else if (fence !== null && fenceMark === fence) fence = null;
-    const heading = fence === null && !fenceMark ? HEADING.exec(line) : null;
+    const mark = FENCE.exec(line);
+    let inFence = fence !== null;
+    if (fence === null && mark && !(mark[1][0] === '`' && mark[2].includes('`'))) {
+      fence = mark[1];
+      inFence = true;
+    } else if (fence !== null && mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && mark[2].trim() === '') {
+      fence = null;
+    }
+    const heading = !inFence && !mark ? HEADING.exec(line) : null;
     if (heading) {
       const depth = heading[1].length;
       if (current !== null && depth <= level) {
@@ -57,8 +65,8 @@ export function evidenceSection(body) {
  * - failing-before: one line of the section has a form of "fail" and the word "before", as in
  *   "The test failed before the change and passes after it".
  * - mutation: a line names mutation (mutation, mutant, Stryker or mutmut) and gives a percent. It
- *   is met when the first percent on such a line is at least `min`. A mutation line with no
- *   percent is unknown.
+ *   is met when any percent on such a line is at least `min`, as in "went from 40% to 90%". With
+ *   mutation lines but no percent on them, it is unknown.
  * - probe: the section holds the probe's `run` text, or the last command in it, after the last &&.
  */
 export function bodyStatus(requirement, section, settings = {}) {
@@ -74,9 +82,9 @@ export function bodyStatus(requirement, section, settings = {}) {
   if (requirement.type === 'mutation') {
     const named = lines.filter((line) => /\b(mutation|mutants?|stryker|mutmut)\b/.test(line));
     if (named.length === 0) return 'missing';
-    const rates = named.map((line) => /(\d+(?:\.\d+)?)\s*%/.exec(line)).filter(Boolean).map((match) => Number(match[1]) / 100);
+    const rates = named.flatMap((line) => [...line.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((match) => Number(match[1]) / 100));
     if (rates.length === 0) return 'unknown';
-    return rates[0] >= requirement.params.min ? 'met' : 'missing';
+    return rates.some((rate) => rate >= requirement.params.min) ? 'met' : 'missing';
   }
   if (requirement.type === 'probe') {
     const run = String(requirement.params.run ?? '').toLowerCase().trim();

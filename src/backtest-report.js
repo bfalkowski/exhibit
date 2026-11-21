@@ -20,7 +20,7 @@ export function buildBacktestReport(result, { repo, fromText = null }) {
   }
   blocks.push(paragraph(
     'Each share has its count and its 95% interval. A defect counts once for each of its kept introducing PRs in the test set, under each kind that the PR matches. ' +
-    'Caught means the policy would have given that PR needs_person. Strong means a requirement that would have been missing comes from a rule whose source names a defect of the same category. ' +
+    'Caught means the policy would have given that PR needs_person. Strong means a requirement that is missing, not unknown, comes from a rule whose source names a defect of the same category. ' +
     'Missed means meets_policy. A false demand is a clean PR that would have been needs_person. A clean PR has no SZZ link from any fix, or every link to it was rejected. ' +
     'A PR with an SZZ link that nobody labeled yet is in no rate. An unknown requirement counts as not met, as a skipped one does in exhibit check, and the last column counts the needs_person verdicts that rest only on unknown requirements.'
   ));

@@ -148,6 +148,16 @@ test('with no labels, no PR with an SZZ link is clean or counted', () => {
   assert.deepEqual(result.funnel.lost.not_labeled, 6);
 });
 
+test('an unknown requirement never makes a catch strong', () => {
+  // PR 4 brought D-011, a "Cache key" bug, and core learned from that category. With no body,
+  // its tests-before-after is unknown: still caught, but not strong.
+  const lines = LINES.map((line) => (line.number === 4 ? { ...line, body: null } : line));
+  const result = backtest({ lines, labels: LABELS, policy: POLICY, from: new Date('2026-02-01T00:00:00Z') });
+  const pr4 = result.replayed.find((line) => line.pr === 4);
+  assert.deepEqual([pr4.verdict, pr4.missing, pr4.strong], ['needs_person', ['tests-before-after'], false]);
+  assert.deepEqual([result.counts.all.caught.k, result.counts.all.strong.k], [2, 0]);
+});
+
 test("a PR's exhibit wins over its body for the requirements they share", () => {
   const line = pr(7, { day: '02-07', files: ['src/e.js'], body: '## Evidence\n\nI looked at it.\n' });
   const exhibit = { requirements: [{ type: 'tests-before-after', params: {}, status: 'met' }] };
@@ -172,6 +182,15 @@ test('evidenceSection reads the sections whose heading starts with evidence, up 
   assert.equal(evidenceSection(body), 'ran npm test\n### Detail\nmore\n```\n# not a heading\n```\nlast\n');
 });
 
+test('a short fence inside a longer fence does not end it, so a # line in it is no heading (spec 9.9)', () => {
+  const body = '## Evidence\n````md\n```\n## Not a heading\n```\n````\nnpm test passes\n## Blast radius\nnone\n';
+  const section = evidenceSection(body);
+  assert.equal(section, '````md\n```\n## Not a heading\n```\n````\nnpm test passes');
+  assert.equal(bodyStatus({ type: 'tests-before-after', params: {} }, section), 'met');
+  // A ~~~ line does not close a backtick fence, and a fence line with text after it does not close one.
+  assert.equal(evidenceSection('## Evidence\n```\n~~~\n## x\n``` not a close\n## y\n```\nnpm test\n'), '```\n~~~\n## x\n``` not a close\n## y\n```\nnpm test\n');
+});
+
 test('bodyStatus maps a section to met, missing or unknown for each type of requirement', () => {
   const tests = { type: 'tests-before-after', params: {} };
   assert.equal(bodyStatus(tests, 'Ran `node --test` and all pass.'), 'met');
@@ -184,6 +203,8 @@ test('bodyStatus maps a section to met, missing or unknown for each type of requ
   assert.equal(bodyStatus(mutation, 'Stryker: 85% of mutants killed.'), 'met');
   assert.equal(bodyStatus(mutation, 'Mutation score 70%.'), 'missing');
   assert.equal(bodyStatus(mutation, 'I ran mutation testing.'), 'unknown');
+  assert.equal(bodyStatus(mutation, 'Mutation score went from 40% to 90%.'), 'met');
+  assert.equal(bodyStatus(mutation, 'Mutation score went from 40% to 60%.'), 'missing');
   assert.equal(bodyStatus(mutation, 'npm test passes.'), 'missing');
   const probe = { type: 'probe', params: { name: 'manual', run: 'npm ci && node relay/test/run.js relay/test/manual.test.js' } };
   assert.equal(bodyStatus(probe, 'Ran `node relay/test/run.js relay/test/manual.test.js`: clean.'), 'met');
