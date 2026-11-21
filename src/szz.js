@@ -1015,6 +1015,16 @@ const opensBlock = (text) => {
   return !rest.startsWith('*') && !rest.startsWith('//') && rest.includes('/*');
 };
 
+// Finds where a block comment ends in a row: the first "*/" with no "*" or "/" straight after it.
+// A "*/" inside a glob such as "src/**/*.js" has a "*" after it, so it is comment text, not the end.
+// Returns -1 when the row has no end.
+function blockEnd(rest) {
+  for (let i = rest.indexOf('*/'); i !== -1; i = rest.indexOf('*/', i + 1)) {
+    if (!'*/'.includes(rest[i + 2] ?? ' ')) return i;
+  }
+  return -1;
+}
+
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. `starts` says for each row whether
 // it starts inside a block comment, when the whole file is known. Without the file, a row that
@@ -1032,14 +1042,14 @@ function markComments(texts, path, starts = []) {
     if (!inBlock) {
       if (rest.startsWith('//')) return true;
       if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
-        const end = rest.indexOf('*/');
+        const end = blockEnd(rest);
         if (end !== -1) return rest.slice(end + 2).trim() === '';
         return /^\*\s*@\w/.test(rest) || closesEarlierBlock(texts.slice(i + 1));
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
     }
-    const end = rest.indexOf('*/');
+    const end = blockEnd(rest);
     inBlock = end === -1;
     if (inBlock) return true;
     const after = rest.slice(end + 2).trim();

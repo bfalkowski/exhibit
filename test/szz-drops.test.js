@@ -562,6 +562,17 @@ test('comments: a later comment row that only names "/*" does not stop the look 
   }
 });
 
+test('comments: a JSDoc row with a glob such as **/*.js is still a comment', () => {
+  for (const deleted of [
+    [' * Old words.', ' * Matches src/**/*.js files.', ' */'],
+    ['/**', ' * Matches src/**/*.js files.', ' * Old words.', ' */']
+  ]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted }] }));
+    assert.deepEqual(counted(result), [], deleted.join(' | '));
+    assert.ok(result.dropped.every((d) => d.reason === 'comment'), deleted.join(' | '));
+  }
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
