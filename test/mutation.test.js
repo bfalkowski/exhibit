@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildExhibit, renderSummary } from '../src/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
-import { changedLines, describeMutation, failedInFirstRun, judge, mutationCollector, readOutcome, testsThatReach } from '../src/mutation.js';
+import { shuffleBySeed } from '../src/mutant-order.js';
+import { changedLines, describeMutation, failedInFirstRun, judge, mutationCollector, readOutcome, runStrykerProcess, testsThatReach } from '../src/mutation.js';
 import { stringify as stringifyYaml } from 'yaml';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
@@ -274,6 +275,63 @@ test('the budget stops Stryker and every process it started', async (t) => {
   assert.match(JSON.parse(read(fixture.repo, 'evidence.json')).gaps[0].how_to_fix, /budget of 15 seconds/);
 });
 
+// Two changed files with eight mutants each, one on each line.
+const eightLines = (name) => Array.from({ length: 8 }, (_, i) => `export const ${name}${i} = (x) => x * ${i + 2};\n`).join('');
+// A test file that kills every mutant of both files. Each time it runs, it takes the next number
+// in the folder RUN_DIR. Its first run is Stryker's coverage run. After that run and LIMIT more, it
+// waits far past the budget, so the budget stops Stryker after a few mutants, the same ones each
+// time. With the order of the code, those few would all come from src/a.js.
+const CUT_SHORT_TEST = `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import * as a from '../src/a.js';
+import * as b from '../src/b.js';
+let n = 0;
+for (;;) {
+  try { mkdirSync(join(process.env.RUN_DIR, String(n))); break; } catch { n += 1; }
+}
+test('both files', async () => {
+  if (n > Number(process.env.LIMIT)) await new Promise((resolve) => setTimeout(resolve, 600000));
+  for (let i = 0; i < 8; i += 1) {
+    assert.equal(a['a' + i](3), 3 * (i + 2));
+    assert.equal(b['b' + i](3), 3 * (i + 2));
+  }
+});
+`;
+
+test('a partial run tests mutants from every changed file, in an order that the seed fixes', async (t) => {
+  const fixture = buildRepo(t, { heads: { both: { 'src/a.js': eightLines('a'), 'src/b.js': eightLines('b'), 'test/both.test.js': CUT_SHORT_TEST } } });
+  execFileSync('git', ['checkout', '-q', 'both'], { cwd: fixture.repo, env: gitEnv(fixture.home) });
+  const sample = async (seed) => {
+    const runs = mkdtempSync(join(fixture.home, 'runs-'));
+    const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }) });
+    assert.equal(outcome.complete, false, JSON.stringify(outcome));
+    assert.ok(outcome.mutants.length > 0 && outcome.mutants.length < 16, `${outcome.mutants.length} mutants`);
+    return outcome.mutants.map((mutant) => `${relative(realpathSync(fixture.repo), mutant.fileName)}:${mutant.location.start.line}`).sort();
+  };
+  const seed = 'f'.repeat(40);
+  const first = await sample(seed);
+  // The sample is a few mutants, and they come from both files, not only the first.
+  assert.deepEqual([...new Set(first.map((place) => place.split(':')[0]))], ['src/a.js', 'src/b.js'], first.join(' '));
+  // A second run with the same seed tests the same mutants first.
+  assert.deepEqual(await sample(seed), first);
+});
+
+test('shuffleBySeed keeps every item, and the seed fixes the order', () => {
+  const items = Array.from({ length: 50 }, (_, i) => i);
+  const once = shuffleBySeed([...items], 'a'.repeat(40));
+  assert.deepEqual([...once].sort((x, y) => x - y), items);
+  assert.notDeepEqual(once, items);
+  assert.deepEqual(shuffleBySeed([...items], 'a'.repeat(40)), once);
+  assert.notDeepEqual(shuffleBySeed([...items], 'b'.repeat(40)), once);
+  assert.deepEqual(shuffleBySeed([], 'a'), []);
+  // Over many seeds, each of 4 items comes first about a quarter of the time.
+  const first = [0, 0, 0, 0];
+  for (let seed = 0; seed < 4000; seed += 1) first[shuffleBySeed([0, 1, 2, 3], String(seed))[0]] += 1;
+  for (const count of first) assert.ok(count > 900 && count < 1100, first.join(' '));
+});
+
 // Mutants as the reporter gives them, for runs that do not start Stryker.
 const mutants = (status, count) => Array.from({ length: count }, (_, i) => ({ file: 'src/a.js', line: i + 1, column: 1, mutator: 'BooleanLiteral', original: 'true', replacement: 'false', status }));
 const ran = (list, complete) => ({ mutants: list, complete, budgetSeconds: 60, mutated: [], testFiles: [], testSelection: 'reach', output: '.exhibit/mutation/output.log' });
@@ -382,6 +440,8 @@ test('a partial run that the budget stopped is judged on its sample', async (t) 
   assert.deepEqual(asked.testFiles, ['test/inside.test.js']);
   // The policy sets no budget, so it is the default.
   assert.equal(asked.budgetSeconds, 600);
+  // The head SHA fixes the order of the mutants.
+  assert.equal(asked.seed, context.head);
   assert.equal(result.status, 'met');
   assert.equal(result.details.complete, false);
   assert.equal(result.details.n, 30);

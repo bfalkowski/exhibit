@@ -64,7 +64,8 @@ export function mutationCollector({ runStryker = runStrykerProcess } = {}) {
 // 4. It picks the test files that reach a changed file (testsThatReach), and runs Stryker with
 //    only those, and with per-test coverage, so each mutant runs only the test files that ran its
 //    line. When no test file reaches the changed files, it gives Stryker every test file.
-// 5. Stryker stops when settings.mutation_budget_seconds runs out.
+// 5. Stryker tests the mutants in a random order that the head SHA fixes, and stops when
+//    settings.mutation_budget_seconds runs out.
 async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
   const testGlobs = settings.mutation_test_files ?? [];
   const isTest = (path) => isTestPath(path) || testGlobs.some((glob) => matchesGlob(path, glob));
@@ -111,7 +112,7 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
     const reaching = await testsThatReach(root, allTests, mutated.map((file) => file.path));
     const testFiles = reaching.length > 0 ? reaching : allTests;
     const mutate = mutated.flatMap(({ path, lines }) => lines.map(([from, to]) => `${path}:${from}-${to}`));
-    const strykerRun = (log) => runStryker({ root, mutate, testFiles, budgetSeconds, logFile: join(outDir, log), env });
+    const strykerRun = (log) => runStryker({ root, mutate, testFiles, budgetSeconds, seed: head, logFile: join(outDir, log), env });
     const firstOutput = `${MUTATION_DIR}/output.log`;
     let outcome = await strykerRun('output.log');
     let output = firstOutput;
@@ -188,9 +189,8 @@ function fixed(status, details, howToFix) {
 // only when the lower bound of the 95% interval reaches min. It is failed when the upper bound is
 // below min too, and missing when the interval holds min: the sample is too small to tell.
 //
-// Stryker tests the mutants file by file, in the order of the code, so a partial sample comes
-// from the first changed lines more than from the last. The interval holds only as well as those
-// mutants stand for the rest.
+// Stryker tests the mutants in a random order (src/mutant-order.js), so a partial sample is a
+// random sample of the mutants on the changed lines, as the interval needs.
 export function judge(runResult, min, marks = []) {
   if (runResult.fixed) return runResult.fixed;
   const { complete, budgetSeconds } = runResult;
@@ -428,12 +428,15 @@ async function isFile(path) {
 // of its own, and per-test coverage records which test files ran each mutant's code, so a mutant
 // runs only those files. A test file counts as one test.
 //
+// Exhibit's reporter puts the mutants in a random order that `seed` fixes, after Stryker's
+// coverage run, so one coverage run serves the whole order.
+//
 // It stops Stryker, with every process it started, when `budgetSeconds` runs out. Exhibit's
 // reporter writes each mutant to a file as soon as it is done, so a stopped run still gives the
 // mutants it finished. Gives back { mutants, complete, timedOut, code, signal, failedInFirstRun }.
 // `complete` is true when Stryker exited 0 and wrote its done line. `failedInFirstRun` lists the
 // tests that failed in Stryker's coverage run, from its log.
-async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFile, env }) {
+export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, seed, logFile, env }) {
   const dir = await mkdtemp(join(tmpdir(), 'exhibit-stryker-'));
   try {
     const resultsFile = join(dir, 'mutants.jsonl');
@@ -467,7 +470,7 @@ async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFi
     const outcome = await runInGroup(process.execPath, {
       args: [STRYKER_BIN, 'run', configFile],
       cwd: root,
-      env: { ...env, EXHIBIT_MUTANTS_FILE: resultsFile, FORCE_COLOR: '0' },
+      env: { ...env, EXHIBIT_MUTANTS_FILE: resultsFile, ...(seed ? { EXHIBIT_MUTANT_SEED: seed } : {}), FORCE_COLOR: '0' },
       logFile,
       timeoutMs: budgetSeconds * 1000
     });
