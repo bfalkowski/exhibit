@@ -13,7 +13,10 @@ const TEST_COMMANDS = ['npm test', 'npm run test', 'node --test', 'yarn test', '
 const FAILED = /\bfail(?:s|ed|ing|ures?)?\b|\btim(?:ed|es) out\b/g;
 const BEFORE = /\bbefore\b|\b(?:on|against) main\b|\bold\b|\bred\b|\bwithout (?:the|this|that|it)\b/;
 // A word that denies the claim after it in its clause, as in "I did not run pytest".
-const DENIAL = /\b(?:not|no|never|none|nothing|cannot|zero|0)\b|n't\b/;
+const DENIAL = /\b(?:not|no|never|none|nothing|cannot)\b|n['’]t\b/;
+// A count of 0 right before a failure word, as in "0 fail" or "zero failures". It denies only
+// that word, so "exit code 0 from npm test" still names a test run.
+const NONE_FAILED = /\b(?:0|zero)\s+$/;
 // Quoted text, such as a test's name or an error message. A before word in it, as in
 // 'fails at "the old Lead"', is not the builder's claim.
 const QUOTED = /"[^"]*"|“[^”]*”|`[^`]*`/g;
@@ -70,9 +73,10 @@ export function evidenceSection(body) {
  * not say enough to tell. `settings` are the policy's settings, for test_command.
  *
  * A command counts only as whole words, so "make" is not found in "remake". A command or a
- * failure counts only when its clause has no "not", "no", "never", "none", "nothing", "cannot",
- * "zero", "0" or "n't" before it, so "I did not run pytest" names no test run. A clause ends at
- * . , ; : ! ? ( or a line break.
+ * failure counts only when its clause has no "not", "no", "never", "none", "nothing", "cannot"
+ * or "n't" (or "n’t") before it, so "I did not run pytest" names no test run. A clause ends at
+ * . , ; : ! ? ( or a line break. A failure word right after "0" or "zero", as in "0 fail", does
+ * not count either.
  *
  * - tests-before-after: the section names a test run: the policy's test_command, or one of
  *   TEST_COMMANDS.
@@ -94,7 +98,7 @@ export function bodyStatus(requirement, section, settings = {}) {
     return commands.some((command) => claims(text, command)) ? 'met' : 'missing';
   }
   if (requirement.type === 'failing-before') {
-    return lines.some((line) => BEFORE.test(line.replace(QUOTED, '')) && [...line.matchAll(FAILED)].some((match) => !denied(line, match.index))) ? 'met' : 'missing';
+    return lines.some((line) => BEFORE.test(line.replace(QUOTED, '')) && [...line.matchAll(FAILED)].some((match) => !denied(line, match.index) && !NONE_FAILED.test(line.slice(0, match.index)))) ? 'met' : 'missing';
   }
   if (requirement.type === 'mutation') {
     const named = lines.filter((line) => /\b(mutation|mutants?|stryker|mutmut)\b/.test(line));

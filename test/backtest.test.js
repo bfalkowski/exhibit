@@ -255,6 +255,18 @@ test('bodyStatus counts the ways real bodies say a test failed before the change
   assert.equal(bodyStatus(failing, 'I ran both against main and both failed.'), 'met');
 });
 
+// Review of PR 392: a curly apostrophe denies too, and a 0 denies only the failure word right after it.
+test('bodyStatus reads n’t, and a 0 only in "0 fail"', () => {
+  const tests = { type: 'tests-before-after', params: {} };
+  const failing = { type: 'failing-before', params: {} };
+  assert.equal(bodyStatus(tests, 'I didn’t run pytest.'), 'missing');
+  assert.equal(bodyStatus(failing, 'I didn’t see it fail before the change.'), 'missing');
+  assert.equal(bodyStatus(tests, 'Exit code 0 from npm test.'), 'met');
+  assert.equal(bodyStatus(tests, 'On Node 22.0 npm test passes.'), 'met');
+  assert.equal(bodyStatus(failing, 'Before the fix, 0 of 4 pass and 4 fail.'), 'met');
+  assert.equal(bodyStatus(failing, 'Before: 0 failures, zero failed, 0 fail.'), 'missing');
+});
+
 test('share gives k of n with its 95% interval, and null for n = 0', () => {
   assert.equal(share(0, 0), null);
   const { k, n, rate, low, high } = share(2, 3);
