@@ -474,6 +474,54 @@ test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ
   assert.deepEqual(linesOf().get(14).szz, blamed);
 });
 
+test('inside a clone, a re-land with an edited title is no fix, and stays so on the next run', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  // PR 13 is a revert. PR 14 clicks Revert on it, and a person renames the title, so only the
+  // body says that PR 14 reverts PR 13: it puts PR 13's change back.
+  shop.history.find((pr) => pr.number === 13).title = 'Revert "Add free shipping"';
+  Object.assign(shop.history.find((pr) => pr.number === 14), { title: 'Reland: add free shipping', body: 'Reverts fixture/shop#13' });
+  const replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(() => replay.cleanup());
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [revert]\n');
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = () => spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd: shop.dir, env: gitEnv(shop.dir, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+  const pr14 = () => readFileSync(join(shop.dir, '.exhibit/history.jsonl'), 'utf8').trim().split('\n').map((row) => JSON.parse(row)).find((line) => line.number === 14);
+
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual([pr14().classification.fix, pr14().classification.fix_signal, pr14().szz], [false, null, null]);
+  // PR 13 is the one fix PR. PR 14 is not counted, in the counts or in the report.
+  const out = JSON.parse(first.stdout);
+  assert.deepEqual([out.szz.fix_prs, out.funnel.fix_prs], [1, 1]);
+  const report = readFileSync(join(shop.dir, '.exhibit/report.md'), 'utf8');
+  assert.ok(!report.includes('PR 14 '), report);
+
+  // The next run classifies PR 14 by the revert signal again, and SZZ makes it no fix again,
+  // so the run does not say that PR 14 changed.
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).mode, 'incremental');
+  assert.ok(!second.stderr.includes('classified another way'), second.stderr);
+  assert.deepEqual([pr14().classification.fix, pr14().szz], [false, null]);
+
+  // A file from before this rule holds PR 14 as a fix whose szz says "reverts a revert". The run
+  // does not keep that szz: SZZ runs again, and PR 14 becomes no fix.
+  const historyPath = join(shop.dir, '.exhibit/history.jsonl');
+  const old = readFileSync(historyPath, 'utf8').trim().split('\n').map((row) => JSON.parse(row)).map((line) => line.number !== 14 ? line : {
+    ...line,
+    classification: { ...line.classification, fix: true, fix_signal: 'revert' },
+    szz: { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: 'reverts a revert' }
+  });
+  writeFileSync(historyPath, old.map((line) => JSON.stringify(line)).join('\n') + '\n');
+  const third = run();
+  assert.equal(third.status, 0, third.stderr);
+  assert.deepEqual([pr14().classification.fix, pr14().szz], [false, null]);
+  assert.deepEqual(JSON.parse(third.stdout).szz.fix_prs, 1);
+});
+
 test('inside a clone, a revert in the look-back window whose body changed gets SZZ again', (t) => {
   const shop = buildSzzRepo();
   t.after(() => shop.cleanup());
