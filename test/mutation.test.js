@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildExhibit, renderSummary } from '../src/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
-import { changedLines, judge, mutationCollector, readOutcome, testsThatReach } from '../src/mutation.js';
+import { changedLines, describeMutation, failedInFirstRun, judge, mutationCollector, readOutcome, testsThatReach } from '../src/mutation.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -63,6 +63,22 @@ import { join } from 'node:path';
 import { inside } from '../src/inside.js';
 writeFileSync(join(process.env.PID_DIR, String(process.pid)), '');
 test('slow', async () => { inside('/a', '/a'); await new Promise((resolve) => setTimeout(resolve, 600000)); });
+`;
+
+// A test file that fails the first time it runs and passes after that, as a test does that fails
+// now and then under load. It keeps a marker file in the folder FLAKY_DIR, outside the worktree,
+// so Stryker's copy of the repo cannot hide it. It imports the changed file, so Exhibit picks it.
+const FIRST_RUN_FAILS_TEST = `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { inside } from '../src/inside.js';
+test('fails on its first run only', () => {
+  const marker = join(process.env.FLAKY_DIR, 'ran');
+  const first = !existsSync(marker);
+  writeFileSync(marker, '');
+  assert.equal(first, false, 'the first run fails by chance');
+});
 `;
 
 function policy({ min = 0.8, budget = 120, extra = '' } = {}) {
@@ -160,8 +176,42 @@ test('when Stryker fails, here because a test fails on the head, the verdict is 
   const evidence = JSON.parse(read(fixture.repo, 'evidence.json'));
   assert.equal(evidence.verdict, 'error');
   assert.equal(evidence.requirements[0].status, 'error');
-  assert.match(evidence.gaps[0].how_to_fix, /\.exhibit\/mutation\/output\.log/);
+  // The test failed in Stryker's coverage run, so Exhibit ran Stryker a second time, and it failed
+  // there again.
+  // The gap names the test and both logs.
+  const { how_to_fix: howToFix } = evidence.gaps[0];
+  assert.match(howToFix, /test\/inside\.test\.js/);
+  assert.match(howToFix, /a path in the root is inside/);
+  assert.match(howToFix, /both times a test failed in Stryker's coverage run/);
+  assert.match(howToFix, /\.exhibit\/mutation\/output\.log/);
+  assert.match(howToFix, /\.exhibit\/mutation\/output-again\.log/);
+  assert.deepEqual(evidence.requirements[0].details.failed_in_first_run.map((failure) => failure.test), ['test/inside.test.js']);
   assert.match(read(fixture.repo, 'mutation/output.log'), /failed/i);
+  assert.match(read(fixture.repo, 'mutation/output-again.log'), /failed/i);
+});
+
+test('a test that fails only on Stryker\'s first run makes Exhibit run Stryker once more, and the test is flaky', async (t) => {
+  const fixture = buildRepo(t, {
+    heads: { flaky: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': STRONG_TEST, 'test/helper.js': { text: HELPER, mode: 0o755 }, 'test/flaky.test.js': FIRST_RUN_FAILS_TEST } }
+  });
+  const marks = join(fixture.home, 'flaky');
+  mkdirSync(marks);
+  const run = exhibitCheck(fixture, 'flaky', { FLAKY_DIR: marks });
+  assert.equal(run.status, 0, run.stderr + run.stdout);
+  const evidence = JSON.parse(read(fixture.repo, 'evidence.json'));
+  assert.deepEqual(checkExhibit(evidence), []);
+  assert.equal(evidence.verdict, 'meets_policy');
+  const item = evidence.requirements[0];
+  assert.equal(item.status, 'met');
+  assert.equal(item.details.complete, true);
+  assert.equal(item.details.survived, 0);
+  assert.equal(item.details.output, '.exhibit/mutation/output-again.log');
+  assert.equal(item.details.first_output, '.exhibit/mutation/output.log');
+  assert.deepEqual(item.details.failed_in_first_run.map((failure) => failure.test), ['test/flaky.test.js']);
+  assert.match(item.details.failed_in_first_run[0].message, /fails on its first run only/);
+  assert.deepEqual(evidence.flaky_tests, ['test/flaky.test.js']);
+  assert.match(read(fixture.repo, 'mutation/output.log'), /One or more tests failed in the initial test run/);
+  assert.match(read(fixture.repo, 'summary.md'), /these tests failed in Stryker's coverage run: test\/flaky\.test\.js\. So Exhibit ran Stryker a second time, and these counts come from the second run\. They passed there, so they are flaky\./);
 });
 
 test('the budget stops Stryker and every process it started', async (t) => {
@@ -263,6 +313,90 @@ test('a Stryker run that crashes, or exits before it is done, gives error throug
     assert.deepEqual(checkExhibit(exhibit), []);
     assert.match(renderSummary(exhibit), /Exhibit failed/);
   }
+});
+
+test('Exhibit runs Stryker once more only when its first run failed a test', async (t) => {
+  const context = collectorRepo(t, { 'src/inside.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST });
+  const killed = (options) => Array.from({ length: 3 }, () => ({ fileName: join(options.root, 'src/inside.js'), location: { start: { line: 2, column: 10 }, end: { line: 2, column: 22 } }, mutatorName: 'EqualityOperator', replacement: 'path !== root', status: 'Killed' }));
+  const failure = { test: 'test/inside.test.js', message: 'a path in the root is inside' };
+  const stand = (outcomes) => {
+    const logs = [];
+    const runStryker = async (options) => {
+      logs.push(options.logFile.slice(context.cwd.length + 1));
+      const outcome = outcomes[logs.length - 1];
+      return { ...outcome, mutants: outcome.mutants ?? (outcome.complete ? killed(options) : []) };
+    };
+    return { logs, runStryker };
+  };
+  const failedFirstRun = { complete: false, timedOut: false, code: 1, signal: null, failedInFirstRun: [failure] };
+  const done = { complete: true, timedOut: false, code: 0, signal: null, failedInFirstRun: [] };
+
+  // The first run fails a test and the second passes: the test is flaky, and the second run counts.
+  const flaky = stand([failedFirstRun, done]);
+  const met = await mutationCollector({ runStryker: flaky.runStryker })({ params: { min: 0.8 } }, context);
+  assert.deepEqual(flaky.logs, ['.exhibit/mutation/output.log', '.exhibit/mutation/output-again.log']);
+  assert.equal(met.status, 'met');
+  assert.deepEqual(met.flaky_tests, ['test/inside.test.js']);
+  assert.deepEqual(met.details.failed_in_first_run, [failure]);
+
+  // Both runs fail a test: error, and the gap names the test.
+  const broken = stand([failedFirstRun, failedFirstRun]);
+  const error = await mutationCollector({ runStryker: broken.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(broken.logs.length, 2);
+  assert.equal(error.status, 'error');
+  assert.match(error.how_to_fix, /test\/inside\.test\.js \(a path in the root is inside\)/);
+  assert.equal(error.flaky_tests, undefined);
+
+  // The second run is complete but made no mutant: its coverage run passed, so the test is flaky.
+  const noMutants = stand([failedFirstRun, { ...done, mutants: [] }]);
+  const empty = await mutationCollector({ runStryker: noMutants.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(noMutants.logs.length, 2);
+  assert.equal(empty.status, 'met');
+  assert.equal(empty.details.n, 0);
+  assert.deepEqual(empty.flaky_tests, ['test/inside.test.js']);
+
+  // The first run fails a test, and the second stops for another reason, such as a crash.
+  const crashedAgain = stand([failedFirstRun, { complete: false, timedOut: false, code: 1, signal: null, failedInFirstRun: [] }]);
+  const other = await mutationCollector({ runStryker: crashedAgain.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(crashedAgain.logs.length, 2);
+  assert.equal(other.status, 'error');
+  assert.match(other.how_to_fix, /test\/inside\.test\.js \(a path in the root is inside\)/);
+  assert.match(other.how_to_fix, /exited with code 1 again, for another reason/);
+  assert.equal(other.flaky_tests, undefined);
+
+  // The budget stops the second run in its coverage run: no mutant is tested, so the test never
+  // passed, and it is not flaky.
+  const stoppedInCoverage = stand([failedFirstRun, { complete: false, timedOut: true, code: null, signal: 'SIGKILL', failedInFirstRun: [] }]);
+  const sampleless = await mutationCollector({ runStryker: stoppedInCoverage.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(sampleless.status, 'missing');
+  assert.equal(sampleless.flaky_tests, undefined);
+  assert.deepEqual(sampleless.details.failed_in_first_run, [failure]);
+  assert.doesNotMatch(describeMutation(sampleless.details), /flaky/);
+  assert.match(describeMutation(sampleless.details), /these counts come from the second run\.$/m);
+
+  // Stryker stops for another reason, such as a broken setup: no second run.
+  const crashed = stand([{ complete: false, timedOut: false, code: 1, signal: null, failedInFirstRun: [] }]);
+  const once = await mutationCollector({ runStryker: crashed.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(crashed.logs.length, 1);
+  assert.equal(once.status, 'error');
+  assert.doesNotMatch(once.how_to_fix, /both times/);
+});
+
+test('failedInFirstRun reads the failed test files from Stryker\'s log', () => {
+  const log = [
+    '12:00:01 (123) INFO DryRunExecutor Starting initial test run (tap test runner with "perTest" coverage analysis). This may take a while.',
+    '12:00:09 (123) ERROR DryRunExecutor One or more tests failed in the initial test run:',
+    '\ttest/review-desk.test.js',
+    '\t\treviews wait: no session may be stopped, reviews wait: other',
+    '\ttest/b.test.js',
+    '\t\tb fails',
+    '12:00:09 (123) ERROR Stryker There were failed tests in the initial test run.'
+  ].join('\n');
+  assert.deepEqual(failedInFirstRun(log), [
+    { test: 'test/review-desk.test.js', message: 'reviews wait: no session may be stopped, reviews wait: other' },
+    { test: 'test/b.test.js', message: 'b fails' }
+  ]);
+  assert.deepEqual(failedInFirstRun('12:00:09 (123) ERROR Stryker Could not load the test runner.\n'), []);
 });
 
 test('the collector does not run Stryker when nothing can be mutated, or the policy cannot say how', async (t) => {
