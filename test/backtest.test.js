@@ -188,6 +188,10 @@ test('a short fence inside a longer fence does not end it, so a # line in it is 
   assert.equal(section, '````md\n```\n## Not a heading\n```\n````\nnpm test passes');
   assert.equal(bodyStatus({ type: 'tests-before-after', params: {} }, section), 'met');
   // A ~~~ line does not close a backtick fence, and a fence line with text after it does not close one.
+  // A backtick run with a backtick after it is inline code, not a fence, so the next heading still ends the section.
+  assert.equal(evidenceSection('## Evidence\n```npm test``` ran\n## Next\nx\n'), '```npm test``` ran');
+  // A closing fence may have spaces after it.
+  assert.equal(evidenceSection('## Evidence\n```\n## x\n```   \nnpm test\n## Next\n'), '```\n## x\n```   \nnpm test');
   assert.equal(evidenceSection('## Evidence\n```\n~~~\n## x\n``` not a close\n## y\n```\nnpm test\n'), '```\n~~~\n## x\n``` not a close\n## y\n```\nnpm test\n');
 });
 
