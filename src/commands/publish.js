@@ -34,20 +34,21 @@ const USAGE = 'Usage: exhibit publish --evidence FILE [--policy FILE] [--storage
 // When exhibit check fails before it has a verdict, it writes summary.md and no evidence.json.
 // Then publish stores nothing. With --comment, --pr N and --repo owner/name, it posts the verdict
 // error and the reason from the summary.md beside the evidence file, in the same one comment, and
-// returns 0. Without them, it exits 2 and says where to read why. When there is an exhibit,
+// returns 0. It reads no policy then. Without them, it exits 2 and says where to read why. When there is an exhibit,
 // --pr and --repo must match it.
 export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
   const options = parseOptions(argv, forgeModule);
-  const { settings } = await readPolicy(cwd, options.policy);
-  const storage = options.storage ?? settings.storage ?? 'data-branch';
-
   const text = await readFile(resolve(cwd, options.evidence), 'utf8').catch((error) => {
     if (error.code === 'ENOENT') return null;
     throw new ToolError(`could not read ${options.evidence}: ${error.message}`);
   });
-  if (text === null) return publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout, storage });
+  // With no exhibit, nothing is stored, so the policy's storage settings are not read. The usual
+  // reason for no exhibit is a bad policy, and the publish job checks out the same base commit.
+  if (text === null) return publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout });
+  const { settings } = await readPolicy(cwd, options.policy);
+  const storage = options.storage ?? settings.storage ?? 'data-branch';
   let exhibit;
   try {
     exhibit = JSON.parse(text);
@@ -101,7 +102,7 @@ export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
 // The run when exhibit check wrote no evidence.json, because it failed before it had a verdict.
 // It stores nothing. With --comment, --pr and --repo, it posts the error and the reason from
 // summary.md as the one PR comment, and returns 0. Otherwise it throws, and says where to read why.
-async function publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout, storage }) {
+async function publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout }) {
   const summaryFile = join(dirname(options.evidence), 'summary.md');
   const why = `exhibit check wrote no ${options.evidence}, so there is no exhibit, and nothing was stored. The check failed before it had a verdict. ${summaryFile} says why: in GitHub Actions, read the check job's summary, or summary.md in the workflow artifact named exhibit.`;
   if (!options.comment) throw new ToolError(why);
@@ -123,7 +124,7 @@ async function publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout,
     throw new ToolError(`exhibit check wrote no ${options.evidence}, and the comment on PR ${options.pr} that says so was not posted: ${error.message}`);
   }
   if (options.json) {
-    stdout.write(JSON.stringify({ storage, path: null, where: null, changed: false, commit: null, comment }) + '\n');
+    stdout.write(JSON.stringify({ storage: options.storage ?? null, path: null, where: null, changed: false, commit: null, comment }) + '\n');
     return 0;
   }
   stdout.write(`exhibit check wrote no ${options.evidence}, so nothing was stored.${reason === null ? '' : ` ${summaryFile} says why.`}\n`);

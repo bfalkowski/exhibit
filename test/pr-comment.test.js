@@ -270,3 +270,14 @@ test('--pr and --repo must match the exhibit when there is one', async (t) => {
   assert.equal(same.code, 0);
   assert.deepEqual(github.calls, ['POST /graphql', 'POST /repos/acme/widgets/issues/7/comments']);
 });
+
+// The most common reason for no verdict is a bad policy. The publish job checks out the same base
+// commit, so publish must not need the policy when there is no exhibit to store.
+test('with no evidence.json, a bad evidence.yml does not stop the error comment', async (t) => {
+  const { dir, run } = setupFailedCheck(t);
+  writeFileSync(join(dir, 'evidence.yml'), 'version: 3\nkinds:\n  notes:\n    match: ["notes/**"]\n    risk: extreme\n');
+  const github = fakeGitHub();
+  const { code } = await run(github, ['--comment', '--pr', '7', '--repo', 'acme/widgets']);
+  assert.equal(code, 0);
+  assert.equal(github.comments[0].body, renderErrorComment(REASON, { enforce: false }));
+});
