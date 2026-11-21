@@ -252,6 +252,13 @@ for (const path of WORKFLOWS) {
     assert.equal(exhibitStep(publish).with.enforce, exhibitStep(workflow.jobs.check).with.enforce);
   });
 
+  // upsertComment lists the comments and posts when it finds none of its own. Two publish runs for
+  // one PR at the same time could both find none and post two comments. One group per PR makes
+  // the second run wait. It does not cancel the run that is going, which may be half done.
+  test(`${path}: two publish jobs for one PR never run at the same time`, () => {
+    assert.deepEqual(workflow.jobs.publish.concurrency, { group: 'exhibit-publish-${{ github.event.pull_request.number }}', 'cancel-in-progress': false });
+  });
+
   test(`${path}: for a PR from a fork, the check job summary says why the publish job is skipped`, () => {
     const note = workflow.jobs.check.steps.find((step) => step.name === 'Say why the publish job is skipped');
     assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
