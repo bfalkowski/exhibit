@@ -157,6 +157,16 @@ test('title_after_tag: "T-170: Docs: fix a typo" is not a fix, because docs is a
   }
 });
 
+test('title_after_tag: a fix tag counts in any form, so "[FLINK-1][fix] Fix typo" is a fix, as "T-170: fix: Fix typo" is', () => {
+  const titles = ['[FLINK-1][fix] Fix typo', 'T-170: fix: Fix typo', 'T-170: [fix] crash', 'T-170: (Fix) crash', 'T-170: fix: crash', '[FLINK-1][fix-up] crash'];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), { fix: true, fix_signal: 'title_after_tag:fix' }, title);
+  }
+  for (const title of ['T-170: [hotfix] crash', 'T-170: [fixture] crash', 'T-170: [prefix fix] crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), notFix, title);
+  }
+});
+
 test('title_after_tag: skips a tag only after a key, and only one tag', () => {
   const titles = [
     'S3A: Fix documented default',
