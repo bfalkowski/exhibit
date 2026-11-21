@@ -12,54 +12,62 @@ The backtest (S8) needs a policy to test, and `exhibit policy suggest` is not bu
   - Left out as changes, not fixes: 134, 141, 146, 147.
 - `exhibit history --repo bfalkowski/Building58 --full` ran again on 2026-11-20, from Exhibit at `main` 466299b. It read the same 146 merged PRs and found 46 fix PRs, and SZZ linked 27 of them. So there are 27 escaped defects, up from 20. It made 56 REST requests (38 got a 304) and 3 GraphQL queries. REST left went from 4,818 to 4,789.
 - Then `exhibit label --claude` ran with the person, with the default model `claude-opus-5-5`. For each defect, the person kept or rejected each SZZ link, then confirmed, edited or threw away Claude's draft, and gave the evidence that would have caught the bug. Claude drafted only the code and the category.
-- The person skipped one defect: D-071 ("1 tasks are being built"). A review of PR 50 found it and filed it as a follow-up, so it was known at review. It is a deferral, not a policy miss.
-- The labels file is copied here as [building58-labels.jsonl](building58-labels.jsonl), so the backtest can read it. The spec has no line for a skipped defect (section 8.4), so D-071 is only in this page. Ticket 355 asks for a way to record a skip in the file.
+- That run labeled 26 defects, and the person skipped D-071 ("1 tasks are being built"). A review of PR 50 found that bug and filed it as a follow-up, so review saw it.
+- Then this branch merged `main`, which had added `known_at_review` to each labels line (ticket 157). The new `exhibit label` refuses a file whose lines lack it, and the spec says to set it by hand on older lines. So, with the person's agreement, the 26 lines got `null` (nobody knows), except D-066, which got `true`: its fix PR says "Follow-up to PR 47 (T-232), review finding 1", and the person kept the link to PR 47. A second `exhibit label --claude` run, from the merged Exhibit, then labeled D-071: the person kept the link to PR 50, confirmed the draft, and answered yes to "did review see this bug". Exhibit proposed yes too, from the fix PR's body.
+- So D-066 and D-071 are deferrals: review saw each one, and a person chose to fix it later. A deferral is never a policy miss (spec 8.4 and 9.9), so neither is behind a rule.
+- The labels file is copied here as [building58-labels.jsonl](building58-labels.jsonl), so the backtest can read it.
 
 ## Results
 
 | | Count |
 |---|---|
-| Escaped defects | 27 |
-| Labeled | 26 |
-| Skipped | 1 (D-071) |
-| With at least one link the person kept | 18 |
-| With every link rejected (a real bug with no known introducing PR) | 8 |
-| SZZ links kept, of the links of the 26 labeled defects | 26 of 70 |
+| Fix PRs that SZZ linked | 27 |
+| Labeled | 27 |
+| Deferrals (`known_at_review: true`) | 2: D-066, D-071 |
+| Escaped defects, not counting deferrals | 25 |
+| Labeled defects with at least one link the person kept | 19 |
+| Labeled defects with every link rejected (a real bug with no known introducing PR) | 8 |
+| SZZ links kept | 27 of 71 |
 
 Most rejected links blamed an export list, an import, a list of kinds, a manual paragraph, or a PR that only removed comments. The bug's own lines often came from commit `9a7e34b`, which is in no PR (phase-a-history.md).
 
 ### How often the person kept Claude's draft
 
-`exhibit label --claude` printed this at the end of the run:
+`exhibit label --claude` printed this at the end of the second run:
 
-> Claude's drafts in the whole labels file: 26 shown. 25 kept unchanged, 1 edited, 0 replaced. The person kept 96% of the drafts unchanged (25 of 26, 95% interval 80% to 100%).
+> Claude's drafts in the whole labels file: 27 shown. 26 kept unchanged, 1 edited, 0 replaced. The person kept 96% of the drafts unchanged (26 of 27, 95% interval 81% to 100%).
+
+The person confirmed many drafts in a row. A long run of near-identical questions can make a person accept more than they would one at a time, so read the 96% with that in mind.
 
 The one edit was D-144: the person changed the category from "Race condition" to "flaky test", the name their fix list uses. Claude then used "flaky test" for the later flaky tests by itself.
 
 ### Counts by category
 
-| Category | Defects | With a kept link |
-|---|---|---|
-| Missing feature path | 8: D-140, D-126, D-122, D-119, D-118, D-070, D-059, D-047 | 2: D-126, D-070 |
-| flaky test | 7: D-144, D-139, D-136, D-131, D-088, D-066, D-052 | 7 |
-| Stale state | 4: D-120, D-099, D-060, D-053 | 4 |
-| Race condition | 2: D-145, D-056 | 1: D-145 |
-| Test environment leak | 2: D-135, D-092 | 2 |
-| Missing retry backoff | 1: D-148 | 0 |
-| Inconsistent rules across views | 1: D-061 | 1 |
-| Incomplete integration | 1: D-030 | 1 |
+Deferrals are in their own column. They are labeled, but they are not escaped defects, and no rule uses them.
+
+| Category | Escaped defects | With a kept link | Deferrals |
+|---|---|---|---|
+| Missing feature path | 8: D-140, D-126, D-122, D-119, D-118, D-070, D-059, D-047 | 2: D-126, D-070 | |
+| flaky test | 6: D-144, D-139, D-136, D-131, D-088, D-052 | 6 | D-066 |
+| Stale state | 4: D-120, D-099, D-060, D-053 | 4 | |
+| Race condition | 2: D-145, D-056 | 1: D-145 | |
+| Test environment leak | 2: D-135, D-092 | 2 | |
+| Missing retry backoff | 1: D-148 | 0 | |
+| Inconsistent rules across views | 1: D-061 | 1 | |
+| Incomplete integration | 1: D-030 | 1 | |
+| Wrong pluralization in message | 0 | | D-071 |
 
 ## The first policy
 
-The rule for keeping a rule comes from ticket 199 and spec section 9.9: a rule needs at least two labeled defects of one category, each with a link the person kept. The diff must show when it applies. So the `match` of a rule is only the files that the introducing PRs of at least two of those defects changed, where the blamed lines are.
+The rule for keeping a rule comes from ticket 199 and spec section 9.9: a rule needs at least two labeled defects of one category, each with a link the person kept and none a deferral. The diff must show when it applies. So the `match` of a rule is only the files that the introducing PRs of at least two of those defects changed, where the blamed lines are.
 
 ### Rules kept
 
-**`relay-tests`: the `load` probe.** Category "flaky test". Source: D-144, D-139, D-136, D-131, D-088, D-066.
-- Each was a test that raced a timer or a kept-alive connection. It passed alone and failed on a busy machine. Each introducing PR (109, 129, 88, 47, and the 7 of D-088) changed a file in `relay/test/*.test.js`.
+**`relay-tests`: the `load` probe.** Category "flaky test". Source: D-144, D-139, D-136, D-131, D-088.
+- Each was a test that raced a timer or a kept-alive connection. It passed alone and failed on a busy machine. Each introducing PR (109, 129, 88, and the 7 of D-088) changed a file in `relay/test/*.test.js`.
 - Match: `relay/test/*.test.js`.
 - Needs: a probe that runs each test file the PR added or changed three times at once, with no shared test slots.
-- Left out: D-052. It is a browser test in `relay/test/browser/`, which the probe does not run.
+- Left out: D-066, a deferral. And D-052: it is a browser test in `relay/test/browser/`, which the probe does not run.
 
 **`test-helpers`: the `room-settings` probe.** Category "Test environment leak". Source: D-135, D-092.
 - In both, `relay/test/helpers.js` passed the shell's room settings to each test relay. The tests passed on CI and failed in an office session. PR 92 (a link of D-135) and PR 8 (the link of D-092) both changed `relay/test/helpers.js`.
@@ -69,7 +77,7 @@ The rule for keeping a rule comes from ticket 199 and spec section 9.9: a rule n
 **`needs-you`: a test that fails before the change.** Category "Stale state". Source: D-120, D-053.
 - Both showed an old hand-over after the state had moved on, and both came from PR 48, which made the Needs you list in `relay/needs-you-plan.js`, `relay/needs-you.js` and `office/needs-you.js`.
 - Match: those three files.
-- Needs: the tests on the base and the head, and `failing-before` with no `when`. Building58 PRs have no labels, so Exhibit never sees a feature (spec 9.1), and `when: [fix, feature]` would not have applied to PR 48.
+- Needs: the tests on the base and the head, and a test that fails before the change, for a fix or a feature (`failing-before: { when: [fix, feature] }`). Building58 PRs have no labels, so the policy sets `source_paths` to `relay/**`, `office/**` and `shared/**`: a PR that adds a file there is a feature (spec 9.1). PR 48 added `relay/needs-you-plan.js`, `relay/needs-you.js` and `office/needs-you.js`, so it was a feature. A PR that only changes these files is neither, and needs no failing test.
 - Left out: D-060 (from PR 44, in `relay/autopilot.js`) and D-099 (from PR 12, in `relay/terminal.js`). Each is the only stale-state defect from its file.
 
 ### Categories with no rule
@@ -84,7 +92,35 @@ No draft. Its history run found 2 fix PRs and no escaped defect (phase-a-history
 
 ## The probes on real commits
 
-PROBE_RESULTS
+Each probe ran by hand on real Building58 commits, from a clean worktree with `npm ci`, and then the whole policy ran in `exhibit check`.
+
+**The `room-settings` probe catches D-135.**
+
+| Commit | Room settings | Tests | Failed |
+|---|---|---|---|
+| `main` 145143a | set, but not `OFFICE_HOOK_URL` or `OFFICE_TICKET_TOKEN` | 75 | 0 |
+| f1da5ba, just before PR 135's fix | set, as in the probe | 58 | 27 |
+| f1da5ba, just before PR 135's fix | none (`env -i`) | 73 | 0 |
+
+The run before the fix took 11 minutes, because many relays timed out. Without the settings, the same tests pass, so the settings are the cause. The commit before the fix has no `room-env.test.js`, so those runs used the other three files. The first run was made before `OFFICE_HOOK_URL` and `OFFICE_TICKET_TOKEN` joined the probe, because D-135's fix PR names them as the settings that leaked. The probe with both ran in `exhibit check` below.
+
+**`exhibit check` on PR 135 with the policy.** `exhibit check` reads the policy from the base commit (spec 8.1), so the run used two local commits in the clone, never pushed: PR 135's merge base (`d64a92a`) with the draft added as `evidence-257.yml`, and PR 135's head with the same file on top of it. The diff between them is PR 135's 9 files and nothing else.
+
+```
+exhibit check --base 1fe8769 --head 2f15aac --policy evidence-257.yml
+Verdict: needs_person. 1 gap, listed with how to fix it in .exhibit/summary.md.
+```
+
+It ran from 15:09:06Z to 15:42:26Z on 2026-11-21, on a Mac.
+
+- It read the policy with no error. The kinds were `code`, `relay-tests` and `test-helpers`. It was a feature, since the PR adds `relay/test/room-env.test.js` under `source_paths`.
+- `probe load`: met. It ran the 6 test files that the PR added or changed, three copies at once. Each copy passed (55 tests).
+- `probe room-settings`: met. 75 tests, none failed.
+- `tests-before-after`: failed, for two reasons:
+  - The base run passed the 900-second limit, and Exhibit stopped it. The test command sends each file's output to `/dev/null`, so the log does not name the file. See the hang below.
+  - Two tests failed on the head, also when run again. Alone, at PR 135's head, both pass with a clean env. `lead-refresh.test.js` fails with this session's room settings (`OFFICE_*`, `RELAY_*`, `CLAUDE_CODE_*`), which the policy's test command does not take away (setup note). `review-desk.test.js` passes alone with those settings too, so it failed from the load of six files at once. The first is a test environment leak and the second a flaky test, the two categories that the probes are for. On CI there are no room settings.
+
+**A hang in the first check run.** The first `exhibit check` on PR 135 ran Exhibit from before ticket 178, which has no time limit for the test command, and used `f1da5ba` as the base. On the base, `relay/test/lead-check.test.js` hung at 0% CPU from about 11:08Z, past its 120-second `--test-timeout`, while every other file had ended. The Lead saw it at 11:48Z, and the run was stopped by hand at 11:48:57Z. So the policy now sets `test_timeout_seconds: 900`, and in the second run the limit stopped the base run after 15 minutes.
 
 ## What comes next
 
