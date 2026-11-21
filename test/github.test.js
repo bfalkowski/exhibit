@@ -310,7 +310,7 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
   const replies = {
     '/repos/acme/widgets/commits/abc/pulls': [restPull, { ...restPull, number: 10, user: null, merged_at: null, merge_commit_sha: 'd'.repeat(40) }],
     '/repos/acme/widgets/pulls/9': restPull,
-    '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z' },
+    '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z', title: 'Follow-ups from the review of PR 46', body: '' },
     '/repos/acme/widgets/issues/51': { number: 51, created_at: '2026-01-06T09:30:00Z', pull_request: {} }
   };
   const fetch = async (url) => {
@@ -325,8 +325,8 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
   };
   assert.deepEqual(await forge.pullsForCommit('abc'), [nine, { ...nine, number: 10, author: null, mergedAt: null, mergeSha: null }]);
   assert.deepEqual(await forge.pull(9), nine);
-  assert.deepEqual(await forge.issue(50), { createdAt: '2026-01-05T09:30:00Z', isPull: false });
-  assert.deepEqual(await forge.issue(51), { createdAt: '2026-01-06T09:30:00Z', isPull: true });
+  assert.deepEqual(await forge.issue(50), { createdAt: '2026-01-05T09:30:00Z', isPull: false, title: 'Follow-ups from the review of PR 46', body: null });
+  assert.deepEqual(await forge.issue(51), { createdAt: '2026-01-06T09:30:00Z', isPull: true, title: null, body: null });
   assert.equal(await forge.issue(52), null);
 });
 

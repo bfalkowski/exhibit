@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DraftError } from './claude.js';
+import { closingIssues, proposeKnownAtReview } from './deferral.js';
 import { draftAgreement } from './draft-agreement.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
@@ -63,6 +64,16 @@ export function checkLabelLine(line) {
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
  *
+ * Exhibit proposes `known_at_review` for each defect (src/deferral.js), and the answer source gets
+ * it in `context.review`: { known_at_review: true, pr, where, sentence } for a deferral, or
+ * { known_at_review: null }. The reply's `known_at_review` is true, false or null. A reply that
+ * leaves it out keeps the proposal.
+ *
+ * `issues(numbers, fix)` is optional: GitHub, or a script in a test. It gets the numbers of the
+ * issues that the fix PR body closes with closing words, and the fix PR's history line. It returns
+ * each issue's { number, title, body }, and leaves out an issue it cannot read,
+ * so a follow-up ticket's words count too. Without it, only the fix PR's title and body count.
+ *
  * `draft({ id, title, body, text, categories })` is optional: Claude, or a script in a test. It
  * returns { code, category, model } before the defect is shown, and the answer source gets it in
  * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
@@ -79,7 +90,7 @@ export function checkLabelLine(line) {
  * in the lines this run wrote and in the whole file (spec 9.11). A skipped defect has no line, so
  * its draft is not counted.
  */
-export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
+export async function labelDefects({ cwd, ask, draft, issues, now = () => new Date() }) {
   const history = await readHistory(cwd);
   // endsWithBreak: the file ends in a line break.
   const { labels, endsWithBreak } = await readLabels(cwd);
@@ -101,7 +112,9 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
     const { drafted, draftError, draftStopped } = await askForDraft(stopped ? undefined : draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
     if (draftStopped !== null) stopped = true;
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped });
+    const closed = closingIssues(defect.fix.body);
+    const review = proposeKnownAtReview({ fix: defect.fix, blamed: defect.introducing_prs, issues: issues === undefined || closed.length === 0 ? [] : await issues(closed, defect.fix) });
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped, review });
     if (reply === QUIT) break;
     if (reply === SKIP) {
       skipped += 1;
@@ -121,6 +134,7 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
       labeled_by: labeledBy(drafted, reply),
       ...(drafted === null ? {} : { claude_draft: drafted }),
       szz_link_rejected: rejected.length > 0,
+      known_at_review: reply.known_at_review === undefined ? review.known_at_review : reply.known_at_review,
       labeled_at: now().toISOString()
     };
     const problems = checkLabelLine(line);

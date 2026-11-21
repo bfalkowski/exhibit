@@ -643,8 +643,8 @@ function shopRunWithLabels(t, labels, args = []) {
 
 // Fix PR 12 keeps both its links. Fix PR 7 has both its links rejected.
 const SHOP_LABELS = [
-  { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-21T10:00:00.000Z' },
-  { id: 'D-007', fix_pr: 7, introducing_prs: [], rejected_prs: [2, 3], code: 'Total off', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: true, labeled_at: '2026-11-21T10:00:00.000Z' }
+  { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-21T10:00:00.000Z' },
+  { id: 'D-007', fix_pr: 7, introducing_prs: [], rejected_prs: [2, 3], code: 'Total off', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: true, known_at_review: null, labeled_at: '2026-11-21T10:00:00.000Z' }
 ].map((line) => JSON.stringify(line) + '\n').join('');
 
 test('history counts the labels in the funnel, in report.md and in --json, and leaves labels.jsonl as it was', (t) => {
