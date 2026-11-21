@@ -211,6 +211,7 @@ test('timeouts count as killed, mutants with no coverage as survived and listed 
   assert.equal(result.details.not_valid, 3);
   assert.equal(result.details.survivors.length, 1);
   assert.equal(result.details.no_coverage_mutants.length, 1);
+  assert.equal(result.details.timeout_mutants.length, 1);
 });
 
 // A repo for the collector with a stand-in for Stryker. Gives the context buildExhibit makes.

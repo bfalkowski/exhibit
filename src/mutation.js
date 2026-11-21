@@ -161,7 +161,8 @@ export function judge(runResult, min) {
     test_selection: runResult.testSelection,
     output: runResult.output,
     survivors: listed(mutants, 'Survived'),
-    no_coverage_mutants: listed(mutants, 'NoCoverage')
+    no_coverage_mutants: listed(mutants, 'NoCoverage'),
+    timeout_mutants: listed(mutants, 'Timeout')
   };
   const { n, killed, timeout } = tally;
   const partial = complete ? '' : ` The budget of ${budgetSeconds} seconds ran out after ${n} mutants, so they are a sample.`;
@@ -376,6 +377,14 @@ async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFi
       // files in its sandbox, and the file it writes then loses its execute bit, so a test that runs
       // a script of the repo directly, as Building58's fake gh does, fails.
       disableTypeChecks: false,
+      // A timeout counts as killed, so a test that is only slow must not count as one. On a busy
+      // machine, Stryker's defaults (1.5 times the normal time, plus 5 seconds, with a test process
+      // on each core but one) made mutants that change nothing time out. Half the cores, and 2.5
+      // times the normal time plus 15 seconds, leave room for a busy machine. A real endless
+      // loop still ends as a timeout, only later.
+      concurrency: '50%',
+      timeoutFactor: 2.5,
+      timeoutMS: 15000,
       fileLogLevel: 'off',
       allowConsoleColors: false
     }, null, 2));
@@ -450,6 +459,7 @@ export function describeMutation(details) {
   };
   show('Survived, though a test ran the line', details.survivors);
   show('Survived, because no test ran the line', details.no_coverage_mutants);
+  show('Killed by a timeout, so check that the mutant really makes the tests hang', details.timeout_mutants);
   return lines.join('\n');
 }
 
