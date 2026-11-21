@@ -1,0 +1,15 @@
+{
+  "/v1/messages": {
+    "status": 401,
+    "headers": {
+      "request-id": "req_fixture"
+    },
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "authentication_error",
+        "message": "invalid x-api-key"
+      }
+    }
+  }
+}
