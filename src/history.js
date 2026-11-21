@@ -1,6 +1,6 @@
 import { matchKinds } from './classify.js';
 import { commentReviews, quotedVerdictWarnings } from './comment-reviews.js';
-import { classifyWithTracker, DEFAULT_FIX_SIGNALS } from './fix-signals.js';
+import { classifyWithTracker, DEFAULT_FIX_SIGNALS, withOldNames } from './fix-signals.js';
 import { ToolError } from './tool-error.js';
 
 // How many PRs ask for their files, reviews, comments and CI results at the same time.
@@ -61,7 +61,9 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
 
   const classify = async (pr, reuse) => {
     const saved = old.get(pr.number)?.ticket;
-    const { classification, problem, ticket } = await classifyWithTracker({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, tracker, { saved, reuse });
+    // A revert body can name the repo by an old name, so the revert signal asks the forge (withOldNames).
+    const named = await withOldNames({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, forge);
+    const { classification, problem, ticket } = await classifyWithTracker(named, fixSignals, tracker, { saved, reuse });
     return { classification, ticket, warnings: problem ? [`PR ${pr.number}: ${problem}`] : [] };
   };
   const withKinds = (classification, files) => ({ kinds: matchKinds(kinds, files.map((file) => file.path)), ...classification });

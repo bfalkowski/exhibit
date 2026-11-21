@@ -16,5 +16,14 @@
       "documentation_url": "https://docs.github.com/rest/commits/commits#list-pull-requests-associated-with-a-commit",
       "status": "422"
     }
+  },
+  "/repos/other/repo": {
+    "status": 404,
+    "headers": {},
+    "body": {
+      "message": "Not Found",
+      "documentation_url": "https://docs.github.com/rest/repos/repos#get-a-repository",
+      "status": "404"
+    }
   }
 }

@@ -123,29 +123,55 @@ const REVERTS_COMMIT = /^[ \t]*this reverts commit ([0-9a-f]{7,40})\b/gim;
 
 // Says whether a PR reverts earlier work: its title starts with 'Revert "', or its body names
 // a reverted PR in the PR's own repo, or a reverted commit. A line that names another repo's PR,
-// as in copied release notes, does not count. When `pr.repo` is unknown, any repo counts. A
-// revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's button
-// and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
+// as in copied release notes, does not count. The PR's own repo is `pr.repo`, and the names in
+// `pr.oldNames` that lead to it, as withOldNames finds them. When `pr.repo` is unknown, any repo
+// counts. A revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's
+// button and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
 export function isRevert(pr) {
   const title = (pr.title ?? '').trim().toLowerCase();
   if (title.startsWith('revert "revert "') || title.startsWith('reapply "')) return false;
   if (title.startsWith('revert "')) return true;
-  const { prs, commits } = revertedWork(pr.body, pr.repo ?? null);
+  const { prs, commits } = revertedWork(pr.body, pr.repo ?? null, pr.oldNames);
   return prs.length + commits.length > 0;
 }
 
 // Returns the work that a revert PR's body names: the numbers of the reverted PRs in `repo`
 // ("owner/name", any case), and the reverted commits, each once, in the order of the body.
-// With `repo` null, every named PR counts.
-export function revertedWork(body, repo) {
+// `oldNames` are other names, in lower case, that lead to `repo`, as after a rename or a
+// transfer. A PR named by one of them counts too. With `repo` null, every named PR counts.
+export function revertedWork(body, repo, oldNames = []) {
   const prs = [];
   const commits = [];
+  const names = repo === null ? null : [repo.toLowerCase(), ...oldNames];
   for (const [, name, number] of (body ?? '').matchAll(REVERTS_PR)) {
-    if (repo !== null && name.toLowerCase() !== repo.toLowerCase()) continue;
+    if (names !== null && !names.includes(name.toLowerCase())) continue;
     if (!prs.includes(Number(number))) prs.push(Number(number));
   }
   for (const [, sha] of (body ?? '').matchAll(REVERTS_COMMIT)) {
     if (!commits.includes(sha.toLowerCase())) commits.push(sha.toLowerCase());
   }
   return { prs, commits };
+}
+
+// Returns the names in the "Reverts owner/name#N" lines of `body` that are not `forge.repo` but
+// lead to it, as the repo's old name does after a rename or a transfer, in lower case. GitHub's
+// Revert button writes the name the repo had at the time, so an older revert keeps the old name.
+// The forge decides (forge.sameRepo), and asks GitHub once for each name in a run.
+export async function oldRepoNames(body, forge) {
+  const names = [];
+  for (const [, name] of (body ?? '').matchAll(REVERTS_PR)) {
+    const key = name.toLowerCase();
+    if (key === forge.repo.toLowerCase() || names.includes(key)) continue;
+    if (await forge.sameRepo(name)) names.push(key);
+  }
+  return names;
+}
+
+// Returns `pr` with `oldNames` from oldRepoNames, for the revert signal, when the answer may need
+// them: `signals` holds revert, the title does not decide, and the body names no PR or commit by
+// the current name. Else it returns `pr` as it is, and asks the forge nothing.
+export async function withOldNames(pr, signals, forge) {
+  const title = (pr.title ?? '').trim().toLowerCase();
+  if (!signals.includes(REVERT_SIGNAL) || title.startsWith('revert "') || title.startsWith('reapply "') || isRevert(pr)) return pr;
+  return { ...pr, oldNames: await oldRepoNames(pr.body, forge) };
 }

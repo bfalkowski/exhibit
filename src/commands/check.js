@@ -7,7 +7,7 @@ import { buildExhibit, COLLECTORS, exitCode, renderErrorSummary, renderSummary }
 import { MUTATION_DIR } from '../mutation.js';
 import { TESTS_DIR } from '../test-runs.js';
 import { checkExhibit } from '../exhibit-schema.js';
-import { classifyWithTracker } from '../fix-signals.js';
+import { classifyWithTracker, withOldNames } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
 import { connectTracker } from '../jira.js';
 import { DEFAULT_POLICY, missingPolicy, parsePolicy, policyPath } from '../policy.js';
@@ -91,7 +91,9 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
       pr: { number: options.pr, title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
       hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.',
-      labelAddedBy: () => forge.labelAddedBy(prNumber, SKIP_LABEL)
+      labelAddedBy: () => forge.labelAddedBy(prNumber, SKIP_LABEL),
+      // A revert body can name the repo by an old name, so the revert signal asks the forge.
+      withOldNames: (pr, signals) => withOldNames(pr, signals, forge)
     };
   } else {
     refs = { base: options.base, head: options.head, pr: { number: null, title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
@@ -112,7 +114,8 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   if (options.pr !== null) {
     const { tracker, note } = connectTracker(policy.settings, { env, fetch });
     if (note) notes.push(note);
-    const { classification, problem } = await classifyWithTracker(refs.pr, policy.settings.fix_signals, tracker);
+    const pr = await refs.withOldNames(refs.pr, policy.settings.fix_signals);
+    const { classification, problem } = await classifyWithTracker(pr, policy.settings.fix_signals, tracker);
     if (problem) notes.push(problem);
     fixed = classification;
   }

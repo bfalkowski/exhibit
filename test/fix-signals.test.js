@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFix, DEFAULT_FIX_SIGNALS, revertedWork } from '../src/fix-signals.js';
+import { classifyFix, DEFAULT_FIX_SIGNALS, revertedWork, withOldNames } from '../src/fix-signals.js';
 
 const pr = (fields) => ({ number: 1, title: 'Add a page', labels: [], branch: 'topic', ...fields });
 const notFix = { fix: false, fix_signal: null };
@@ -219,4 +219,43 @@ test('a body that names only a PR in another repo is no revert, when the PR\'s r
   assert.deepEqual(classifyFix(pr({ ...bump, body: `${bump.body}\nReverts acme/widgets#12`, repo: 'acme/widgets' }), signals), { fix: true, fix_signal: 'revert' });
   // A title from GitHub's Revert button still counts, whatever the body names.
   assert.deepEqual(classifyFix(pr({ title: 'Revert "Bump lodash"', body: 'Reverts lodash/lodash#5000', repo: 'acme/widgets' }), signals), { fix: true, fix_signal: 'revert' });
+});
+
+// A forge for withOldNames: `repo` is its name, and `oldNames` are names that GitHub redirects
+// to it, as after a rename or a transfer. `asked` lists each name it was asked about.
+function renamedForge(repo, oldNames = []) {
+  const asked = [];
+  return { repo, asked, sameRepo: async (name) => (asked.push(name), oldNames.includes(name.toLowerCase())) };
+}
+
+test('withOldNames lets a body that names the repo by an old name be a revert, after a rename or a transfer', async () => {
+  const signals = ['revert'];
+  const forge = renamedForge('newowner/widgets', ['oldowner/widgets']);
+  const back = pr({ title: 'Take back the cache', body: 'Reverts OldOwner/Widgets#12\nReverts lodash/lodash#5000', repo: 'newowner/widgets' });
+  // Without the old names, only the current name counts.
+  assert.deepEqual(classifyFix(back, signals), notFix);
+  const named = await withOldNames(back, signals, forge);
+  assert.deepEqual(named.oldNames, ['oldowner/widgets']);
+  assert.deepEqual(classifyFix(named, signals), { fix: true, fix_signal: 'revert' });
+  assert.deepEqual(revertedWork(back.body, 'newowner/widgets', named.oldNames), { prs: [12], commits: [] });
+  assert.deepEqual(forge.asked, ['OldOwner/Widgets', 'lodash/lodash']);
+  // Copied release notes that name only another repo are still no revert.
+  assert.deepEqual(classifyFix(await withOldNames(pr({ ...back, body: 'Reverts lodash/lodash#5000' }), signals, forge), signals), notFix);
+});
+
+test('withOldNames asks the forge nothing when the answer does not need it', async () => {
+  const forge = renamedForge('newowner/widgets', ['oldowner/widgets']);
+  const body = 'Reverts oldowner/widgets#12';
+  for (const [title, signals, why] of [
+    ['Take back the cache', ['label:bug'], 'the signals hold no revert'],
+    ['Revert "Add the cache"', ['revert'], 'the title makes it a revert'],
+    ['Revert "Revert "Add the cache""', ['revert'], 'the title makes it a re-land'],
+    ['Reapply "Add the cache"', ['revert'], 'the title makes it a re-land']
+  ]) {
+    const back = pr({ title, body, repo: 'newowner/widgets' });
+    assert.equal(await withOldNames(back, signals, forge), back, why);
+  }
+  const current = pr({ title: 'Take back', body: 'Reverts NewOwner/Widgets#12\nReverts oldowner/widgets#13', repo: 'newowner/widgets' });
+  assert.equal(await withOldNames(current, ['revert'], forge), current, 'the body names the current name');
+  assert.deepEqual(forge.asked, []);
 });

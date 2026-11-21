@@ -748,3 +748,27 @@ test('a kind whose name the policy schema takes, even the empty name, is written
     assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
   }
 });
+
+test('exhibit history reads a revert body that names the repo by an old name, after a rename or a transfer', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  // PR 14 has a plain title, so only its body makes it a revert. GitHub's Revert button wrote
+  // the name that the repo had then, oldowner/shop.
+  Object.assign(shop.history.find((pr) => pr.number === 14), { title: 'Take back free shipping', body: 'Reverts oldowner/shop#13' });
+  const replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(() => replay.cleanup());
+  // GitHub answers the old name with the repo it leads to: the same id as fixture/shop.
+  const replies = JSON.parse(readFileSync(replay.path, 'utf8'));
+  replies['/repos/fixture/shop'].body.id = 7;
+  replies['/repos/oldowner/shop'] = { status: 200, headers: {}, body: { id: 7, full_name: 'fixture/shop', default_branch: 'main' } };
+  writeFileSync(replay.path, JSON.stringify(replies));
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [revert]\n');
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd: shop.dir, env: gitEnv(shop.dir, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const line = readFileSync(join(shop.dir, '.exhibit/history.jsonl'), 'utf8').trim().split('\n').map((row) => JSON.parse(row)).find((row) => row.number === 14);
+  assert.deepEqual([line.classification.fix, line.classification.fix_signal], [true, 'revert']);
+  assert.deepEqual(line.szz, { blamed_commit: null, links: [{ pr: 13, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null });
+});

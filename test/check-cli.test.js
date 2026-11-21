@@ -379,9 +379,13 @@ test('check --pr passes the body and the repo to the revert signal', async (t) =
   fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [revert]\n'));
   const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
   const signalFor = async (body) => {
-    const fetch = async () => {
+    // GitHub calls the repo Owner/Name now. Its old name, oldowner/name, leads to it with the
+    // same id. lodash/lodash is another repo.
+    const repos = { '/repos/owner/name': { id: 1 }, '/repos/oldowner/name': { id: 1 }, '/repos/lodash/lodash': { id: 2 } };
+    const fetch = async (url) => {
+      const { pathname } = new URL(url);
       const pull = { number: 7, title: 'Take back the app change', body, labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
-      return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify(repos[pathname.toLowerCase()] ?? pull), { status: 200, headers: { 'content-type': 'application/json' } });
     };
     await check(['--pr', '7', '--repo', 'Owner/Name'], { env: { GITHUB_TOKEN: 'test-token' }, cwd: fixture.repo, fetch, stdout: { write() {} } });
     const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
@@ -391,6 +395,8 @@ test('check --pr passes the body and the repo to the revert signal', async (t) =
   assert.deepEqual(await signalFor('Reverts owner/name#6'), [true, 'revert']);
   // A body that names only another repo's PR is no revert.
   assert.deepEqual(await signalFor('Reverts lodash/lodash#5000'), [false, null]);
+  // A body from before a rename or a transfer names the repo by its old name.
+  assert.deepEqual(await signalFor('Reverts oldowner/name#6'), [true, 'revert']);
 });
 
 test('check --pr N marks the PR as a fix when fix_signals has pr:N', async (t) => {
