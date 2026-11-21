@@ -20,14 +20,21 @@ export const TESTS_DIR = '.exhibit/tests';
 // A test run that could not give results. `status` is the requirement status it leads to:
 // `missing` when the policy gives no test command, and `error` when the command could not run,
 // wrote no JUnit file, or ran past the time limit settings.test_timeout_seconds. `howToFix` says
-// what to do, in plain words.
+// what to do, in plain words. When the head fails and the base failed first, `baseError` holds
+// the base's error.
 export class TestRunError extends Error {
   name = 'TestRunError';
+  baseError = null;
   constructor(status, message, howToFix) {
     super(message);
     this.status = status;
     this.howToFix = howToFix;
   }
+}
+
+// The base's error as it goes in a requirement's details: its message and what to do.
+export function baseErrorDetails(error) {
+  return { message: error.message, how_to_fix: error.howToFix };
 }
 
 // Runs the test command on the base and on the head (spec 9.3).
@@ -39,17 +46,32 @@ export class TestRunError extends Error {
 // also when the run fails or is stopped. The output of each run goes to a log in TESTS_DIR in the
 // clone: base-first.log, base-again.log, head-first.log and head-again.log.
 //
-// It gives back { base, head }: for each side a Map from a test's name to its status, `passed`,
-// `failed`, `skipped` or `flaky`. A test is flaky when its two runs disagree. The name is the
-// test's file (relative to the worktree), its classname and its name, joined by " > ". A part
+// It gives back { base, head, baseError }: for each side a Map from a test's name to its status,
+// `passed`, `failed`, `skipped` or `flaky`. A test is flaky when its two runs disagree. The name is
+// the test's file (relative to the worktree), its classname and its name, joined by " > ". A part
 // that the JUnit file leaves out is left out.
-// It throws a TestRunError when a side cannot give results.
+//
+// The base can fail to give results when the PR changes the test tools: the base has no such
+// tools yet. That says nothing about the head, so Exhibit still runs the head. Then `base` is null
+// and `baseError` is the TestRunError of the base. Otherwise `baseError` is null.
+// It throws a TestRunError when the settings are wrong, or when the head cannot give results.
 export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, env = process.env }) {
   const { command, results, timeoutSeconds } = checkSettings(settings);
-  return {
-    base: await runSide({ cwd, sha: base, side: 'base', command, results, timeoutSeconds, env }),
-    head: await runSide({ cwd, sha: head, side: 'head', command, results, timeoutSeconds, env })
-  };
+  let baseTests = null;
+  let baseError = null;
+  try {
+    baseTests = await runSide({ cwd, sha: base, side: 'base', command, results, timeoutSeconds, env });
+  } catch (error) {
+    if (!(error instanceof TestRunError)) throw error;
+    baseError = error;
+  }
+  try {
+    const headTests = await runSide({ cwd, sha: head, side: 'head', command, results, timeoutSeconds, env });
+    return { base: baseTests, head: headTests, baseError };
+  } catch (error) {
+    if (error instanceof TestRunError && baseError) error.baseError = baseError;
+    throw error;
+  }
 }
 
 // Runs the test command on the base code with the PR's test files (spec 9.4). It makes a clean
@@ -216,18 +238,23 @@ async function removeWorktree(cwd, folder) {
 
 // The tests-before-after collector (spec 8.1 and 9.3). It is `met` when every test passes on the
 // head, apart from flaky ones, and `failed` when a test fails on the head. The gap names the
-// failing tests. It gives back the flaky tests of both sides in `flaky_tests`.
+// failing tests. It gives back the flaky tests of both sides in `flaky_tests`. Only the head
+// decides the status, so when the base gives no results, details.base is null and
+// details.base_error says why.
 export async function testsBeforeAfter(requirement, context) {
   let runs;
   try {
     runs = await context.testRuns();
   } catch (error) {
     if (!(error instanceof TestRunError)) throw error;
-    return { status: error.status, details: { message: error.message }, how_to_fix: error.howToFix };
+    const details = { message: error.message, ...(error.baseError ? { base_error: baseErrorDetails(error.baseError) } : {}) };
+    return { status: error.status, details, how_to_fix: error.howToFix };
   }
-  const flaky = [...new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky')])].sort();
+  const base = runs.base ?? new Map();
+  const flaky = [...new Set([...namesWith(base, 'flaky'), ...namesWith(runs.head, 'flaky')])].sort();
   const failing = namesWith(runs.head, 'failed').sort();
-  const details = { base: counts(runs.base), head: counts(runs.head), failed_on_head: failing };
+  const details = { base: runs.base ? counts(runs.base) : null, head: counts(runs.head), failed_on_head: failing };
+  if (runs.baseError) details.base_error = baseErrorDetails(runs.baseError);
 
   if (failing.length > 0) {
     const shown = failing.slice(0, LISTED).join('; ');
@@ -245,6 +272,15 @@ export async function testsBeforeAfter(requirement, context) {
     return { status: 'missing', details, flaky_tests: flaky, how_to_fix: 'The test command ran on the head, but no test passed there: its JUnit file lists no tests, or only skipped or flaky ones. Check that settings.test_command finds the tests.' };
   }
   return { status: 'met', details, flaky_tests: flaky };
+}
+
+// A line for summary.md that says the base gave no results, so only the head counts. When the
+// head gave no results too (status `error`), the gap gives the head's error, so this line only
+// says that the base failed as well.
+export function describeBaseError(details, status) {
+  if (!details.base_error) return '';
+  if (status === 'error') return ` The tests gave no results on the base either: ${details.base_error.message}.`;
+  return ` The tests gave no results on the base, so only the head counts: ${details.base_error.message}.`;
 }
 
 function namesWith(tests, status) {

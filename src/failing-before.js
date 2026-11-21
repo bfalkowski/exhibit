@@ -1,4 +1,4 @@
-import { TestRunError } from './test-runs.js';
+import { baseErrorDetails, TestRunError } from './test-runs.js';
 
 const LISTED = 20;
 
@@ -27,7 +27,11 @@ export function isTestPath(path) {
 // - it passes on the head.
 // - it is not flaky in any of the three runs.
 //
-// It is `met` with the qualifying tests listed, and `missing` when no test qualifies.
+// It is `met` with the qualifying tests listed, and `missing` when no test qualifies. It is also
+// `missing` when a run on the base gives no results, for example because the PR changes the test
+// tools: then Exhibit cannot show that a test fails on the base, so a person must check. The gap
+// says why the base run failed. A head that gives no results is `error`, as for
+// tests-before-after.
 export async function failingBefore(requirement, context) {
   let runs;
   let overlay;
@@ -35,7 +39,15 @@ export async function failingBefore(requirement, context) {
   try {
     runs = await context.testRuns();
     testFiles = prTestFiles(context.files, runs.head);
-    if (testFiles.length > 0) overlay = await context.baseWithPrTests(testFiles);
+    if (runs.baseError && testFiles.length > 0) return cannotCheck(runs.baseError, testFiles);
+    if (testFiles.length > 0) {
+      try {
+        overlay = await context.baseWithPrTests(testFiles);
+      } catch (error) {
+        if (error instanceof TestRunError && error.status === 'error') return cannotCheck(error, testFiles);
+        throw error;
+      }
+    }
   } catch (error) {
     if (!(error instanceof TestRunError)) throw error;
     return { status: error.status, details: { message: error.message }, how_to_fix: error.howToFix };
@@ -87,6 +99,16 @@ export async function failingBefore(requirement, context) {
     details,
     flaky_tests: flakyHere,
     how_to_fix: `${why} Add a test that fails without the change and passes with it, and run exhibit check again. A flaky test never counts.`
+  };
+}
+
+// failing-before when a run on the base gave no results: `missing`, with the base's error.
+function cannotCheck(error, testFiles) {
+  return {
+    status: 'missing',
+    details: { test_files: testFiles, tests: [], passed_on_base: [], did_not_load_on_base: [], base_error: baseErrorDetails(error) },
+    flaky_tests: [],
+    how_to_fix: `The tests gave no results on the base, so Exhibit cannot show that a test fails there and passes on the head. ${error.howToFix} If the change adds or changes the test tools, the base cannot run the tests, so a person must check that a test in the change shows the problem.`
   };
 }
 
