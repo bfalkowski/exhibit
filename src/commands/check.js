@@ -73,12 +73,12 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     refs = {
       base: pull.baseSha,
       head: pull.headSha,
-      pr: { title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
+      pr: { number: options.pr, title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
       hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
     };
   } else {
-    refs = { base: options.base, head: options.head, pr: { title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
+    refs = { base: options.base, head: options.head, pr: { number: null, title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
   }
 
   const base = await commitSha(cwd, refs.base, refs.hint);
