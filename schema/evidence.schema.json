@@ -42,6 +42,17 @@
           },
           "description": "The signals that mark a PR as a fix (spec 9.1). null or absent means the defaults [label:bug, title:fix, branch:fix/]."
         },
+        "source_paths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Globs on file paths that mark source code (spec 9.1). A PR that adds a file that one of them matches is a feature. null or absent means no path is source, so only the feature label marks a feature."
+        },
         "jira": {
           "type": "object",
           "required": [

@@ -91,6 +91,62 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
+test('a PR that adds a file under a source path is a feature, and one that only changes a file is not', (t) => {
+  const fixture = buildRepo(t);
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\nsettings:\n  source_paths: ["src/**"]\ndefault:\n  risk: medium\n  needs:\n    - failing-before: { when: [feature] }\n');
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '-b', 'new-src', 'start');
+  mkdirSync(join(fixture.repo, 'src'), { recursive: true });
+  writeFileSync(join(fixture.repo, 'src', 'b.js'), 'export const b = 1;\n');
+  git('add', 'src/b.js');
+  git('commit', '-q', '-m', 'add b');
+  git('checkout', '-q', '-b', 'moved-src', 'start');
+  git('mv', 'src/app.js', 'src/moved.js');
+  git('commit', '-q', '-m', 'move app');
+  // git pairs a removed and a new file as a rename only when they are at least 50% alike. This
+  // move also rewrites the whole file, so git sees a new file.
+  git('checkout', '-q', '-b', 'moved-and-rewritten', 'start');
+  git('mv', 'src/app.js', 'src/main.js');
+  writeFileSync(join(fixture.repo, 'src', 'main.js'), 'import { run } from "node:test";\nrun();\n');
+  git('add', 'src/main.js');
+  git('commit', '-q', '-m', 'move and rewrite app');
+  // A file outside the source paths that moves into src with no change.
+  git('checkout', '-q', '-b', 'with-lib', 'start');
+  mkdirSync(join(fixture.repo, 'lib'), { recursive: true });
+  writeFileSync(join(fixture.repo, 'lib', 'util.js'), 'export const util = 1;\n');
+  git('add', 'lib/util.js');
+  git('commit', '-q', '-m', 'add lib');
+  git('checkout', '-q', '-b', 'into-src');
+  git('mv', 'lib/util.js', 'src/util.js');
+  git('commit', '-q', '-m', 'move util into src');
+  git('checkout', '-q', 'main');
+
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'new-src']);
+  const added = readEvidence(fixture.repo);
+  assert.equal(added.classification.feature, true);
+  // failing-before { when: [feature] } is needed, so it has no reason to skip.
+  assert.equal(added.requirements[0].details.reason, undefined);
+  assert.deepEqual(checkExhibit(added), []);
+
+  // The fix/src branch only changes src/app.js, so failing-before is not needed.
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  const changed = readEvidence(fixture.repo);
+  assert.equal(changed.classification.feature, false);
+  assert.match(changed.requirements[0].details.reason, /only on a feature/);
+
+  // A file that moves inside src is not a new file.
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-src']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, false);
+
+  // A file that moves and changes more than half of its content counts as a new file (spec 9.1).
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-and-rewritten']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, true);
+
+  // A file that moves into a source path from outside it, with no change, is a rename, not a new file.
+  exhibitCheck(fixture, ['--base', 'with-lib', '--head', 'into-src']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, false);
+});
+
 test('check exits 1 for a change to evidence.yml', (t) => {
   const fixture = buildRepo(t);
   const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'policy']);
