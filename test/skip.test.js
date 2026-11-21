@@ -65,7 +65,7 @@ test('the exit code: a full skip turns needs_person into 0 in enforce mode, and 
 
 test('summary.md names the skip, its reason and who added the label, and keeps the verdict', () => {
   const summary = renderSummary(withSkip(RECORDED));
-  assert.match(summary, /^# Exhibit check: needs a person\n\nVerdict: \*\*needs_person\*\* \(exit code 0\)\.\n\nSkip: the label exhibit-skip was added by builder-bot\[bot\], for head commit 3333333\. Reason: The probe needs a real phone\.\n\nThe verdict stays needs_person, but the skip lets the PR through\. It is recorded and counted\.\n/);
+  assert.match(summary, /^# Exhibit check: needs a person\n\nVerdict: \*\*needs_person\*\* \(exit code 0\)\.\n\nSkip: the label exhibit-skip was added by builder-bot\[bot\], at head commit 3333333\. Reason: The probe needs a real phone\.\n\nThe verdict stays needs_person, but the skip lets the PR through\. It is recorded and counted\.\n/);
   assert.match(renderSummary(withSkip(RECORDED), { shadow: true }), /\(exit code 0\)[\s\S]*Shadow mode, so the skip changes nothing\./);
   assert.match(renderSummary(withSkip(RECORDED, 'error')), /\(exit code 2\)[\s\S]*A skip does not let an error through/);
   assert.match(renderSummary(withSkip({ ...RECORDED, by: null })), /added by someone the forge does not name/);
@@ -103,7 +103,7 @@ test('the schema allows the skip record, and still checks it and the rest of the
 test('the PR comment shows the skip, with the reason as inline code so it cannot mention anyone', () => {
   const skip = { ...RECORDED, reason: 'ping @octocat with `code` and **bold**' };
   const body = renderComment(withSkip(skip), { enforce: true, link: null, where: 'x' });
-  assert.match(body, /\n\nSkip: the label exhibit-skip was added by builder-bot\[bot\], for head commit 3333333\. Reason: ``ping @octocat with `code` and \*\*bold\*\*`` The verdict stays needs_person, but the skip lets the PR through\. It is recorded and counted\.\n\n/);
+  assert.match(body, /\n\nSkip: the label exhibit-skip was added by builder-bot\[bot\], at head commit 3333333\. Reason: ``ping @octocat with `code` and \*\*bold\*\*`` The verdict stays needs_person, but the skip lets the PR through\. It is recorded and counted\.\n\n/);
   assert.match(renderComment(withSkip(RECORDED), { enforce: false, link: null, where: 'x' }), /Shadow mode: nothing waits on this\.\n\nSkip: [^\n]* Shadow mode, so the skip changes nothing\./);
   assert.match(renderComment(withSkip({ ...RECORDED, status: 'no-reason', reason: null }), { enforce: true, link: null, where: 'x' }), /A label with no reason is not a skip/);
   // An exhibit with no skip gets the same comment as before.
@@ -260,5 +260,5 @@ test('exhibit publish writes the skip to the data branch with the exhibit, and s
   assert.equal(stored, text);
   assert.deepEqual(JSON.parse(stored).skip, RECORDED);
   assert.equal(posted.length, 1);
-  assert.match(posted[0], /Skip: the label exhibit-skip was added by builder-bot\[bot\], for head commit 3333333\. Reason: `The probe needs a real phone\.` The verdict stays needs_person, but the skip lets the PR through\./);
+  assert.match(posted[0], /Skip: the label exhibit-skip was added by builder-bot\[bot\], at head commit 3333333\. Reason: `The probe needs a real phone\.` The verdict stays needs_person, but the skip lets the PR through\./);
 });

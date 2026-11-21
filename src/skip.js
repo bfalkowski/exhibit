@@ -20,7 +20,9 @@ export function skipReason(body) {
 
 // The skip record for the exhibit, or null when the PR has neither part. `pr` holds the PR's
 // labels and body. `labelAddedBy()` asks the forge who added the label, and is called only when
-// the label is there. `head` is the head commit that the skip was given for.
+// the label is there. `head` is the head commit that the check ran on. The label and the body
+// line stay on the PR after a push, so a skip also covers later commits until someone removes
+// the label.
 //
 // `status` says which parts are there: `recorded` for both, `no-reason` for the label alone,
 // `no-label` for the reason alone. Only `recorded` is a skip. The other two are kept, so the
@@ -52,7 +54,7 @@ export function describeSkip(exhibit, { enforce, quote = (text) => text }) {
     return [`The PR body says why it is skipped, but the PR does not have the label ${SKIP_LABEL}. A reason with no label is not a skip, so it changes nothing. Add the label to skip.`];
   }
   const by = skip.by === null ? 'someone the forge does not name' : skip.by;
-  const lines = [`Skip: the label ${SKIP_LABEL} was added by ${by}, for head commit ${skip.head.slice(0, 7)}. Reason: ${quote(skip.reason)}`];
+  const lines = [`Skip: the label ${SKIP_LABEL} was added by ${by}, at head commit ${skip.head.slice(0, 7)}. Reason: ${quote(skip.reason)}`];
   if (!enforce) lines.push('Shadow mode, so the skip changes nothing. It is recorded and counted.');
   else if (exhibit.verdict === 'needs_person') lines.push('The verdict stays needs_person, but the skip lets the PR through. It is recorded and counted.');
   else if (exhibit.verdict === 'error') lines.push('A skip does not let an error through: Exhibit itself failed, so the check still fails.');

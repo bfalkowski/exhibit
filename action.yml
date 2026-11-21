@@ -32,7 +32,7 @@ inputs:
     required: false
     default: 'false'
   enforce:
-    description: false is shadow mode, and the check step succeeds whatever the verdict (check --shadow). true fails the check step on needs_person and on error, and publish says so in the comment (publish --enforce). With true, a needs_person PR that carries a skip, the label exhibit-skip and a line in its body that starts with "Exhibit skip:" and gives a reason, passes the check step.
+    description: false is shadow mode, and the check step succeeds whatever the verdict (check --shadow). true fails the check step on needs_person and on error, and publish says so in the comment (publish --enforce). With true, a needs_person PR that carries a skip, the label exhibit-skip and a line in its body that starts with "Exhibit skip:" and gives a reason, passes the check step. A new label or a body edit does not run the check again, so after you add a skip, re-run the check job.
     required: false
     default: 'false'
   token:

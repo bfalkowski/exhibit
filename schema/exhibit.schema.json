@@ -82,7 +82,7 @@
         "status": { "enum": ["recorded", "no-reason", "no-label"], "description": "recorded: the label and a reason, so it is a skip. no-reason: the label alone. no-label: the reason alone. Only recorded is a skip." },
         "by": { "type": ["string", "null"], "minLength": 1, "description": "Who added the label, as the forge gives it, or null when the forge does not say or there is no label." },
         "reason": { "type": ["string", "null"], "minLength": 1, "description": "The text after \"Exhibit skip:\" in the PR body, or null." },
-        "head": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$", "description": "The head commit that the skip was given for." }
+        "head": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$", "description": "The head commit that the check ran on. The skip stays on the PR after a push, so it also covers later commits until someone removes the label." }
       },
       "if": { "type": "object", "properties": { "status": { "enum": ["no-reason"] } } },
       "then": { "properties": { "reason": { "type": "null" } } },
