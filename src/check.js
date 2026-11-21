@@ -34,7 +34,8 @@ export const COLLECTORS = Object.freeze({
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
 // changed paths `files`, the paths the change adds `added` (new files, not moved ones), what is known of the PR (`pr`: number, title, body, labels, branch, repo), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
-// `head` SHAs, and `cwd`, the clone, and `env` for the test command. `skip` is the skip record
+// `head` SHAs, and `cwd`, the clone, and `env` for the test command. `fixed` is { fix, fix_signal }
+// when the caller asked the tracker already (spec 9.1). Without it, the fix signals classify `pr`. `skip` is the skip record
 // from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
@@ -59,7 +60,7 @@ export const COLLECTORS = Object.freeze({
 // commits.
 export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, runBaseWithPrTests = runTestsOnBaseWithPrTests, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
   const files = [...new Set(change.files)].sort();
-  const { classification, requirements } = classifyChange(change.policy, files, change.pr, change.policyFile.path, change.added ?? []);
+  const { classification, requirements } = classifyChange(change.policy, files, change.pr, change.policyFile.path, change.added ?? [], change.fixed);
   const policyName = change.policyFile.path;
   const { has_default: hasDefault, ...shown } = classification;
 
@@ -191,8 +192,9 @@ export const VERDICT_WORDS = {
 
 // The summary.md for an exhibit: the verdict, the change, each requirement, and each gap with how
 // to fix it, in plain words. It holds no time, so two runs on the same commits give the same file.
-// With `shadow`, it says that the check exits 0 whatever the verdict (spec 10).
-export function renderSummary(exhibit, { shadow = false } = {}) {
+// With `shadow`, it says that the check exits 0 whatever the verdict (spec 10). Each of `notes` is
+// one more line under the change, such as why the tracker:jira signal could not match (spec 9.1).
+export function renderSummary(exhibit, { shadow = false, notes = [] } = {}) {
   const c = exhibit.classification;
   const lines = [];
   lines.push(`# Exhibit check: ${VERDICT_WORDS[exhibit.verdict]}`, '');
@@ -208,6 +210,7 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
   else lines.push('- No kind of change matched the changed files, so the default rules apply.');
   lines.push(`- Risk: ${c.risk}.`);
   lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
+  for (const note of notes) lines.push(`- ${note.charAt(0).toUpperCase()}${note.slice(1)}`);
   if (c.signals_from === 'branch') {
     lines.push('- Exhibit knew only the branch name, not the PR\'s title, body or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
   }

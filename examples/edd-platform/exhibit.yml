@@ -65,6 +65,12 @@ jobs:
     # After the check, even when the check step failed, so the comment shows why. Never for a PR
     # from a fork.
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    # One publish at a time for each PR. Publish posts the comment when it finds none of its own, so
+    # two at the same time could post two comments. A second run waits. If a third comes while it
+    # waits, GitHub cancels the waiting one, and the newest run posts.
+    concurrency:
+      group: exhibit-publish-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
