@@ -121,7 +121,7 @@ async function askForge(forge, sha, defaultBranch) {
 // found by its signal, such as jira:PAY-482, takes the issue's created date as its bug report
 // date when the GitHub issues give none (step 5).
 export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {}, known = lines }) {
-  const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
+  const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge, warn) });
   const knownPrs = new Map(known.map((line) => [line.number, line]));
   const revertContext = { findPr, forge, knownPrs };
   revertContext.takesOut = createTakesOut(dir, revertContext);
@@ -160,22 +160,25 @@ export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {
 // and not one that came in through a merge commit. The tip is the default branch of a remote
 // that points at the forge's repo, else the local branch with that name. Git lists the line
 // once per run, when a merge SHA first needs it. With no such branch in the clone, or when git
-// fails to list the line, no commit is on the line, so the forge is asked.
-function mainLineCheck(dir, forge) {
+// fails to list the line, no commit is on the line, so the forge is asked. A failed git gives
+// one warning, because a PR from before a branch rename that the forge lists no PR for then
+// loses its link (spec 9.2, step 4). Git is not asked again: a failed git most often fails again.
+function mainLineCheck(dir, forge, warn) {
   let line = null;
   return async (sha, branch) => {
-    line ??= firstParentLine(dir, forge, branch);
+    line ??= firstParentLine(dir, forge, branch, warn);
     return (await line).has(sha);
   };
 }
 
-async function firstParentLine(dir, forge, branch) {
+async function firstParentLine(dir, forge, branch, warn) {
   try {
     const tip = await branchTip(dir, forge, branch);
     if (!tip) return new Set();
     return new Set((await git(dir, ['rev-list', '--first-parent', tip])).split('\n').filter(Boolean));
   } catch (error) {
     if (!(error instanceof GitError)) throw error;
+    warn(`SZZ: git could not list the first-parent line of ${branch}, so GitHub is asked for each merge SHA. A PR merged before a rename of the default branch can lose its link. (${error.message})`);
     return new Set();
   }
 }

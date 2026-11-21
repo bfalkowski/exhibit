@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -276,8 +276,9 @@ test('a merge SHA from before a default branch rename', async (t) => {
 
 // PR 2 has base_ref "master" as above, so its merge SHA needs the first-parent line. Here git
 // fails to list that line. SZZ then asks GitHub, as it did before the line was checked, and
-// GitHub lists PR 2 for its commit.
-test('when git cannot list the first-parent line of the default branch, SZZ asks GitHub', async (t) => {
+// GitHub lists PR 2 for its commit. SZZ warns once, because a PR from before a branch rename
+// that GitHub lists no PR for would lose its link, and the user must see why.
+test('when git cannot list the first-parent line of the default branch, SZZ warns once and asks GitHub', async (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const history = repo.history.map((pr) => (pr.number === 2 ? { ...pr, base_ref: 'master' } : pr));
@@ -287,10 +288,29 @@ test('when git cannot list the first-parent line of the default branch, SZZ asks
   const warnings = [];
   const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), warn: (text) => warnings.push(text) });
   const fix7 = lines.find((line) => line.number === 7);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(warnings, ['SZZ: git could not list the first-parent line of main, so GitHub is asked for each merge SHA. A PR merged before a rename of the default branch can lose its link. (git failed: git rev-list: fatal: rev-list broke)']);
   assert.deepEqual(fix7.szz.links.map((link) => link.pr), [2, 3]);
   assert.ok(fetch.calls.some((call) => call.key.includes(`/commits/${pr2Sha}/pulls`)), 'GitHub is asked about PR 2\'s commit');
   for (const line of lines.filter((l) => l.classification?.fix)) assert.notEqual(line.szz, null, `PR ${line.number}`);
+});
+
+// Here every PR has base_ref "master", so each squash merge SHA that SZZ meets needs the
+// first-parent line: PR 2's commit that fix 7 blames, and the merge SHAs that the walk back from
+// each squash fix (7, 9 and 14) meets. Git fails to list the line. It runs once, and SZZ warns
+// once, however many merge SHAs need the line.
+test('when git cannot list the first-parent line for many merge SHAs, git runs once and SZZ warns once', async (t) => {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  const history = repo.history.map((pr) => ({ ...pr, base_ref: 'master' }));
+  const fetch = commitPullsFetch(repo, REPO);
+  const failures = gitThatFailsOn(t, '--first-parent', 'rev-list broke');
+  const warnings = [];
+  await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), warn: (text) => warnings.push(text) });
+  const mergeShas = new Set(history.map((pr) => pr.merge_sha));
+  const needLine = new Set(askedShas(fetch).filter((sha) => mergeShas.has(sha)));
+  assert.ok(needLine.size >= 2, `merge SHAs that needed the line: ${needLine.size}`);
+  assert.equal(failures(), 1);
+  assert.deepEqual(warnings, ['SZZ: git could not list the first-parent line of main, so GitHub is asked for each merge SHA. A PR merged before a rename of the default branch can lose its link. (git failed: git rev-list: fatal: rev-list broke)']);
 });
 
 test('SZZ gives szz: null and a warning when the fix merge commit is not in the clone', async (t) => {
@@ -752,19 +772,22 @@ function repoWithManyChangedFiles(t) {
 }
 
 // Puts a git first on PATH that fails at once, without reading its input, when one of its
-// arguments is `arg`, and runs the real git for every other command.
+// arguments is `arg`, and runs the real git for every other command. Returns a function that
+// gives how many times git failed so far.
 function gitThatFailsOn(t, arg, message) {
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   const bin = tempDir(t, 'exhibit-fake-git-');
+  const log = join(bin, 'failures.log');
   writeFileSync(join(bin, 'git'), `#!/bin/sh
 for arg in "$@"; do
-  if [ "$arg" = ${arg} ]; then echo 'fatal: ${message}' >&2; exit 128; fi
+  if [ "$arg" = ${arg} ]; then echo x >> '${log}'; echo 'fatal: ${message}' >&2; exit 128; fi
 done
 exec '${realGit}' "$@"
 `, { mode: 0o755 });
   const path = process.env.PATH;
   process.env.PATH = `${bin}${delimiter}${path}`;
   t.after(() => { process.env.PATH = path; });
+  return () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).length : 0);
 }
 
 test('when git cat-file fails before it reads a long file list, SZZ skips the fix with a warning, and the run goes on', async (t) => {
