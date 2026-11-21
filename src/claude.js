@@ -49,7 +49,7 @@ const OUTPUT_SCHEMA = {
   additionalProperties: false,
   properties: {
     code: { type: 'string', description: `What went wrong, in a few plain words. One line, at most ${ANSWER_LIMITS.code} characters.` },
-    category: { type: 'string', description: `The kind of bug. Reuse a category used so far when one fits. One line, at most ${ANSWER_LIMITS.category} characters.` }
+    category: { type: 'string', description: `The kind of bug. Reuse a category used so far when one fits. Use words, not only digits. One line, at most ${ANSWER_LIMITS.category} characters.` }
   }
 };
 
@@ -96,8 +96,9 @@ export function createDrafter({ apiKey, model = DEFAULT_MODEL, fetch = globalThi
     const problems = checkSchema(DRAFT_SCHEMA, parsed);
     if (problems.length > 0) throw new DraftError(`Claude's draft does not fit the labels schema: ${problems[0]}`);
     // exhibit label reads a category answer of only digits as a pick from the list (spec 8.4). So
-    // a saved category "5" would show as "1. 5", and typing 5 would not pick it.
-    if (/^\d+$/.test(parsed.category)) throw new DraftError(`Claude's draft category "${parsed.category}" is only digits, and a category cannot be only digits`);
+    // a saved category "5" would show as "1. 5", and typing 5 would not pick it. The question
+    // trims each answer, so "5 " counts as only digits too.
+    if (/^\d+$/.test(parsed.category.trim())) throw new DraftError(`Claude's draft category "${parsed.category}" is only digits, and a category cannot be only digits`);
     return { code: parsed.code, category: parsed.category, model };
   };
 }

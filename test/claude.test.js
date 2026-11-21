@@ -47,6 +47,7 @@ test('the request tells Claude the length limits of the labels schema', async ()
   const { properties } = bodies[0].output_config.format.schema;
   assert.match(properties.code.description, /at most 200 characters/);
   assert.match(properties.category.description, /at most 60 characters/);
+  assert.match(properties.category.description, /Use words, not only digits\./);
 });
 
 test('the model is a setting', async () => {
@@ -87,4 +88,8 @@ test('a draft category of only digits is a DraftError, because the category ques
     assert.equal(error.stopsDrafting, null);
     return true;
   });
+});
+
+test('a draft category of digits and a space is a DraftError too, because the category question trims each answer', async () => {
+  await assert.rejects(recorded('digits-category-space').draft(defect), (error) => error instanceof DraftError && error.message === 'Claude\'s draft category "5 " is only digits, and a category cannot be only digits');
 });
