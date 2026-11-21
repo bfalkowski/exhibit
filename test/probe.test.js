@@ -90,6 +90,13 @@ test('a folder artifact leaves out a symbolic link to its parent folder, and the
   assert.equal(readFileSync(join(copy, 'a'), 'utf8'), 'a\n');
 });
 
+test('a folder artifact leaves out a symbolic link that leads nowhere', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep && echo a > rep/a && ln -s nowhere rep/dead', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), ['a']);
+});
+
 test('a folder artifact leaves out a symbolic link to the worktree root', async (t) => {
   const where = setup(t);
   const result = await runProbe(probe({ run: 'mkdir -p rep/sub && echo a > rep/a && ln -s "$PWD" rep/sub/root', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });

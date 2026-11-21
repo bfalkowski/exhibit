@@ -122,7 +122,8 @@ async function artifactSource(root, path) {
 // only an entry whose real path is inside the worktree, so a link cannot bring a file from
 // elsewhere on the machine. And it leaves out an entry whose real path is a folder that holds the
 // entry, such as rep/up -> .. or a link to the worktree root, because cp would copy that folder
-// into itself until it fails with ELOOP. An entry that cannot be read is left out too.
+// into itself until it fails with ELOOP. An entry that cannot be read, or a link that leads nowhere,
+// is left out too.
 async function keepInCopy(root, source, entry) {
   const real = await insideRoot(root, entry);
   if (real === null) return false;
