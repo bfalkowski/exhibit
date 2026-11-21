@@ -40,11 +40,11 @@ export const COLLECTORS = Object.freeze({
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
 // `settings` and `equivalentMutants`, and `testRuns()`, which runs the tests on the base and the
-// head the first time it is called and gives back the same per-test results after that. So a later collector, such as
-// failing-before, uses the same results and does not run the tests again. `runTests` makes those
-// results. `baseWithPrTests(paths)` runs the tests on the base with those paths as they are on the
-// head (spec 9.4). `runBaseWithPrTests` makes that run. It runs once for each set of paths, so two
-// failing-before requirements share one run.
+// head the first time it is called and gives back the same per-test results after that. So a later
+// collector, such as failing-before, uses the same results and does not run the tests again.
+// `runTests` makes those results. `baseWithPrTests(paths)` runs the tests on the base with those
+// paths as they are on the head (spec 9.4). `runBaseWithPrTests` makes that run. It runs once for
+// each set of paths, so two failing-before requirements share one run.
 //
 // A failing-before whose `when` names neither fix nor feature of this change is not needed
 // (spec 8.1). It gets `skipped` with the reason, and no collector runs. This skip is no gap, so it
