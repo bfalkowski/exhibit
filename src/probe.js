@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, cp, mkdir, open, realpath } from 'node:fs/promises';
+import { access, chmod, cp, lstat, mkdir, mkdtemp, open, readdir, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 
 // The time limit for one probe when the policy does not set settings.probe_timeout_seconds.
@@ -18,7 +19,10 @@ export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
 // limit.
 //
 // `env` is the env of the command, and the env of Exhibit when it is left out. It is the run's env,
-// the same one the test command gets (spec 9.6).
+// the same one the test command gets (spec 9.6), with one change: TMPDIR, TMP, TEMP and HOME all
+// name a fresh, empty folder of this probe's own, which Exhibit removes after the probe. So a file
+// that one probe writes to its temporary folder or its home folder does not reach a later probe,
+// and a hidden probe's file cannot reach the exhibit through a later probe's artifacts or output.
 //
 // `outDir` is the folder for this probe's files, and `outPath` is the same folder as the exhibit
 // names it, such as .exhibit/probes/link-check. The command's output goes to output.log there,
@@ -27,7 +31,14 @@ export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
 // status (spec 9.7).
 export async function runProbe({ name, run, artifacts = [], hidden = false }, { worktree, outDir, outPath, timeoutSeconds, env = process.env }) {
   if (!hidden) await mkdir(outDir, { recursive: true });
-  const outcome = await runInGroup(run, { cwd: worktree, env, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
+  const own = await mkdtemp(join(tmpdir(), 'exhibit-probe-'));
+  let outcome;
+  try {
+    const probeEnv = { ...env, TMPDIR: own, TMP: own, TEMP: own, HOME: own };
+    outcome = await runInGroup(run, { cwd: worktree, env: probeEnv, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
+  } finally {
+    await removeAll(own);
+  }
 
   const root = await realpath(worktree);
   const found = [];
@@ -60,6 +71,29 @@ export async function runProbe({ name, run, artifacts = [], hidden = false }, { 
     ? 'It is a hidden check, so its output is not in the exhibit. Ask a maintainer to read it.'
     : `Read its output in ${outPath}/output.log.`;
   return { status: 'failed', details, how_to_fix: `The probe ${name} ran "${run}" in the head worktree and ${why}. ${read} Fix the change, and run exhibit check again.` };
+}
+
+// Removes `folder` and all it holds. A probe can leave a folder that it may not write to, as Go
+// does with its module cache. Then rm fails with EACCES, so this gives each folder inside back
+// its owner's rights and tries once more.
+async function removeAll(folder) {
+  try {
+    await rm(folder, { recursive: true, force: true });
+  } catch (error) {
+    if (error.code !== 'EACCES' && error.code !== 'EPERM') throw error;
+    await allowWrites(folder);
+    await rm(folder, { recursive: true, force: true });
+  }
+}
+
+// Gives `folder` and every folder under it read, write and search rights for its owner. It does
+// not follow symbolic links.
+async function allowWrites(folder) {
+  await chmod(folder, 0o700);
+  for (const entry of await readdir(folder)) {
+    const path = join(folder, entry);
+    if ((await lstat(path)).isDirectory()) await allowWrites(path);
+  }
 }
 
 // Why the probe failed, in words that follow "and", or null when it is met.
