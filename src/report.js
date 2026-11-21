@@ -61,7 +61,11 @@ export function funnel(lines, { szzRan, labels = NO_LABELS }) {
   const counts = { merged_prs: lines.length, fix_prs: lines.filter((line) => line.classification.fix).length, szz_linked: szzRan ? defects.length : null, labeled: null, kept: null, labels: labels.state };
   if (!szzRan || labels.state !== 'read') return counts;
   const fixPrs = new Set(defects.map((fix) => fix.number));
-  const labeled = labels.lines.filter((label) => fixPrs.has(label.fix_pr));
+  // Each defect counts once, by its first line, as in exhibit label. A second line for the same
+  // fix PR can come from a merge of two label files or a hand edit, and the schema allows it.
+  const first = new Map();
+  for (const label of labels.lines) if (fixPrs.has(label.fix_pr) && !first.has(label.fix_pr)) first.set(label.fix_pr, label);
+  const labeled = [...first.values()];
   return { ...counts, labeled: labeled.length, kept: labeled.filter((label) => label.introducing_prs.length > 0).length };
 }
 
@@ -72,7 +76,7 @@ function funnelBlocks(counts, labels) {
     item(`Merged PRs read: ${counts.merged_prs}`),
     item(`Fix PRs: ${counts.fix_prs}`),
     item(`Fix PRs with an SZZ link, the escaped defects: ${or(counts.szz_linked, 'SZZ did not run')}`),
-    item(`Defects labeled in exhibit label: ${or(counts.labeled, noLabels)}`),
+    item(`Defects labeled with exhibit label: ${or(counts.labeled, noLabels)}`),
     item(`Defects with at least one link that a person kept: ${or(counts.kept, noLabels)}`)
   ])];
   if (labels.state === 'unreadable') blocks.push(paragraph(`Exhibit could not read the labels, so it does not count them: ${labels.problem}`));

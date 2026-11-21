@@ -585,7 +585,7 @@ test('history counts the labels in the funnel, in report.md and in --json, and l
   const run = shopRunWithLabels(t, SHOP_LABELS, ['--json']);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 2, kept: 1, labels: 'read' });
-  assert.match(run.markdown, /- Defects labeled in exhibit label: 2\n- Defects with at least one link that a person kept: 1\n/);
+  assert.match(run.markdown, /- Defects labeled with exhibit label: 2\n- Defects with at least one link that a person kept: 1\n/);
   assert.equal(readFileSync(run.labelsPath, 'utf8'), SHOP_LABELS);
 });
 
@@ -593,7 +593,7 @@ test('with no labels file, history says "not labeled yet" for the last two steps
   const run = shopRunWithLabels(t, undefined, ['--json']);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' });
-  assert.match(run.markdown, /- Defects labeled in exhibit label: not labeled yet\n- Defects with at least one link that a person kept: not labeled yet\n/);
+  assert.match(run.markdown, /- Defects labeled with exhibit label: not labeled yet\n- Defects with at least one link that a person kept: not labeled yet\n/);
   assert.equal(existsSync(run.labelsPath), false);
 });
 
@@ -602,7 +602,7 @@ test('a labels line that fails its schema makes the report say the labels could 
   const run = shopRunWithLabels(t, bad);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stderr, /^exhibit: warning: the report does not count the labels, because \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./m);
-  assert.match(run.markdown, /- Defects labeled in exhibit label: the labels could not be read\n/);
+  assert.match(run.markdown, /- Defects labeled with exhibit label: the labels could not be read\n/);
   assert.match(run.markdown, /Exhibit could not read the labels, so it does not count them: \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./);
   assert.equal(readFileSync(run.labelsPath, 'utf8'), bad);
 });

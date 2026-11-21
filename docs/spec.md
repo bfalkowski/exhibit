@@ -368,7 +368,7 @@ The history report has these parts, in this order:
    1. Merged PRs read.
    2. Fix PRs.
    3. Fix PRs with an SZZ link: the escaped defects. A fix whose bug was found before release is not one (part 6).
-   4. Defects labeled: the escaped defects with a line in `.exhibit/labels.jsonl` (section 8.4). A line for a defect that is no longer in the history is not counted.
+   4. Defects labeled: the escaped defects with a line in `.exhibit/labels.jsonl` (section 8.4). A line for a defect that is no longer in the history is not counted. Each defect counts once, by its first line, as in `exhibit label`. A second line for the same fix PR, for example from a merge of two label files, is not counted again.
    5. Defects with at least one link that a person kept: the labeled defects whose `introducing_prs` is not empty. A defect whose links the person all rejected counts as labeled, but not as kept.
 
    `exhibit history` reads `.exhibit/labels.jsonl` only to count it, and never changes it. With no labels file, steps 4 and 5 say "not labeled yet" in place of a number. When the file cannot be read, or a line is not JSON or fails the labels schema, steps 4 and 5 say "the labels could not be read", a sentence under the funnel names the problem, `exhibit history` gives a warning on stderr, and the run still succeeds. Outside a clone, SZZ did not run, so steps 3 to 5 say "SZZ did not run". `--json` gives the same counts in its `funnel` field, for example `{ "merged_prs": 14, "fix_prs": 7, "szz_linked": 4, "labeled": 2, "kept": 1, "labels": "read" }`. A step with no number is null there, and `labels` is `none`, `read` or `unreadable`. The backtest steps (a rule's `source`, and what the policy would have flagged) are in the backtest report, not here.
