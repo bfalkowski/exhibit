@@ -1,0 +1,50 @@
+From 1507cb0752f9cd1381d57a374cfb8ee674495b58 Mon Sep 17 00:00:00 2001
+From: canary <canary@example.invalid>
+Date: Fri, 20 Nov 2026 20:58:42 -0500
+Subject: [PATCH] Merge hold: say when git status fails
+
+---
+ relay/merge-hold.js           | 11 ++++++-----
+ relay/test/merge-hold.test.js |  7 +++++++
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/relay/merge-hold.js b/relay/merge-hold.js
+index 393886b..34b1e2c 100644
+--- a/relay/merge-hold.js
++++ b/relay/merge-hold.js
+@@ -29,11 +29,12 @@ const { TOLD_HOLD } = require('./stop-verdict.js');
+ 
+ function unsavedWork(dir) {
+   const git = (...args) => execFileSync('git', ['-C', dir].concat(args), { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+-  try {
+-    if (git('status', '--porcelain')) return 'its checkout has uncommitted changes';
+-    const n = Number(git('rev-list', '--count', 'HEAD', '--not', '--remotes'));
+-    return n ? 'its checkout has ' + n + ' commit' + (n === 1 ? '' : 's') + ' that ' + (n === 1 ? 'is' : 'are') + ' not pushed' : null;
+-  } catch (e) { return 'git could not say whether its checkout has work that is not pushed'; }
++  // Say which step failed: a folder that is not a checkout fails at git status.
++  let status;
++  try { status = git('status', '--porcelain'); } catch (e) { return 'git status failed in its checkout, so it may hold work that is not pushed'; }
++  if (status) return 'its checkout has uncommitted changes';
++  const n = Number(git('rev-list', '--count', 'HEAD', '--not', '--remotes'));
++  return n ? 'its checkout has ' + n + ' commit' + (n === 1 ? '' : 's') + ' that ' + (n === 1 ? 'is' : 'are') + ' not pushed' : null;
+ }
+ 
+ const UNSEEN = 'No comment check has listed the latest posted review on the PR yet, so its Dev was not told of it.';
+diff --git a/relay/test/merge-hold.test.js b/relay/test/merge-hold.test.js
+index 1d85df8..90a4c21 100644
+--- a/relay/test/merge-hold.test.js
++++ b/relay/test/merge-hold.test.js
+@@ -107,3 +107,10 @@ test('a Dev told something after its last turn began, with no hook since: wait',
+   assert.strictEqual(holdOf(task(dir), dev('idle', { exited: true, toldAt: now - 500 }), now), null, 'a Dev that has ended will not start on it');
+   assert.strictEqual(holdOf(task(dir), dev('idle', { turnAt: now - 60000, toldAt: now - 16000 }), now), null, 'past RELAY_TOLD_HOLD_MS (15 seconds) the wait ends, so a note that never starts a turn cannot hold the merge for good');
+ });
++
++test('a folder that is not a checkout: git status failed, so the person decides', (t) => {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-hold-plain-'));
++  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
++  assert.strictEqual(unsavedWork(dir), 'git status failed in its checkout, so it may hold work that is not pushed');
++  assert.strictEqual(holdOf(task(dir), dev('idle'), now).reason, 'work-left-out');
++});
+-- 
+2.39.5 (Apple Git-154)
+

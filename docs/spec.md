@@ -699,7 +699,7 @@ Exhibit is built by an office room (Room C), and two other rooms use it on their
 - **Phase A: history.** Run `exhibit history` on Building58 and edd-platform. Bryan labels the escaped defects. The first policy comes from that. The first runs and their numbers are in [field/phase-a-history.md](field/phase-a-history.md).
 - **Phase B: shadow mode.** The Action runs on every PR in both repos with `enforce: false`. The session briefs add one step: run `exhibit check` before you open a PR.
 - **Phase C: compare.** Room B sets `enforce: true` while Building58 stays in shadow mode. Compare tokens per merged PR, review rounds and stuck runs between the two rooms.
-- **Planted faults.** A hidden job opens PRs on a sandbox branch. Each one has a planted bug that the tests miss. They are labeled `exhibit-canary`, closed automatically, and never merged. Exhibit must give `needs_person` on each one.
+- **Planted faults.** A hidden job opens PRs on a sandbox branch. Each one has a planted bug that the tests miss. They are labeled `exhibit-canary`, closed automatically, and never merged. Exhibit must give `needs_person` on each one. A first try by hand, five canaries on Building58 before the job exists, caught 2 of 5. It is in [field/canaries.md](field/canaries.md).
 - **Friction.** When a session fights the tool, it files an issue in the Exhibit repo and attaches the `evidence.json`.
 - **Stranger test.** Before version 1.0, a fresh session that has only the README runs `exhibit history` on a public repo it has never seen.
 
