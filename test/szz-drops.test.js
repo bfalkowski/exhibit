@@ -594,6 +594,20 @@ test('comments: a // or # inside a string is code, not a comment', () => {
   assert.deepEqual(counted(result), [['a.js', [1, 2, 3]], ['a.py', [1, 2]]]);
 });
 
+test('comments: a division that reads as a regex can drop a line when a later string has a "/" in it', () => {
+  // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
+  // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round, and the
+  // "//" in 'c // d' reads as a comment.
+  for (const before of ["  y = x++ / 2 + 'a / b' + 'c // d';", "  y = obj.of / 2 + 'a / b' + 'c // d';"]) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(dropped(result), [['a.js', 3, 'comment']], before);
+  }
+  // A plain division reads right, so the change counts.
+  const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  y = a / 2 + 'a / b' + 'c // d';"], added: ["  y = a / 2 + 'a / b' + 'c // e';"] }] }));
+  assert.deepEqual(counted(plain), [['a.js', [3]]]);
+});
+
 test('comments: a trailing comment pairs only with a line in the same hunk', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [
     { at: 1, deleted: ['x = 1; // old note'] },
