@@ -183,6 +183,28 @@ async function readLabels(cwd) {
   return { labels, endsWithBreak: text === '' || text.endsWith('\n') };
 }
 
+/**
+ * Reads labels.jsonl only to count it, for the funnel in the history report (spec 8.5). It never
+ * writes the file. Returns { state: 'none' } when there is no file, { state: 'read', lines }, or
+ * { state: 'unreadable', problem } when the file cannot be read, or a line is not JSON or fails
+ * the labels schema. It does not throw for those, so the history run still succeeds.
+ */
+export async function readLabelsToCount(cwd) {
+  let text;
+  try {
+    text = await readFile(join(cwd, LABELS), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { state: 'none' };
+    return { state: 'unreadable', problem: `could not read ${LABELS}: ${error.message}` };
+  }
+  try {
+    return { state: 'read', lines: parseLines(text, LABELS, checkLabelLine, 'the labels schema. Fix or remove that line, then run exhibit history again') };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { state: 'unreadable', problem: error.message };
+  }
+}
+
 // Parses JSON lines, and refuses the file at the first line that is not JSON or fails `check`.
 function parseLines(text, name, check, fix) {
   const lines = [];

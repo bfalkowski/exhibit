@@ -6,9 +6,10 @@ import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache, removeOldEntries } from '../github-cache.js';
 import { LOOK_BACK_MS, updateHistory } from '../history.js';
 import { JIRA_TRACKER } from '../jira.js';
+import { readLabelsToCount } from '../labels.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { DEFAULT_POLICY, readPolicy } from '../policy.js';
-import { buildReport, HISTORY_REPORT } from '../report.js';
+import { buildReport, funnel, HISTORY_REPORT } from '../report.js';
 import { addSzz, cloneRoot } from '../szz.js';
 import { ToolError } from '../tool-error.js';
 import { writeTogether } from '../write-together.js';
@@ -28,7 +29,9 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // Inside a clone of the repo, it runs SZZ on each fix PR and fills szz (spec 9.2). Outside a
 // clone, every szz is null, and it says so in one line on stderr.
 // It also writes the report of escaped defects, as report.md and report.html (spec 8.5). It writes
-// the three files together: when one write fails, none of the three changes.
+// the three files together: when one write fails, none of the three changes. It reads
+// .exhibit/labels.jsonl, when it is there, only to count the labels in the report's funnel. A
+// labels file it cannot read gives a warning, and the run still succeeds.
 // It reads the PRs with GitHub's GraphQL API, and SZZ asks the REST API. REST replies go through
 // the shared reply cache (spec 8.6), unless --no-cache turns it off. At the end it says how many
 // REST requests went to GitHub and how many got a 304, and how many GraphQL queries went and how
@@ -118,7 +121,10 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
     throw new ToolError(`GitHub sent data that does not fit the history schema, so ${OUTPUT} was not written:\n  ${shown}${more}\nReport this as an Exhibit issue, with the PR numbers.`);
   }
 
-  const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals });
+  // The labels are read only to count them in the funnel. History never writes labels.jsonl.
+  const labels = await readLabelsToCount(cwd);
+  if (labels.state === 'unreadable') warn(`the report does not count the labels, because ${labels.problem}`);
+  const report = buildReport(lines, { repo: options.repo, szzRan: root !== null, fixSignals, labels });
   await writeTogether(cwd, [
     [OUTPUT, lines.map((line) => JSON.stringify(line) + '\n').join('')],
     [HISTORY_REPORT.markdown, report.markdown],
@@ -135,7 +141,7 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
   const usesJira = fixSignals.includes(`tracker:${JIRA_TRACKER.name}`);
   const jira = tracker ? tracker.counts() : null;
   if (options.json) {
-    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, report: HISTORY_REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
+    stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, funnel: funnel(lines, { szzRan: root !== null, labels }), report: HISTORY_REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
   } else {
     const skipped = szz?.skipped > 0 ? ` (${szz.skipped} skipped)` : '';
     const found = szz ? ` SZZ found links for ${szz.linked} of ${szz.fix_prs} fix PRs${skipped}.` : '';

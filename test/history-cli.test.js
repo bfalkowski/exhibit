@@ -52,6 +52,8 @@ const graphqlQueries = (n) => `Made ${n} GitHub GraphQL ${n === 1 ? 'query' : 'q
 // Every recorded GraphQL reply costs 1 point, so the points equal the queries.
 const madeRequests = (cwd, requests, queries, notModified = 0) => `Made ${restRequests(requests)}. ${notModified} got a 304 and came from the cache in ${cacheOf(cwd)}.\n` + graphqlQueries(queries);
 const githubCounts = (cwd, requests, queries, notModified = 0) => ({ requests, not_modified: notModified, cache: cacheOf(cwd), graphql: { queries, points: queries } });
+// The funnel outside a clone, with no labels file: SZZ did not run, so it stops at the fix PRs.
+const outsideClone = (prs, fixes) => ({ merged_prs: prs, fix_prs: fixes, szz_linked: null, labeled: null, kept: null, labels: 'none' });
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', (t) => {
@@ -136,7 +138,7 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, NO_POLICY + 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
   // 1 query for the PRs, and 29 more pages of 100 files for each of PRs 9 and 8.
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, funnel: outsideClone(3, 0), report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
@@ -222,7 +224,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 6, 1), mode: 'incremental', read: 14 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, funnel: { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' }, report: REPORT, github: githubCounts(repo.dir, 6, 1), mode: 'incremental', read: 14 });
 });
 
 test('a second run inside a clone keeps the SZZ result of each fix it reads again, and asks GitHub nothing for SZZ', (t) => {
@@ -262,7 +264,7 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const json = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, report: REPORT, github: githubCounts(shallow, 0, 1), mode: 'incremental', read: 14 });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, funnel: { merged_prs: 14, fix_prs: 7, szz_linked: 0, labeled: null, kept: null, labels: 'none' }, report: REPORT, github: githubCounts(shallow, 0, 1), mode: 'incremental', read: 14 });
 });
 
 test('--since keeps PRs merged on or after the date', (t) => {
@@ -281,7 +283,7 @@ test('--json prints a short machine summary', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
   // 2 pages of PRs, then the second pages of PR 7's files, reviews, comments and CI results, and of PR 4's CI results.
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 7), mode: 'full', read: 5 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, funnel: outsideClone(5, 1), report: REPORT, github: githubCounts(run.cwd, 0, 7), mode: 'full', read: 5 });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', (t) => {
@@ -557,4 +559,50 @@ test('tracker:jira with no settings.jira gives exit 2 with a message, and writes
   assert.equal(run.status, 2);
   assert.match(run.stderr, /settings\.fix_signals has tracker:jira, so settings needs jira: \{ site: /);
   assert.equal(existsSync(run.historyPath), false);
+});
+
+// Runs history inside a clone of the fixture shop repo, with `labels` as the text of
+// .exhibit/labels.jsonl, or no labels file when it is undefined.
+function shopRunWithLabels(t, labels, args = []) {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const labelsPath = join(repo.dir, '.exhibit', 'labels.jsonl');
+  if (labels !== undefined) writeFileSync(labelsPath, labels);
+  const run = exhibit(t, ['history', '--repo', 'fixture/shop', ...args], { fixturePath: replay.path, cwd: repo.dir });
+  return { ...run, labelsPath, markdown: existsSync(join(repo.dir, REPORT.markdown)) ? readFileSync(join(repo.dir, REPORT.markdown), 'utf8') : '' };
+}
+
+// Fix PR 12 keeps both its links. Fix PR 7 has both its links rejected.
+const SHOP_LABELS = [
+  { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-21T10:00:00.000Z' },
+  { id: 'D-007', fix_pr: 7, introducing_prs: [], rejected_prs: [2, 3], code: 'Total off', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: true, labeled_at: '2026-11-21T10:00:00.000Z' }
+].map((line) => JSON.stringify(line) + '\n').join('');
+
+test('history counts the labels in the funnel, in report.md and in --json, and leaves labels.jsonl as it was', (t) => {
+  const run = shopRunWithLabels(t, SHOP_LABELS, ['--json']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 2, kept: 1, labels: 'read' });
+  assert.match(run.markdown, /- Defects labeled in exhibit label: 2\n- Defects with at least one link that a person kept: 1\n/);
+  assert.equal(readFileSync(run.labelsPath, 'utf8'), SHOP_LABELS);
+});
+
+test('with no labels file, history says "not labeled yet" for the last two steps, and writes no labels file', (t) => {
+  const run = shopRunWithLabels(t, undefined, ['--json']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' });
+  assert.match(run.markdown, /- Defects labeled in exhibit label: not labeled yet\n- Defects with at least one link that a person kept: not labeled yet\n/);
+  assert.equal(existsSync(run.labelsPath), false);
+});
+
+test('a labels line that fails its schema makes the report say the labels could not be read, and the run still succeeds', (t) => {
+  const bad = SHOP_LABELS + JSON.stringify({ id: 'D-006', fix_pr: 6 }) + '\n';
+  const run = shopRunWithLabels(t, bad);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stderr, /^exhibit: warning: the report does not count the labels, because \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./m);
+  assert.match(run.markdown, /- Defects labeled in exhibit label: the labels could not be read\n/);
+  assert.match(run.markdown, /Exhibit could not read the labels, so it does not count them: \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./);
+  assert.equal(readFileSync(run.labelsPath, 'utf8'), bad);
 });

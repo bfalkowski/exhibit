@@ -16,13 +16,18 @@ export const WEAK_HISTORY = { minFixPrs: 10, strongConfidence: 0.5 };
 // The most lines the report shows for one link. history.jsonl has them all.
 const LINES_SHOWN = 5;
 
+// The labels file, as history read it, only to count (spec 8.5). `state` is 'none' when there is
+// no file, 'read' with its `lines`, or 'unreadable' with the `problem`.
+const NO_LABELS = { state: 'none' };
+
 /**
  * Returns { markdown, html } for the history `lines` of `repo`.
  * `szzRan` is false when history ran outside a clone, so every szz is null.
  * `fixSignals` are the signals that marked the fix PRs, for the advice when there are none.
+ * `labels` is the labels file, for the last steps of the funnel: see NO_LABELS.
  */
-export function buildReport(lines, { repo, szzRan, fixSignals }) {
-  const blocks = reportBlocks(lines, { repo, szzRan, fixSignals });
+export function buildReport(lines, { repo, szzRan, fixSignals, labels = NO_LABELS }) {
+  const blocks = reportBlocks(lines, { repo, szzRan, fixSignals, labels });
   const title = `Escaped defects in ${repo}`;
   return { markdown: toMarkdown(blocks), html: toHtml(title, blocks) };
 }
@@ -43,7 +48,38 @@ export function defectText(fix, lines) {
   return toText(defectBlocks(fix, new Map(lines.map((line) => [line.number, line]))));
 }
 
-function reportBlocks(lines, { repo, szzRan, fixSignals }) {
+/**
+ * The funnel (spec 8.5): how many defects are left at each step, so a reader sees where they drop
+ * out. Returns { merged_prs, fix_prs, szz_linked, labeled, kept, labels }. `labeled` counts the
+ * escaped defects with a line in the labels file, and `kept` those of them with at least one link
+ * that the person kept. A label for a defect that is no longer in the history is not counted.
+ * `szz_linked`, `labeled` and `kept` are null when SZZ did not run, and the last two are null when
+ * there are no labels to count. `labels` is the state of the labels file.
+ */
+export function funnel(lines, { szzRan, labels = NO_LABELS }) {
+  const defects = szzRan ? escapedDefects(lines) : [];
+  const counts = { merged_prs: lines.length, fix_prs: lines.filter((line) => line.classification.fix).length, szz_linked: szzRan ? defects.length : null, labeled: null, kept: null, labels: labels.state };
+  if (!szzRan || labels.state !== 'read') return counts;
+  const fixPrs = new Set(defects.map((fix) => fix.number));
+  const labeled = labels.lines.filter((label) => fixPrs.has(label.fix_pr));
+  return { ...counts, labeled: labeled.length, kept: labeled.filter((label) => label.introducing_prs.length > 0).length };
+}
+
+function funnelBlocks(counts, labels) {
+  const or = (count, why) => (count === null ? why : String(count));
+  const noLabels = counts.szz_linked === null ? 'SZZ did not run' : labels.state === 'unreadable' ? 'the labels could not be read' : 'not labeled yet';
+  const blocks = [heading(2, 'Defects left at each step'), list([
+    item(`Merged PRs read: ${counts.merged_prs}`),
+    item(`Fix PRs: ${counts.fix_prs}`),
+    item(`Fix PRs with an SZZ link, the escaped defects: ${or(counts.szz_linked, 'SZZ did not run')}`),
+    item(`Defects labeled in exhibit label: ${or(counts.labeled, noLabels)}`),
+    item(`Defects with at least one link that a person kept: ${or(counts.kept, noLabels)}`)
+  ])];
+  if (labels.state === 'unreadable') blocks.push(paragraph(`Exhibit could not read the labels, so it does not count them: ${labels.problem}`));
+  return blocks;
+}
+
+function reportBlocks(lines, { repo, szzRan, fixSignals, labels }) {
   const byNumber = new Map(lines.map((line) => [line.number, line]));
   const fixes = lines.filter((line) => line.classification.fix).sort(newestFirst);
   const defects = szzRan ? escapedDefects(lines) : [];
@@ -54,6 +90,7 @@ function reportBlocks(lines, { repo, szzRan, fixSignals }) {
 
   const blocks = [heading(1, `Escaped defects in ${repo}`)];
   blocks.push(paragraph(summary({ prs: lines.length, fixes: fixes.length, defects: defects.length, skipped, szzRan, repo })));
+  blocks.push(...funnelBlocks(funnel(lines, { szzRan, labels }), labels));
 
   blocks.push(heading(2, 'How sure Exhibit is'));
   const reasons = weakReasons({ fixes: fixes.length, defects: defects.length, strong, szzRan, fixSignals });
