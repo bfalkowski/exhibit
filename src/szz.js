@@ -1010,10 +1010,29 @@ function closesEarlierBlock(texts) {
   return false;
 }
 
-const opensBlock = (text) => {
+// Says whether a code row opens a block comment with "/*". As in blockStarts, a "/*" in quotes,
+// such as "s = '/*';", or after "//", such as "x = 1; // see /*", opens nothing.
+// A row that starts with "*" opens no block here, so the code row " * rate /* a" is a rare wrong
+// guess: one row alone cannot tell it from the comment row " * Use /* to open.".
+function opensBlock(text) {
   const rest = text.trim();
-  return !rest.startsWith('*') && !rest.startsWith('//') && rest.includes('/*');
-};
+  if (rest.startsWith('*')) return false;
+  let quote = null;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (quote !== null) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+    } else if (rest.startsWith('//', i)) {
+      return false;
+    } else if (rest.startsWith('/*', i)) {
+      return true;
+    } else if ('\'"`'.includes(ch)) {
+      quote = ch;
+    }
+  }
+  return false;
+}
 
 // Finds where a block comment ends in a row: the first "*/" with no "*" or "/" straight after it.
 // A "*/" inside a glob such as "src/**/*.js" has a "*" after it, so it is comment text, not the end.
