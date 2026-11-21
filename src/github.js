@@ -209,11 +209,16 @@ function graphqlRateLimited(reply) {
 // A GraphQL reply with errors. Its status is the HTTP status that the first error's type stands
 // for, so `stopsRun` works as for a REST reply.
 const GRAPHQL_ERROR_STATUS = { NOT_FOUND: 404, FORBIDDEN: 403, RATE_LIMITED: 429 };
+// GitHub may report a query that took too long as a 200 reply with no data and an error such as
+// "Something went wrong while executing your query. This may be the result of a timeout, or it
+// could be a GitHub bug." Such an error counts as a timeout, as a 502 or a 504 does.
+const GRAPHQL_TIMED_OUT = /may be the result of a timeout/i;
 
 function graphqlError(errors, permission) {
   const status = GRAPHQL_ERROR_STATUS[errors[0]?.type] ?? 200;
   const detail = [...new Set(errors.map((error) => String(error?.message ?? error?.type ?? 'no message')))].join('; ');
-  return new GitHubReplyError(`GitHub's GraphQL API answered with an error (${detail}).${status === 200 ? '' : advice(status, permission)}`, status);
+  const timedOut = status === 200 && errors.some((error) => GRAPHQL_TIMED_OUT.test(String(error?.message ?? '')));
+  return new GitHubReplyError(`GitHub's GraphQL API answered with an error (${detail}).${status === 200 ? '' : advice(status, permission)}`, status, false, timedOut);
 }
 
 function notShaped(url, shape) {
@@ -283,10 +288,13 @@ function nextLink(header) {
 // `limited` is true when the reply is a rate limit, so a 403 that is a rate limit can be told from
 // a 403 that refuses access.
 export class GitHubReplyError extends ToolError {
-  constructor(message, status, limited = false) {
+  // `timedOut` is true when GitHub says the request took too long: a 502 or a 504, or a GraphQL
+  // reply that says so (see graphqlError).
+  constructor(message, status, limited = false, timedOut = TIMED_OUT.includes(status)) {
     super(message);
     this.status = status;
     this.limited = status === 429 || limited;
+    this.timedOut = timedOut;
   }
 
   // True when every later request would fail too: a refused token (401), a missing permission
@@ -362,8 +370,10 @@ export const GITHUB_FORGE = {
 // GitHub's time limit for one GraphQL query on a large repo. GitHub then answers 502 or 504. So
 // after such an answer, the list asks for the same page again with the next, smaller number of
 // PRs, and keeps that number for the rest of the list. After the last number, the run fails.
+// GitHub may also send a 200 reply with an error that says the query may have timed out
+// (GRAPHQL_TIMED_OUT). The list asks again with fewer PRs after that reply too.
 const PULLS_PER_QUERY = [50, 25, 10];
-// The answers that mean the query took too long.
+// The HTTP statuses that mean the query took too long.
 const TIMED_OUT = [502, 504];
 // How many items of one list (files, reviews, comments, labels, CI results) one query reads.
 const ITEMS_PER_PAGE = 100;
@@ -566,7 +576,7 @@ export function createGitHubForge({ repo, ...client }) {
           try {
             return await github.graphql(query, { owner, name, after, first: PULLS_PER_QUERY[size] }, forHistory);
           } catch (error) {
-            if (!(error instanceof GitHubReplyError && TIMED_OUT.includes(error.status)) || size === PULLS_PER_QUERY.length - 1) throw error;
+            if (!(error instanceof GitHubReplyError && error.timedOut) || size === PULLS_PER_QUERY.length - 1) throw error;
             size += 1;
           }
         }

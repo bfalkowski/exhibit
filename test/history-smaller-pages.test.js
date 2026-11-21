@@ -119,3 +119,35 @@ test('with --limit, the list updated last first asks again with fewer PRs too', 
   const asked = fetch.calls.filter((call) => call.key.startsWith('graphql RecentMergedPulls ')).map((call) => JSON.parse(call.key.slice('graphql RecentMergedPulls '.length)).first);
   assert.deepEqual(asked, [50, 25]);
 });
+
+// GitHub may also report a query that took too long as a 200 reply with an error and no data.
+// This is the message GitHub sends then; the id at the end changes for each request.
+const timedOutAs200 = {
+  status: 200,
+  headers: {},
+  body: {
+    data: null,
+    errors: [{ message: 'Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug. Please include `C0A1:2B3C:4D5E6F:7A8B9C:6740E1F2` when reporting this issue.' }]
+  }
+};
+
+test('a 200 reply whose error says it may be a timeout asks again for 25 PRs', async () => {
+  const recorded = graphqlReplies(REPO, pulls(30), { first: 25 });
+  recorded[pageKey(null, 50)] = timedOutAs200;
+  const fetch = replay(recorded);
+  const lines = await read(fetch);
+  assert.deepEqual(lines.map((line) => line.number), pulls(30).map((one) => one.number));
+  assert.deepEqual(pagesAsked(fetch), [[null, 50], [null, 25], ['pulls-1', 25]]);
+});
+
+test('when 10 PRs time out as a 200 reply too, the run fails with GitHub\'s message', async () => {
+  const fetch = replay({ [pageKey(null, 50)]: timedOutAs200, [pageKey(null, 25)]: timedOutAs200, [pageKey(null, 10)]: timedOutAs200 });
+  await assert.rejects(read(fetch), (error) => error instanceof GitHubReplyError && error.timedOut && /may be the result of a timeout/.test(error.message));
+  assert.deepEqual(pagesAsked(fetch), [[null, 50], [null, 25], [null, 10]]);
+});
+
+test('a 200 reply with another error does not ask again with fewer PRs', async () => {
+  const fetch = replay({ [pageKey(null, 50)]: { status: 200, headers: {}, body: { data: null, errors: [{ message: 'Field \'x\' doesn\'t exist on type \'PullRequest\'' }] } } });
+  await assert.rejects(read(fetch), (error) => error instanceof GitHubReplyError && error.status === 200 && !error.timedOut);
+  assert.deepEqual(pagesAsked(fetch), [[null, 50]]);
+});
