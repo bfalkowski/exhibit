@@ -470,7 +470,7 @@ function withProbes(fixture, probes, settings = '') {
 
 const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map((name) => join(dir, name)) : []);
 
-test('a probe runs in the head worktree, and summary.md links its output and artifacts', (t) => {
+test('a probe runs in the head worktree, and summary.md names its output and artifacts and says where they are', (t) => {
   const fixture = buildRepo(t);
   withProbes(fixture, [{ name: 'copy notes', run: 'mkdir -p out && cp notes/one.md out/copy.md', artifacts: ['out/copy.md'] }]);
   const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes']);
@@ -482,9 +482,11 @@ test('a probe runs in the head worktree, and summary.md links its output and art
   assert.deepEqual(probe.details.artifacts, [{ path: 'out/copy.md', copy: '.exhibit/probes/copy-notes/artifacts/out/copy.md' }]);
   assert.equal(readFileSync(join(fixture.repo, probe.details.artifacts[0].copy), 'utf8'), 'one\n');
   const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
-  assert.match(summary, /- probe copy notes \(from notes\): met\. Output: \[output\.log\]\(probes\/copy-notes\/output\.log\)\. Artifacts: \[out\/copy\.md\]\(probes\/copy-notes\/artifacts\/out\/copy\.md\)\./);
-  // Each link in summary.md points to a file beside it.
-  for (const [, target] of summary.matchAll(/\]\(([^)]+)\)/g)) assert.ok(existsSync(join(fixture.repo, '.exhibit', decodeURI(target))), target);
+  assert.match(summary, /- probe copy notes \(from notes\): met\. Output: `\.exhibit\/probes\/copy-notes\/output\.log`\. Artifacts: `\.exhibit\/probes\/copy-notes\/artifacts\/out\/copy\.md`\./);
+  assert.match(summary, /\n\nThe probe files are in \.exhibit in the repo\. In GitHub Actions, they are in the workflow artifact named exhibit\.\n/);
+  // No relative links: in the GitHub job summary, they lead nowhere. Each path names a real file.
+  assert.doesNotMatch(summary, /\]\(/);
+  for (const [, path] of summary.matchAll(/`(\.exhibit\/probes\/[^`]+)`/g)) assert.ok(existsSync(join(fixture.repo, path)), path);
   // The head worktree is gone after the run.
   const worktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
   assert.equal(worktrees.match(/^worktree /gm).length, 1);

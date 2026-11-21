@@ -44,6 +44,24 @@ export function renderComment(exhibit, { enforce, link, where }) {
   return lines.join('\n') + '\n';
 }
 
+// The comment text when exhibit check failed before it had a verdict, so there is no exhibit.
+// `reason` is the reason from the check's summary.md, or null when there is none to read. It goes
+// in a code block, so that text from the run cannot add markup or mention anyone.
+export function renderErrorComment(reason, { enforce }) {
+  const lines = [COMMENT_MARKER, `### Exhibit: ${VERDICT_WORDS.error}`, ''];
+  lines.push('Verdict: **error**. exhibit check stopped before it had a verdict, so it wrote no exhibit, and nothing was stored.');
+  if (!enforce) lines.push('', 'Shadow mode: nothing waits on this.');
+  lines.push('');
+  if (reason === null) {
+    lines.push('Exhibit found no reason to show: there is no summary.md with one beside the evidence file. The check job\'s log says what went wrong.');
+  } else {
+    const longest = Math.max(2, ...(reason.match(/`+/g) ?? []).map((run) => run.length));
+    const fence = '`'.repeat(longest + 1);
+    lines.push('The reason:', '', `${fence}text`, reason, fence, '', 'The check job\'s summary says the same. Fix the cause, then run the check again.');
+  }
+  return lines.join('\n') + '\n';
+}
+
 // A gap's text on one line, so it stays inside its list item.
 function oneLine(text) {
   return text.replace(/\s*\n\s*/g, ' ');

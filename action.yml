@@ -69,7 +69,7 @@ runs:
             if [ "$INPUT_ENFORCE" = false ]; then args+=(--shadow); fi
             ;;
           publish)
-            args=(publish --evidence .exhibit/evidence.json --policy "$INPUT_POLICY")
+            args=(publish --evidence .exhibit/evidence.json --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --policy "$INPUT_POLICY")
             if [ -n "$INPUT_DATA_BRANCH" ]; then args+=(--data-branch "$INPUT_DATA_BRANCH"); fi
             if [ "$INPUT_COMMENT" = true ]; then args+=(--comment); fi
             if [ "$INPUT_ENFORCE" = true ]; then args+=(--enforce); fi
