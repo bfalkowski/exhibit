@@ -93,9 +93,10 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
 // worktree of the base, puts in each path of `paths` as it is on the head, removes each one that
 // the head does not have, and then runs the tests as runTestsOnBaseAndHead does. So a test that
 // the PR added or changed runs against the old code. It gives back one Map, like one side of
-// runTestsOnBaseAndHead. When the command fails and gives no failing test, on both runs, it gives
-// back a NothingLoaded instead. It throws a TestRunError when the run cannot give results for any
-// other reason, and when only one of the two runs gave results. Its logs are
+// runTestsOnBaseAndHead. When the command fails and gives no failing test, on both runs with the
+// same results, it gives back a NothingLoaded instead. It throws a TestRunError when the run cannot
+// give results for any other reason, and when only one run stops that way, or the two runs that
+// stop give different results: the run is then flaky. Its logs are
 // base-pr-tests-first.log and base-pr-tests-again.log.
 export async function runTestsOnBaseWithPrTests({ cwd, base, head, paths, settings = {}, env = process.env }) {
   const { command, results, timeoutSeconds } = checkSettings(settings);
@@ -139,11 +140,12 @@ async function runSide({ cwd, sha, side, tag = side, command, results, timeoutSe
     const first = await once('first');
     if (!(first instanceof NothingLoaded) && ![...first.values()].includes('failed')) return first;
     const second = await once('again');
-    if (first instanceof NothingLoaded && second instanceof NothingLoaded) return first;
     if (first instanceof NothingLoaded || second instanceof NothingLoaded) {
-      const [none, some] = first instanceof NothingLoaded ? ['first', 'second'] : ['second', 'first'];
-      throw new TestRunError('error', `the test command on the ${side} gave no results on its ${none} run but did on its ${some}, so it is flaky`,
-        `The test command "${command}" gave no results on the ${side} on its ${none} run, but it did on its ${some} run. So Exhibit cannot tell whether the PR's tests load on the base. Read the output in ${log('first').shown} and ${log('again').shown} to see why the runs differ.`);
+      // A run that stops counts only when the other run stops the same way, with the same results.
+      if (first instanceof NothingLoaded && second instanceof NothingLoaded && sameTests(first.tests, second.tests)) return first;
+      const words = `on its first run ${runWords(first)}, and on its second run ${runWords(second)}`;
+      throw new TestRunError('error', `the two runs of the test command on the ${side} differ, so it is flaky: ${words}`,
+        `The two runs of the test command "${command}" on the ${side} differ: ${words}. So Exhibit cannot tell whether the PR's tests load on the base. Read the output in ${log('first').shown} and ${log('again').shown} to see why the runs differ.`);
     }
     return settle(first, second);
   } finally {
@@ -212,6 +214,17 @@ async function runOnce({ folder, roots, side, command, results, timeoutSeconds, 
 }
 
 const RANK = { skipped: 0, passed: 1, failed: 2 };
+
+function sameTests(a, b) {
+  return a.size === b.size && [...a].every(([name, status]) => b.get(name) === status);
+}
+
+// What one run of the test command on the base with the PR's test files gave, in words.
+function runWords(result) {
+  if (!(result instanceof NothingLoaded)) return `it gave results for ${result.size} ${result.size === 1 ? 'test' : 'tests'}`;
+  if (result.tests.size === 0) return 'it failed and gave no results';
+  return `it failed with results for ${result.tests.size} ${result.tests.size === 1 ? 'test' : 'tests'} and no failing test`;
+}
 
 // A test whose two runs disagree is flaky. A test that is not in the second run keeps its first
 // status.

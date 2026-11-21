@@ -282,8 +282,19 @@ test('a test command that stops the run on the base with the PR\'s tests only on
   const { evidence, requirement, gap } = await runCheck(fixture.repo, 'fix/new-test');
   assert.equal(requirement.status, 'missing');
   assert.deepEqual(requirement.details.tests, []);
-  assert.match(requirement.details.base_error.message, /gave no results on its first run but did on its second/);
+  assert.match(requirement.details.base_error.message, /differ, so it is flaky: on its first run it failed and gave no results, and on its second run it gave results for \d+ tests/);
   assert.match(gap.how_to_fix, /base-pr-tests-first\.log/);
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+test('two runs that stop with different results on the base with the PR\'s tests are flaky, so a person must check', async (t) => {
+  // The first run with the PR's tests stops before it writes JUnit. The second runs the tests,
+  // where the PR's test passes on the base, and then the type check fails.
+  const fixture = buildRepo(t, `if ! git diff --cached --quiet && [ ! -e stop.mark ]; then touch stop.mark; exit 2; fi; ${TYPED_TESTS}`);
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/types');
+  assert.equal(requirement.status, 'missing');
+  assert.deepEqual(requirement.details.tests, []);
+  assert.match(requirement.details.base_error.message, /on its first run it failed and gave no results, and on its second run it failed with results for \d+ tests and no failing test/);
   assert.equal(evidence.verdict, 'needs_person');
 });
 
