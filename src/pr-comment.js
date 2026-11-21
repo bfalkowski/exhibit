@@ -1,4 +1,5 @@
 import { VERDICT_WORDS } from './check.js';
+import { describeSkip } from './skip.js';
 
 // The PR comment that `exhibit publish --comment` posts (spec 9.12). A reviewer reads the verdict
 // and the gaps on the PR, without opening CI.
@@ -11,7 +12,8 @@ export const COMMENT_MARKER = '<!-- exhibit:pr-summary -->';
 export const MOST_GAPS_SHOWN = 10;
 
 // The comment text for an exhibit: the verdict, the head commit, the kinds and the risk, each gap
-// with how to fix it, and where the full exhibit is. `enforce` false is shadow mode, and the
+// with how to fix it, and where the full exhibit is. A skip, or half of one, gets a line of its
+// own after the verdict. `enforce` false is shadow mode, and the
 // comment says that nothing waits on the verdict. `link` is the web page of the full exhibit, or
 // null. `where` names the stored file, for the line when there is no link.
 export function renderComment(exhibit, { enforce, link, where }) {
@@ -20,6 +22,8 @@ export function renderComment(exhibit, { enforce, link, where }) {
   lines.push(`Verdict: **${exhibit.verdict}** at head commit \`${exhibit.head.slice(0, 7)}\`.`);
   if (!enforce) lines.push('', 'Shadow mode: nothing waits on this.');
   lines.push('');
+  const skip = describeSkip(exhibit, { enforce, quote: codeSpan });
+  if (skip.length > 0) lines.push(skip.join(' '), '');
   const noRule = exhibit.gaps.some((gap) => gap.type === 'no-rule');
   const kinds = c.kinds.length > 0 ? c.kinds.join(', ') : `none matched, so ${noRule ? 'no rule covers this change' : 'the default rules apply'}`;
   lines.push(`Kinds of change: ${kinds}. Risk: ${c.risk}.`, '');
@@ -43,4 +47,15 @@ export function renderComment(exhibit, { enforce, link, where }) {
 // A gap's text on one line, so it stays inside its list item.
 function oneLine(text) {
   return text.replace(/\s*\n\s*/g, ' ');
+}
+
+// `text` as inline code, so that a reason from the PR body cannot add markup or mention anyone in
+// a comment that the token's account posts. The run of backticks around it is longer than any run
+// inside it, as Markdown asks.
+function codeSpan(text) {
+  const flat = oneLine(text);
+  const longest = Math.max(0, ...(flat.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = flat.startsWith('`') || flat.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${flat}${pad}${fence}`;
 }

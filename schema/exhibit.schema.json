@@ -73,6 +73,25 @@
         }
       }
     },
+    "skip": {
+      "type": ["object", "null"],
+      "description": "The skip that the PR carries, apart from the verdict, or null when it carries none (spec 8.2). An exhibit from before skips has no such field.",
+      "additionalProperties": false,
+      "required": ["status", "by", "reason", "head"],
+      "properties": {
+        "status": { "enum": ["recorded", "no-reason", "no-label"], "description": "recorded: the label and a reason, so it is a skip. no-reason: the label alone. no-label: the reason alone. Only recorded is a skip." },
+        "by": { "type": ["string", "null"], "minLength": 1, "description": "Who added the label, as the forge gives it, or null when the forge does not say or there is no label." },
+        "reason": { "type": ["string", "null"], "minLength": 1, "description": "The text after \"Exhibit skip:\" in the PR body, or null." },
+        "head": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$", "description": "The head commit that the skip was given for." }
+      },
+      "if": { "type": "object", "properties": { "status": { "enum": ["no-reason"] } } },
+      "then": { "properties": { "reason": { "type": "null" } } },
+      "else": {
+        "if": { "type": "object", "properties": { "status": { "enum": ["no-label"] } } },
+        "then": { "properties": { "by": { "type": "null" }, "reason": { "type": "string" } } },
+        "else": { "properties": { "reason": { "type": "string" } } }
+      }
+    },
     "checks_by_author": {
       "type": "object",
       "additionalProperties": false,

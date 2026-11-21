@@ -3,13 +3,14 @@ import { createHash } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
-import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
+import { buildExhibit, COLLECTORS, exitCode, renderErrorSummary, renderSummary } from '../check.js';
 import { MUTATION_DIR } from '../mutation.js';
 import { TESTS_DIR } from '../test-runs.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
+import { readSkip, SKIP_LABEL, skipApplies } from '../skip.js';
 import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
 
@@ -22,7 +23,8 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // `exhibit check --base REF [--head REF]`, or `exhibit check --pr N --repo owner/name`
 // Classifies the change from base to head, works out what the policy needs, collects the evidence,
 // and writes .exhibit/evidence.json and .exhibit/summary.md (spec 7, 8.2 and 9.8).
-// It returns the exit code: 0 for meets_policy, 1 for needs_person, 2 for error.
+// It returns the exit code: 0 for meets_policy, 1 for needs_person, 2 for error, and 0 for
+// needs_person with a skip.
 //
 // The changed paths come from git, from the merge base of base and head to head, so both commits
 // must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, body,
@@ -35,6 +37,10 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // it can write them, no old file is left to be read as this run's verdict. Any failure that is not
 // a verdict then writes a summary.md that says the verdict is error and why, and throws. The CLI
 // prints it and exits 2.
+//
+// With --pr, a PR can carry a skip (src/skip.js): the label exhibit-skip and a line in its body
+// that gives the reason. The exhibit records it, with who added the label, and the verdict stays
+// the same. Without --shadow, a skip on needs_person gives exit code 0 (spec 9.8).
 //
 // --shadow is shadow mode (spec 10): the run is the same, and the files say the same verdict, but
 // the exit code is 0 for every verdict, error too. A failure that is not a verdict is printed here
@@ -70,12 +76,14 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     if (!token) throw new ToolError(`${forgeModule.tokenEnv} is not set. --pr reads the PR from ${forgeModule.displayName}, so set it to a token that can read the repo, for example ${forgeModule.tokenExample}.`);
     const forge = forgeModule.connect({ repo: options.repo, token, fetch });
     const pull = await forge.pull(options.pr);
+    const prNumber = options.pr;
     refs = {
       base: pull.baseSha,
       head: pull.headSha,
       pr: { title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
-      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
+      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.',
+      labelAddedBy: () => forge.labelAddedBy(prNumber, SKIP_LABEL)
     };
   } else {
     refs = { base: options.base, head: options.head, pr: { title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
@@ -83,6 +91,8 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 
   const base = await commitSha(cwd, refs.base, refs.hint);
   const head = await commitSha(cwd, refs.head, refs.hint);
+  // Only a PR can carry a skip: without --pr, Exhibit knows no labels and no body.
+  const skip = refs.labelAddedBy ? await readSkip(refs.pr, { head, labelAddedBy: refs.labelAddedBy }) : null;
   const { policy, policyFile } = await policyAtBase(cwd, base, options.policy);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
   // The new files, for the feature rule (spec 9.1). Here git looks for renames, so a file that
@@ -95,7 +105,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
-    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head, skip }, { collectors: all });
   } finally {
     await headWorktree.remove();
   }
@@ -107,13 +117,14 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     [OUTPUT.summary, renderSummary(exhibit, { shadow })]
   ]);
 
-  const code = shadow ? 0 : EXIT_CODES[exhibit.verdict];
+  const code = exitCode(exhibit, { shadow });
   if (options.json) {
     stdout.write(JSON.stringify({ verdict: exhibit.verdict, exit_code: code, gaps: exhibit.gaps.length, evidence: OUTPUT.evidence, summary: OUTPUT.summary }) + '\n');
   } else {
     const gaps = exhibit.gaps.length === 0 ? 'No gaps.' : `${exhibit.gaps.length} ${exhibit.gaps.length === 1 ? 'gap' : 'gaps'}, listed with how to fix ${exhibit.gaps.length === 1 ? 'it' : 'them'} in ${OUTPUT.summary}.`;
     stdout.write(`Verdict: ${exhibit.verdict}. ${gaps}\nWrote ${OUTPUT.evidence} and ${OUTPUT.summary}.\n`);
     if (shadow) stdout.write('Shadow mode: nothing waits on this verdict, so the exit code is 0.\n');
+    else if (skipApplies(exhibit)) stdout.write(`The PR carries a skip, so the exit code is 0. Reason: ${exhibit.skip.reason}\n`);
   }
   return code;
 }

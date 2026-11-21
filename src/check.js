@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
 import { describeTests, failingBefore } from './failing-before.js';
 import { describeMutation, mutation } from './mutation.js';
+import { describeSkip, skipApplies } from './skip.js';
 import { describeBaseError, runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -9,6 +10,14 @@ const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 
 // The exit code of exhibit check for each verdict (spec 7 and 9.8).
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
+
+// The exit code of exhibit check for an exhibit (spec 9.8 and 10). In shadow mode it is always
+// 0. In enforce mode it is the verdict's code, except that a skip (src/skip.js) turns
+// needs_person into 0. The verdict itself stays needs_person.
+export function exitCode(exhibit, { shadow = false } = {}) {
+  if (shadow) return 0;
+  return skipApplies(exhibit) ? 0 : EXIT_CODES[exhibit.verdict];
+}
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
 // how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The mutation
@@ -25,7 +34,8 @@ export const COLLECTORS = Object.freeze({
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
 // changed paths `files`, the paths the change adds `added` (new files, not moved ones), what is known of the PR (`pr`: title, body, labels, branch, repo), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
-// `head` SHAs, and `cwd`, the clone, and `env` for the test command.
+// `head` SHAs, and `cwd`, the clone, and `env` for the test command. `skip` is the skip record
+// from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
 // `settings`, and `testRuns()`, which runs the tests on the base and the head the first time it is
@@ -130,6 +140,7 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     requirements: collected,
     verdict,
     gaps,
+    skip: change.skip ?? null,
     checks_by_author: {
       builder: collected.filter((item) => item.author === 'builder' && !notNeeded.has(item)).length,
       hidden: collected.filter((item) => item.author === 'hidden' && !notNeeded.has(item)).length
@@ -185,7 +196,9 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
   const c = exhibit.classification;
   const lines = [];
   lines.push(`# Exhibit check: ${VERDICT_WORDS[exhibit.verdict]}`, '');
-  lines.push(...verdictLines(exhibit.verdict, shadow));
+  lines.push(...verdictLines(exhibit, shadow));
+  const skip = describeSkip(exhibit, { enforce: !shadow });
+  if (skip.length > 0) lines.push(...skip.flatMap((line) => [line, '']));
   const pr = exhibit.pr === null ? '' : ` PR ${exhibit.pr}${exhibit.repo ? ` in ${exhibit.repo}` : ''}.`;
   lines.push(`Base ${exhibit.base.slice(0, 7)}, head ${exhibit.head.slice(0, 7)}.${pr}`, '');
 
@@ -249,16 +262,16 @@ function probeFiles(item) {
 // CI, this is the job summary, so a broken setup shows there, in shadow mode too.
 export function renderErrorSummary(message, { shadow = false } = {}) {
   const lines = [`# Exhibit check: ${VERDICT_WORDS.error}`, ''];
-  lines.push(...verdictLines('error', shadow));
+  lines.push(...verdictLines({ verdict: 'error', skip: null }, shadow));
   lines.push('Exhibit could not finish the check, so it wrote no evidence.json. The reason:', '');
   lines.push(...message.split('\n').map((line) => (line === '' ? '' : `    ${line}`)));
   return lines.join('\n') + '\n';
 }
 
-// The verdict line, with the exit code that exhibit check gives, and in shadow mode a line that
+// The verdict line, with the exit code that exhibit check gives for `exhibit`, and in shadow mode a line that
 // says why that code is 0.
-function verdictLines(verdict, shadow) {
-  const lines = [`Verdict: **${verdict}** (exit code ${shadow ? 0 : EXIT_CODES[verdict]}).`, ''];
+function verdictLines(exhibit, shadow) {
+  const lines = [`Verdict: **${exhibit.verdict}** (exit code ${exitCode(exhibit, { shadow })}).`, ''];
   if (shadow) lines.push('Shadow mode: nothing waits on this verdict, so the check exits 0 whatever it is.', '');
   return lines;
 }
