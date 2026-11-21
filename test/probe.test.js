@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runProbe } from '../src/probe.js';
@@ -71,6 +71,43 @@ test('a folder artifact does not copy a symbolic link that leads outside the wor
   // A link to a file inside the worktree is copied as that file.
   assert.equal(readFileSync(join(copy, 'same'), 'utf8'), 'fine\n');
   assert.equal(existsSync(join(copy, 'leak')), false);
+});
+
+// Lists the files and folders under `dir`, as paths relative to it, without following links.
+function listTree(dir, prefix = '') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = prefix + entry.name;
+    return entry.isDirectory() ? [path, ...listTree(join(dir, entry.name), `${path}/`)] : [path];
+  }).sort();
+}
+
+test('a folder artifact leaves out a symbolic link to its parent folder, and the probe is met', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep && echo a > rep/a && ln -s .. rep/up', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  const copy = join(where.outDir, 'artifacts', 'rep');
+  assert.deepEqual(listTree(copy), ['a']);
+  assert.equal(readFileSync(join(copy, 'a'), 'utf8'), 'a\n');
+});
+
+test('a folder artifact leaves out a symbolic link to the worktree root', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep/sub && echo a > rep/a && ln -s "$PWD" rep/sub/root', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), ['a', 'sub']);
+});
+
+test('a folder artifact leaves out two links that point at each other folder, but keeps the folders', async (t) => {
+  const where = setup(t);
+  // rep/a/to-b leads to rep/b, and rep/b/to-a leads back to rep/a. Each folder is copied once,
+  // through the link, and the link that would go back into a folder on the way is left out.
+  const run = 'mkdir -p rep/a rep/b && echo 1 > rep/a/one && echo 2 > rep/b/two && ln -s ../b rep/a/to-b && ln -s ../a rep/b/to-a';
+  const result = await runProbe(probe({ run, artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), [
+    'a', 'a/one', 'a/to-b', 'a/to-b/two',
+    'b', 'b/to-a', 'b/to-a/one', 'b/two'
+  ]);
 });
 
 test('a probe that runs past the time limit is failed, and the gap says it timed out', async (t) => {

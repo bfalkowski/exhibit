@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, cp, mkdir, open, realpath } from 'node:fs/promises';
-import { isAbsolute, join, posix, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 
 // The time limit for one probe when the policy does not set settings.probe_timeout_seconds.
 export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
@@ -38,9 +38,7 @@ export async function runProbe({ name, run, artifacts = [], hidden = false }, { 
   if (!hidden) {
     for (const { path, source } of found) {
       const name = posix.normalize(path);
-      // A folder artifact can hold symbolic links. Copy only the entries whose real path is inside
-      // the worktree, so a link cannot bring a file from elsewhere on the machine.
-      const filter = async (entry) => (await insideRoot(root, entry)) !== null;
+      const filter = (entry) => keepInCopy(root, source, entry);
       await cp(source, join(outDir, 'artifacts', name), { recursive: true, dereference: true, filter });
       copied.push({ path, copy: `${outPath}/artifacts/${name}` });
     }
@@ -119,6 +117,28 @@ async function artifactSource(root, path) {
   return real === root ? null : real;
 }
 
+// Whether the copy of a folder artifact keeps `entry`, a path that cp reached under `source`, the
+// artifact's real path. A folder artifact can hold symbolic links, and cp follows them. So it keeps
+// only an entry whose real path is inside the worktree, so a link cannot bring a file from
+// elsewhere on the machine. And it leaves out an entry whose real path is a folder that holds the
+// entry, such as rep/up -> .. or a link to the worktree root, because cp would copy that folder
+// into itself until it fails with ELOOP. An entry that cannot be read is left out too.
+async function keepInCopy(root, source, entry) {
+  const real = await insideRoot(root, entry);
+  if (real === null) return false;
+  if (entry === source) return true;
+  for (let folder = dirname(entry); ; folder = dirname(folder)) {
+    if (holds(real, await realpath(folder))) return false;
+    if (folder === source || folder === dirname(folder)) return true;
+  }
+}
+
+// Whether `folder` is `path` or a folder above it. Both are real paths.
+function holds(folder, path) {
+  const inside = relative(folder, path);
+  return !(inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside));
+}
+
 // The real path of `path` when it exists, can be read, and is inside `root` or is `root`. Otherwise
 // null.
 async function insideRoot(root, path) {
@@ -129,7 +149,5 @@ async function insideRoot(root, path) {
   } catch {
     return null;
   }
-  const inside = relative(root, real);
-  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-  return real;
+  return holds(root, real) ? real : null;
 }
