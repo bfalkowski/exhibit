@@ -62,7 +62,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inside } from '../src/inside.js';
 writeFileSync(join(process.env.PID_DIR, String(process.pid)), '');
-test('slow', async () => { inside('/a', '/a'); await new Promise((resolve) => setTimeout(resolve, 60000)); });
+test('slow', async () => { inside('/a', '/a'); await new Promise((resolve) => setTimeout(resolve, 600000)); });
 `;
 
 function policy({ min = 0.8, budget = 120, extra = '' } = {}) {
@@ -165,12 +165,14 @@ test('when Stryker fails, here because a test fails on the head, the verdict is 
 });
 
 test('the budget stops Stryker and every process it started', async (t) => {
-  const fixture = buildRepo(t, { policyText: policy({ budget: 3 }), heads: { slow: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': SLOW_TEST } } });
+  const fixture = buildRepo(t, { policyText: policy({ budget: 15 }), heads: { slow: { 'src/inside.js': NEW_CODE, 'test/inside.test.js': SLOW_TEST } } });
   const pids = join(fixture.home, 'pids');
   mkdirSync(pids);
   const started = Date.now();
   const run = exhibitCheck(fixture, 'slow', { PID_DIR: pids });
-  assert.ok(Date.now() - started < 30000, `the run took ${Date.now() - started} ms`);
+  // The budget is 15 seconds, so that Stryker starts the slow test file before it runs out, also
+  // when every test file of npm test runs at once. The slow test waits 10 minutes, far past it.
+  assert.ok(Date.now() - started < 90000, `the run took ${Date.now() - started} ms`);
   // The slow test file started, and Exhibit stopped it with Stryker.
   const testPids = readdirSync(pids).map(Number);
   assert.ok(testPids.length > 0);
@@ -180,7 +182,7 @@ test('the budget stops Stryker and every process it started', async (t) => {
   assert.equal(item.status, 'missing');
   assert.equal(item.details.complete, false);
   assert.equal(item.details.n, 0);
-  assert.match(JSON.parse(read(fixture.repo, 'evidence.json')).gaps[0].how_to_fix, /budget of 3 seconds/);
+  assert.match(JSON.parse(read(fixture.repo, 'evidence.json')).gaps[0].how_to_fix, /budget of 15 seconds/);
 });
 
 // Mutants as the reporter gives them, for runs that do not start Stryker.
