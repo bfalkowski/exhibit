@@ -562,6 +562,22 @@ test('comments: a later comment row that only names "/*" does not stop the look 
   }
 });
 
+test('comments: a JSDoc row with a glob such as **/*.js is still a comment', () => {
+  for (const deleted of [
+    [' * Old words.', ' * Matches src/**/*.js files.', ' */'],
+    ['/**', ' * Matches src/**/*.js files.', ' * Old words.', ' */']
+  ]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted }] }));
+    assert.deepEqual(counted(result), [], deleted.join(' | '));
+    assert.ok(result.dropped.every((d) => d.reason === 'comment'), deleted.join(' | '));
+  }
+});
+
+test('comments: without the file, a glob with a name after "**/" still ends the block, so its row counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' * Matches src/**/foo.js files.', ' */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [6]]]);
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
@@ -681,6 +697,13 @@ test('comments: with the file, a JSDoc text row whose block opens and closes out
   const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
   assert.deepEqual(counted(result), []);
   assert.deepEqual(dropped(result), [['a.js', 2, 'comment']]);
+});
+
+test('comments: with the file, a row whose block ends at a "*/" with a "/" after it counts', () => {
+  const before = '/*\n  a *//b/.test(s) && go();\nx = 1;\n';
+  const after = '/*\n*/\nx = 1;\n';
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: ['  a *//b/.test(s) && go();'], added: ['*/'] }] }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), [['a.js', [2]]]);
 });
 
 test('comments: with the file, a row that starts with the * operator outside a block counts', () => {
