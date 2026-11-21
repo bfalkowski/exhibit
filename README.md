@@ -13,6 +13,7 @@ What works today:
 
 - [Explainer with diagrams](docs/index.html): start here.
 - [Spec](docs/spec.md): commands, file formats, how each part works, and the build order.
+- [Claude Code skills](skills/README.md): skills that ship with Exhibit, such as `review-page`, which builds a local page where a person reviews many items one at a time.
 
 ## The idea
 
