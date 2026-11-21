@@ -236,10 +236,44 @@ test('a policy path that goes through a linked folder is refused, and does not r
   assert.equal(run.status, 2, run.stderr);
   assert.match(run.stderr, /\.github in the base commit [0-9a-f]{7} is a symlink, so \.github\/evidence\.yml goes through it\. Exhibit does not follow it\. Give --policy the path of the real file\./);
   assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'config/evidence.yml']).status, 0);
-  // A path whose folder is not in the base at all is still no policy, not an error.
-  const missing = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'nowhere/evidence.yml']);
-  assert.equal(missing.status, 1, missing.stderr);
-  assert.equal(readEvidence(fixture.repo).policy.sha256, null);
+});
+
+// The review of PR 220, finding 4: a --policy path with a typo read as an empty policy, so the
+// run gave needs_person and the gap "No kind in .github/evidnce.yml matches the changed files".
+test('a --policy file that neither the base nor the head commit has exits 2 and says the file is missing', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, '.github/evidence.yml');
+  for (const path of ['.github/evidnce.yml', 'nowhere/evidence.yml']) {
+    const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', path]);
+    assert.equal(run.status, 2, run.stderr);
+    const message = new RegExp(`--policy names ${path.replaceAll('.', '\\.')}, but neither the base commit [0-9a-f]{7} nor the head commit [0-9a-f]{7} has such a file\\. Check the path\\.`);
+    assert.match(run.stderr, message);
+    assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+    const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+    assert.match(summary, /error/);
+    assert.match(summary, message);
+  }
+  // The real path still works.
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']).status, 0);
+});
+
+// The review of PR 324, finding 1: a repo that starts to use Exhibit adds its policy at the
+// --policy path in the same PR. That PR is a policy change, not a typo.
+test('a --policy file that only the head commit has is the policy change, with an empty policy from the base', (t) => {
+  const fixture = buildRepo(t);
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '-b', 'adds-policy', 'start');
+  mkdirSync(join(fixture.repo, '.github'));
+  writeFileSync(join(fixture.repo, '.github', 'evidence.yml'), POLICY);
+  git('add', '.github');
+  git('commit', '-q', '-m', 'add the policy');
+  git('checkout', '-q', 'main');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'adds-policy', '--policy', '.github/evidence.yml']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.deepEqual(evidence.policy, { path: '.github/evidence.yml', sha256: null });
+  assert.equal(evidence.classification.policy_changed, true);
+  assert.ok(evidence.gaps.some((gap) => gap.type === 'policy-change'));
 });
 
 test('the policy is read from the top of the repo, also when exhibit check runs in a subfolder', (t) => {
