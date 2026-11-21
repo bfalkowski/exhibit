@@ -120,15 +120,16 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 
 // The collector for probe requirements. Each probe runs in the head worktree, made clean again
 // before each probe, so no probe sees the files of the one before it. Each keeps its files in its
-// own folder under .exhibit/probes, named after the probe.
+// own folder under .exhibit/probes, named after the probe. Each gets the run's env, as the test
+// command does.
 function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
   const used = new Set();
-  return async (requirement) => {
+  return async (requirement, context) => {
     const folder = folderName(requirement.params.name, used);
     const outPath = `${PROBES}/${folder}`;
     return runProbe(
       { ...requirement.params, hidden: requirement.author === 'hidden' },
-      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds }
+      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds, env: context.env }
     );
   };
 }

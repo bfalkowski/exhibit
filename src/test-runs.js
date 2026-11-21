@@ -209,15 +209,11 @@ function testName(item, roots) {
 // Runs the command in a shell, in a process group of its own, as a probe runs (spec 9.6). When it
 // runs past `timeoutSeconds`, Exhibit kills the whole group, so no process of the tests keeps
 // running, and gives back timedOut: true. It kills the group after a normal exit too. The
-// command's standard output and standard error go to `logFile`.
-// It drops NODE_TEST_CONTEXT, which node:test sets when Exhibit itself runs under node:test. With
-// it, a node:test run in the command sends its results to that parent run and writes no JUnit
-// file.
+// command's standard output and standard error go to `logFile`. runInGroup drops
+// NODE_TEST_CONTEXT from `env`.
 async function shell(command, cwd, env, timeoutSeconds, logFile) {
-  const clean = { ...env };
-  delete clean.NODE_TEST_CONTEXT;
   try {
-    return await runInGroup(command, { cwd, env: clean, logFile, timeoutMs: timeoutSeconds * 1000 });
+    return await runInGroup(command, { cwd, env, logFile, timeoutMs: timeoutSeconds * 1000 });
   } catch (error) {
     // The shell itself could not start. Count it as a command the shell could not find. Any other
     // error, such as one from opening the log, is not about the command, so it goes up as it is.

@@ -500,6 +500,19 @@ test('the time limit comes from settings.probe_timeout_seconds, and old probe fi
   assert.equal(existsSync(join(fixture.repo, '.exhibit', 'probes', 'old')), false);
 });
 
+test('a probe gets the env that check() gets, without NODE_TEST_CONTEXT, as the test command does', async (t) => {
+  const fixture = buildRepo(t);
+  withProbes(fixture, [{ name: 'env', run: 'echo "mark=${PROBE_MARK-unset} context=${NODE_TEST_CONTEXT-unset} outside=${ONLY_IN_EXHIBIT-unset}"' }]);
+  // A variable in Exhibit's own env that the env given to check() does not have.
+  process.env.ONLY_IN_EXHIBIT = 'yes';
+  t.after(() => delete process.env.ONLY_IN_EXHIBIT);
+  const env = { PATH: process.env.PATH, PROBE_MARK: 'from-check', NODE_TEST_CONTEXT: 'child-v8' };
+  const code = await check(['--base', 'start', '--head', 'notes'], { env, cwd: fixture.repo, stdout: { write() {} } });
+  assert.equal(code, 0);
+  const [probe] = readEvidence(fixture.repo).requirements;
+  assert.equal(readFileSync(join(fixture.repo, probe.details.output), 'utf8'), 'mark=from-check context=unset outside=unset\n');
+});
+
 test('each probe starts in a clean head worktree, so it cannot see the files of the probe before it', (t) => {
   const fixture = buildRepo(t);
   withProbes(fixture, [

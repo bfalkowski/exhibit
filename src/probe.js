@@ -17,14 +17,17 @@ export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
 // `failed`, and how_to_fix says why: the exit code, the artifacts that are missing, or the time
 // limit.
 //
+// `env` is the env of the command, and the env of Exhibit when it is left out. It is the run's env,
+// the same one the test command gets (spec 9.6).
+//
 // `outDir` is the folder for this probe's files, and `outPath` is the same folder as the exhibit
 // names it, such as .exhibit/probes/link-check. The command's output goes to output.log there,
 // and each artifact that exists is copied there under its own path. A hidden probe (`hidden`) keeps
 // nothing: its output goes nowhere and its artifacts are not copied, so the exhibit holds only its
 // status (spec 9.7).
-export async function runProbe({ name, run, artifacts = [], hidden = false }, { worktree, outDir, outPath, timeoutSeconds }) {
+export async function runProbe({ name, run, artifacts = [], hidden = false }, { worktree, outDir, outPath, timeoutSeconds, env = process.env }) {
   if (!hidden) await mkdir(outDir, { recursive: true });
-  const outcome = await runInGroup(run, { cwd: worktree, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
+  const outcome = await runInGroup(run, { cwd: worktree, env, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
 
   const root = await realpath(worktree);
   const found = [];
@@ -100,11 +103,18 @@ function unwatchGroup(kill) {
 // Gives back { code, signal, timedOut }. With `args`, `command` is a program that runs with those
 // arguments, and no shell. `env` is the env of the command, and the env of Exhibit when it is
 // left out. The output goes to `logFile`, or nowhere when it is null.
+//
+// It drops NODE_TEST_CONTEXT from the env. node:test sets it when Exhibit itself runs under
+// node:test. With it, a node:test run in the command sends its results to that parent run and
+// writes no JUnit file. Probes, test runs and mutation runs all start here, so all get the same
+// env.
 export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
     const output = log === null ? 'ignore' : log.fd;
-    const options = { cwd, env, detached: true, stdio: ['ignore', output, output] };
+    const clean = { ...env };
+    delete clean.NODE_TEST_CONTEXT;
+    const options = { cwd, env: clean, detached: true, stdio: ['ignore', output, output] };
     const child = args === null ? spawn(command, { ...options, shell: '/bin/sh' }) : spawn(command, args, options);
     const killGroup = () => {
       try {
