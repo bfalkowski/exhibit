@@ -8,7 +8,7 @@ import { buildExhibit } from '../src/check.js';
 import { check } from '../src/commands/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
 import { isTestPath } from '../src/failing-before.js';
-import { NothingLoaded, TestRunError } from '../src/test-runs.js';
+import { NothingLoaded, TestRunError, TimedOut } from '../src/test-runs.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -472,4 +472,101 @@ test('a change with no test file gives the no-test-file gap, also when the base 
   assert.equal(exhibit.requirements[0].status, 'missing');
   assert.match(exhibit.gaps[0].how_to_fix, /adds or changes no test file/);
   assert.equal(exhibit.verdict, 'needs_person');
+});
+
+// A policy with a short time limit, so a test that hangs on the base stops soon. The head runs
+// with the same limit, so it is long enough to pass on a busy machine too.
+const SHORT_LIMIT = (command = NODE_TESTS) => ({ 'evidence.yml': POLICY(command).replace('settings:\n', 'settings:\n  test_timeout_seconds: 5\n') });
+// A test that waits until double is right. With the bug on the base it waits forever.
+const WAIT_TEST = `${header}import { double } from '../src/math.js';
+test('double ends the wait', async () => {
+  while (double(2) !== 4) await new Promise((done) => setTimeout(done, 50));
+});
+`;
+
+// Makes the branch `name` from start, with `files` committed on it.
+function addBranch({ repo, git }, name, files) {
+  git('checkout', '-q', '-b', name, 'start');
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), text);
+    git('add', path);
+  }
+  git('commit', '-q', '-m', name);
+  git('checkout', '-q', 'main');
+}
+
+test('a new test that hangs on the base and passes on the head counts as did not finish', async (t) => {
+  const fixture = buildRepo(t, NODE_TESTS, () => SHORT_LIMIT());
+  addBranch(fixture, 'fix/hang', { 'src/math.js': FIXED, 'test/wait.test.js': WAIT_TEST });
+  const started = Date.now();
+  const { code, evidence, summary, requirement } = await runCheck(fixture.repo, 'fix/hang');
+  assert.ok(Date.now() - started < 90_000, 'exhibit check stopped the base soon after the time limit');
+  // The plain base and the head finish, so tests-before-after is met as before.
+  assert.equal(evidence.requirements.find((item) => item.type === 'tests-before-after').status, 'met');
+  assert.equal(requirement.status, 'met');
+  assert.equal(requirement.details.tests.length, 1);
+  assert.match(requirement.details.tests[0].name, NAME('test/wait.test.js', 'double ends the wait'));
+  assert.equal(requirement.details.tests[0].on_base, 'did_not_finish');
+  assert.match(requirement.details.base_with_pr_tests_timed_out, /ran past the time limit of 5 seconds on the base with the PR's test files.*base-pr-tests-first\.log/);
+  // The old tests in test/math.test.js are not the PR's, so they do not count.
+  assert.ok(!requirement.details.tests.some((item) => /add sums/.test(item.name)));
+  assert.match(summary, /double ends the wait \(it did not finish on the base: the run passed the time limit\)/);
+  assert.equal(evidence.verdict, 'meets_policy');
+  assert.equal(code, 0);
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a run with the PR\'s tests that hangs only once makes its unfinished tests flaky, so they do not count', async (t) => {
+  // Only the base with the PR's test files has changes that git has staged. There the command
+  // hangs on its first run only. The weak test passes on the second run.
+  const fixture = buildRepo(t, `if ! git diff --cached --quiet && [ ! -e hang.mark ]; then touch hang.mark; sleep 600; fi; ${NODE_TESTS}`, () => SHORT_LIMIT(`if ! git diff --cached --quiet && [ ! -e hang.mark ]; then touch hang.mark; sleep 600; fi; ${NODE_TESTS}`));
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/weak-test');
+  assert.equal(requirement.status, 'missing');
+  assert.deepEqual(requirement.details.tests, []);
+  assert.ok(evidence.flaky_tests.some((name) => NAME('test/double.test.js', 'double is a function').test(name)), evidence.flaky_tests.join('; '));
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+test('a plain base run that hangs leaves failing-before missing, and tests-before-after keeps the head', async (t) => {
+  // The command hangs on the plain base only: the base with the PR's test files has staged
+  // changes, and the head has the fixed code.
+  const command = `if git diff --cached --quiet && grep -q 'a + a + 1' src/math.js; then sleep 600; fi; ${NODE_TESTS}`;
+  const fixture = buildRepo(t, command, () => SHORT_LIMIT(command));
+  const { evidence, requirement, gap } = await runCheck(fixture.repo, 'fix/new-test');
+  const tests = evidence.requirements.find((item) => item.type === 'tests-before-after');
+  assert.equal(tests.status, 'met');
+  assert.deepEqual(tests.details.base, { passed: 0, failed: 0, skipped: 0, flaky: 0 });
+  assert.match(tests.details.base_timed_out.message, /ran past the time limit of 5 seconds on the base/);
+  assert.equal(requirement.status, 'missing');
+  assert.match(requirement.details.base_timed_out.message, /ran past the time limit of 5 seconds on the base/);
+  assert.match(gap.how_to_fix, /The tests ran past the time limit on the base/);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log')), false);
+  assertNoWorktreeLeft(fixture);
+});
+
+// With test results made by hand: when the run with the PR's tests passes the time limit, a test
+// that finished there keeps its result. A PR test with no result had not finished, so it counts.
+// A test that is not the PR's does not count when it has no result.
+test('when the run with the PR\'s tests passes the time limit, only the PR\'s unfinished tests count as did not finish', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const runTests = async () => ({
+    base: new Map([['old.test.js > a', 'passed'], ['test > b', 'passed']]),
+    head: new Map([['old.test.js > a', 'passed'], ['test > b', 'passed'], ['new.test.js > c', 'passed'], ['new.test.js > d', 'passed'], ['new.test.js > e', 'passed'], ['test > f', 'passed']])
+  });
+  const runBaseWithPrTests = async () => new TimedOut('the test command ran past the time limit of 9 seconds on the base with the PR\'s test files', 'Find the test that hangs.',
+    new Map([['new.test.js > c', 'passed'], ['new.test.js > d', 'failed']]));
+  const exhibit = await buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['new.test.js', 'src/a.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+  const [requirement] = exhibit.requirements;
+  assert.equal(requirement.status, 'met');
+  assert.deepEqual(requirement.details.tests, [
+    { name: 'new.test.js > d', on_base: 'failed' },
+    { name: 'new.test.js > e', on_base: 'did_not_finish' },
+    { name: 'test > f', on_base: 'did_not_finish' }
+  ]);
+  assert.deepEqual(requirement.details.passed_on_base, ['new.test.js > c']);
+  assert.match(requirement.details.base_with_pr_tests_timed_out, /ran past the time limit of 9 seconds/);
 });

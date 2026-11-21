@@ -436,19 +436,35 @@ test('the base and head runs give the base error, not a throw, when only the bas
   assertNoWorktreeLeft(fixture);
 });
 
-test('a base run past the time limit is a base with no results: tests-before-after is judged by the head', async (t) => {
+test('a base run past the time limit gives no error: tests-before-after is judged by the head, and the base counts only tests that finished', async (t) => {
   const fixture = buildRepo(t);
   // Only the head has scripts/test.sh, so the command hangs on the base and runs the tests on the
   // head. The head has the same limit, so it gets 3 seconds, to pass on a busy machine too.
   fixture.setBasePolicy(policy('if [ ! -f scripts/test.sh ]; then sleep 600; fi; sh scripts/test.sh').replace('settings:\n', 'settings:\n  test_timeout_seconds: 3\n'));
   fixture.branch('tools', TOOLS);
   const started = Date.now();
-  const { code, evidence, requirement } = await runCheck(fixture.repo, 'tools');
+  const { code, evidence, summary, requirement } = await runCheck(fixture.repo, 'tools');
   assert.ok(Date.now() - started < 60_000, 'exhibit check stopped the base soon after the time limit');
   assert.equal(requirement.status, 'met');
-  assert.equal(requirement.details.base, null);
-  assert.match(requirement.details.base_error.message, /ran past the time limit of 3 seconds on the base/);
+  assert.deepEqual(requirement.details.base, { passed: 0, failed: 0, skipped: 0, flaky: 0 });
+  assert.equal(requirement.details.base_error, undefined);
+  assert.match(requirement.details.base_timed_out.message, /ran past the time limit of 3 seconds on the base, so Exhibit stopped it, and it left no JUnit file that names a test\. Read its output in \.exhibit\/tests\/base-first\.log/);
+  assert.match(summary, /tests-before-after \(from default\): met\. The tests ran past the time limit on the base, so its counts give only the tests that finished/);
   assert.equal(evidence.verdict, 'meets_policy');
   assert.equal(code, 0);
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a base run past the time limit keeps the tests that its JUnit file names as finished', async (t) => {
+  const fixture = buildRepo(t);
+  // On the base, the tests run and write JUnit, and then the command hangs. Only the head has
+  // scripts/test.sh, so it does not hang there.
+  fixture.setBasePolicy(policy(`if [ ! -f scripts/test.sh ]; then ${NODE_TESTS} test/; sleep 600; fi; sh scripts/test.sh`).replace('settings:\n', 'settings:\n  test_timeout_seconds: 5\n'));
+  fixture.branch('tools', TOOLS);
+  const { evidence, requirement } = await runCheck(fixture.repo, 'tools');
+  assert.equal(requirement.status, 'met');
+  assert.deepEqual(requirement.details.base, { passed: 2, failed: 0, skipped: 0, flaky: 0 });
+  assert.match(requirement.details.base_timed_out.message, /its JUnit file names 2 tests that finished/);
+  assert.equal(evidence.verdict, 'meets_policy');
   assertNoWorktreeLeft(fixture);
 });
