@@ -44,7 +44,10 @@ export function mutationCollector({ runStryker = runStrykerProcess } = {}) {
   const runs = new WeakMap();
   return async (requirement, context) => {
     if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker }));
-    return judge(await runs.get(context), requirement.params.min);
+    const runResult = await runs.get(context);
+    const result = judge(runResult, requirement.params.min);
+    // A test that failed in Stryker's first run and passed in the second is flaky (spec 9.3).
+    return runResult.failedInFirstRun ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
   };
 }
 
@@ -106,18 +109,32 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
     }
     const reaching = await testsThatReach(root, allTests, mutated.map((file) => file.path));
     const testFiles = reaching.length > 0 ? reaching : allTests;
-    const outcome = await runStryker({
-      root,
-      mutate: mutated.flatMap(({ path, lines }) => lines.map(([from, to]) => `${path}:${from}-${to}`)),
-      testFiles,
-      budgetSeconds,
-      logFile: join(outDir, 'output.log'),
-      env
-    });
-    const output = `${MUTATION_DIR}/output.log`;
+    const mutate = mutated.flatMap(({ path, lines }) => lines.map(([from, to]) => `${path}:${from}-${to}`));
+    const strykerRun = (log) => runStryker({ root, mutate, testFiles, budgetSeconds, logFile: join(outDir, log), env });
+    const firstOutput = `${MUTATION_DIR}/output.log`;
+    let outcome = await strykerRun('output.log');
+    let output = firstOutput;
+    // Stryker stops when a test fails in its first run, the run that records coverage. A test
+    // can fail there now and then, for example under load, so Exhibit runs Stryker once more, as
+    // it runs the test command once more (spec 9.3). A test that fails only in the first run is
+    // flaky.
+    const failedFirst = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
+    if (failedFirst.length > 0) {
+      outcome = await strykerRun('output-again.log');
+      output = `${MUTATION_DIR}/output-again.log`;
+    }
     if (!outcome.complete && !outcome.timedOut) {
       const why = outcome.code === null ? `was stopped by the signal ${outcome.signal}` : `exited with code ${outcome.code}`;
-      return fixed('error', { reason: `Stryker ${why} before it finished.`, output, mutated, test_files: testFiles },
+      const details = { reason: `Stryker ${why} before it finished.`, output, mutated, test_files: testFiles, ...(failedFirst.length > 0 ? { first_output: firstOutput, failed_in_first_run: failedFirst } : {}) };
+      if (failedFirst.length > 0) {
+        const failedAgain = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
+        const what = failedAgain.length > 0
+          ? `Stryker's first run, which records coverage, failed a test on both runs. On the first run: ${nameFailures(failedFirst)}. On the second run: ${nameFailures(failedAgain)}. Stryker stops on any failed test there, so fix the test on the head, or the code it tests.`
+          : `Stryker's first run, which records coverage, failed a test: ${nameFailures(failedFirst)}. Exhibit ran Stryker once more, and it ${why} again, for another reason.`;
+        return fixed('error', details,
+          `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. ${what} Read ${firstOutput} and ${output}, and run exhibit check again.`);
+      }
+      return fixed('error', details,
         `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. A failing test on the head stops it, and so does a broken setup. Read ${output}, fix the cause, and run exhibit check again.`);
     }
     return {
@@ -127,11 +144,22 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
       mutated,
       testFiles,
       testSelection: reaching.length > 0 ? 'reach' : 'all',
-      output
+      output,
+      ...(failedFirst.length > 0 ? { firstOutput, failedInFirstRun: failedFirst } : {})
     };
   } finally {
     await worktree.remove();
   }
+}
+
+// True when Stryker stopped because a test failed in its first run.
+function stoppedByTests(outcome) {
+  return !outcome.complete && !outcome.timedOut && (outcome.failedInFirstRun?.length ?? 0) > 0;
+}
+
+// The failed tests as "test/a.test.js (what failed)", joined for a gap.
+function nameFailures(failures) {
+  return failures.map(({ test, message }) => (message ? `${test} (${message})` : test)).join('; ');
 }
 
 function fixed(status, details, howToFix) {
@@ -160,6 +188,7 @@ export function judge(runResult, min) {
     test_files: runResult.testFiles,
     test_selection: runResult.testSelection,
     output: runResult.output,
+    ...(runResult.failedInFirstRun ? { first_output: runResult.firstOutput, failed_in_first_run: runResult.failedInFirstRun } : {}),
     survivors: listed(mutants, 'Survived'),
     no_coverage_mutants: listed(mutants, 'NoCoverage'),
     timeout_mutants: listed(mutants, 'Timeout')
@@ -369,8 +398,9 @@ async function isFile(path) {
 //
 // It stops Stryker, with every process it started, when `budgetSeconds` runs out. Exhibit's
 // reporter writes each mutant to a file as soon as it is done, so a stopped run still gives the
-// mutants it finished. Gives back { mutants, complete, timedOut, code, signal }. `complete` is
-// true when Stryker exited 0 and wrote its done line.
+// mutants it finished. Gives back { mutants, complete, timedOut, code, signal, failedInFirstRun }.
+// `complete` is true when Stryker exited 0 and wrote its done line. `failedInFirstRun` lists the
+// tests that failed in Stryker's first run, from its log.
 async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFile, env }) {
   const dir = await mkdtemp(join(tmpdir(), 'exhibit-stryker-'));
   try {
@@ -409,10 +439,34 @@ async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFi
       logFile,
       timeoutMs: budgetSeconds * 1000
     });
-    return readOutcome(await readFile(resultsFile, 'utf8'), outcome);
+    const failed = failedInFirstRun(await readFile(logFile, 'utf8').catch(() => ''));
+    return { ...readOutcome(await readFile(resultsFile, 'utf8'), outcome), failedInFirstRun: failed };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+const FIRST_RUN_FAILED = 'One or more tests failed in the initial test run:';
+
+// The tests that failed in Stryker's first run, as [{ test, message }], read from Stryker's log.
+// When a test fails there, Stryker logs the line FIRST_RUN_FAILED, then for each failed test a
+// line with a tab and its name, and a line with two tabs and what failed. The tap runner names a
+// test by its file, and gives the names of the failed tests in the file as what failed. A log
+// without that line gives [].
+export function failedInFirstRun(log) {
+  const lines = log.split('\n');
+  const start = lines.findIndex((line) => line.endsWith(FIRST_RUN_FAILED));
+  if (start === -1) return [];
+  const failures = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith('\t\t') && failures.length > 0) {
+      const failure = failures.at(-1);
+      failure.message = [failure.message, line.slice(2).trim()].filter(Boolean).join(' ');
+    } else if (line.startsWith('\t') && !line.startsWith('\t\t')) {
+      failures.push({ test: line.slice(1).trim(), message: '' });
+    } else break;
+  }
+  return failures;
 }
 
 // What a Stryker run gave: the reporter's file `text`, one JSON line for each mutant and a last
@@ -471,6 +525,7 @@ export function describeMutation(details) {
   }
   if (details.complete === false) parts.push(` The budget of ${details.budget_seconds} seconds ran out, so this is a sample.`);
   if (details.not_valid > 0) parts.push(` ${details.not_valid} mutants did not compile or broke the code at load, so they do not count.`);
+  if (details.failed_in_first_run?.length > 0) parts.push(` Stryker's first run failed ${details.failed_in_first_run.map((failure) => failure.test).join(', ')}, so Exhibit ran Stryker once more, and this is the second run. Those tests are flaky.`);
   const lines = [parts.join('')];
   const show = (title, mutants) => {
     if (!mutants?.length) return;
