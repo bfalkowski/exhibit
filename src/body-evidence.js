@@ -14,10 +14,10 @@ const FAILED = /\bfail(?:s|ed|ing|ures?)?\b|\btim(?:ed|es) out\b/g;
 const BEFORE = /\bbefore\b|\b(?:on|against) main\b|\bold\b|\bred\b|\bwithout (?:the|this|that|it)\b/;
 // A word that denies the claim after it in its clause, as in "I did not run pytest".
 const DENIAL = /\b(?:not|no|never|none|nothing|cannot)\b|n['’]t\b/;
-// A count of 0 before a failure word, with at most one word between them, as in "0 fail",
-// "zero failures" or "0 tests failed". It denies only that word, so "exit code 0 from npm test"
-// still names a test run. The 0 of a version such as "22.0" is not a count.
-const NONE_FAILED = /(?<![\w.])(?:0|zero)\s+(?:\S+\s+)?$/;
+// A count of 0 before a failure word, with at most one word of the same clause between them, as
+// in "0 fail", "zero failures" or "0 tests failed". It denies only that word, so "exit code 0
+// from npm test" still names a test run. The 0 of a version such as "22.0" is not a count.
+const NONE_FAILED = /(?<![\w.])(?:0|zero)\s+(?:[^\s.,;:!?(]+\s+)?$/;
 // Quoted text, such as a test's name or an error message. A before word in it, as in
 // 'fails at "the old Lead"', is not the builder's claim.
 const QUOTED = /"[^"]*"|“[^”]*”|`[^`]*`/g;
@@ -76,8 +76,8 @@ export function evidenceSection(body) {
  * A command counts only as whole words, so "make" is not found in "remake". A command or a
  * failure counts only when its clause has no "not", "no", "never", "none", "nothing", "cannot"
  * or "n't" (or "n’t") before it, so "I did not run pytest" names no test run. A clause ends at
- * . , ; : ! ? ( or a line break. A failure word after "0" or "zero", with at most one word between,
- * as in "0 fail" or "0 tests failed", does not count either.
+ * . , ; : ! ? ( or a line break. A failure word after "0" or "zero", with at most one word of the
+ * same clause between, as in "0 fail" or "0 tests failed", does not count either.
  *
  * - tests-before-after: the section names a test run: the policy's test_command, or one of
  *   TEST_COMMANDS.

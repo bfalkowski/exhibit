@@ -270,6 +270,9 @@ test('bodyStatus reads n’t, and a 0 only in "0 fail"', () => {
   assert.equal(bodyStatus(failing, 'On main, 0 tests failed.'), 'missing');
   assert.equal(bodyStatus(failing, 'On main zero tests failed.'), 'missing');
   assert.equal(bodyStatus(failing, 'On Node 22.0 failed before the fix.'), 'met');
+  // Review of e1866d2: the word between the count and the failure word stays in the same clause.
+  assert.equal(bodyStatus(failing, 'On main: 0 passed, failed 3 of 3.'), 'met');
+  assert.equal(bodyStatus(failing, 'Before the fix: 0 pass; fails 4 of 4.'), 'met');
 });
 
 test('share gives k of n with its 95% interval, and null for n = 0', () => {
