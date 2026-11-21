@@ -380,4 +380,14 @@ test('a mutmut run that crashes, stops, or leaves out a changed file never meets
   assert.equal(leftOut.status, 'missing');
   assert.deepEqual(leftOut.details.left_out, ['py/shop/inside.py']);
   assert.match(leftOut.how_to_fix, /source_paths are other/);
+  assert.match(leftOut.how_to_fix, /add it to settings\.mutation_test_files/);
+});
+
+test('settings.mutation_test_files leaves a Python file out of mutation, as the left-out gap says', async (t) => {
+  const fixture = buildRepo(t, { heads: { change: { 'py/shop/inside.py': NEW_CODE, 'py/conftest.py': 'import os\n' } } });
+  const context = { cwd: fixture.repo, base: fixture.sha('start'), head: fixture.sha('change'), settings: { mutation_test_files: ['py/conftest.py'] }, env: gitEnv(fixture.home) };
+  const calls = [];
+  const result = await mutationCollector({ runMutmut: fakeMutmut(calls, { mutants: mutmutMutants(['Killed']), complete: true, timedOut: false, code: 0 }) })({ params: { min: 0.5 } }, context);
+  assert.deepEqual(calls[0].files.map((file) => file.path), ['shop/inside.py']);
+  assert.deepEqual(result.details.mutated.map((file) => file.path), ['py/shop/inside.py']);
 });

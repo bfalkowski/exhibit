@@ -202,7 +202,7 @@ async function mutmutRun({ root, settings, budgetSeconds, outDir, env, mutated, 
     if (outcome.leftOut) {
       const leftOut = outcome.leftOut.map((path) => (project === '' ? path : `${project}/${path}`));
       return fixed('missing', { ...details, reason: `mutmut would not mutate ${leftOut.join(', ')}.`, left_out: leftOut, source_paths: outcome.sourcePaths },
-        `The change has Python code in ${leftOut.join(', ')}, but mutmut's config in ${where} leaves those files out: its source_paths are ${outcome.sourcePaths.join(', ')}, and do_not_mutate or only_mutate can leave files out too. Change [tool.mutmut] in pyproject.toml, or [mutmut] in setup.cfg, so that mutmut mutates them, and run exhibit check again.`);
+        `The change has Python code in ${leftOut.join(', ')}, but mutmut's config in ${where} leaves those files out: its source_paths are ${outcome.sourcePaths.join(', ')}, and do_not_mutate or only_mutate can leave files out too. Change [tool.mutmut] in pyproject.toml, or [mutmut] in setup.cfg, so that mutmut mutates them. When a file is not code under test, such as a conftest.py, setup.py or noxfile.py, add it to settings.mutation_test_files in evidence.yml instead: Exhibit never mutates a file that those globs match. Then run exhibit check again.`);
     }
     if (!outcome.complete && !outcome.timedOut) {
       const why = outcome.code === null ? `was stopped by the signal ${outcome.signal}` : `exited with code ${outcome.code}`;

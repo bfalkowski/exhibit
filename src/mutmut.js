@@ -20,7 +20,8 @@ const PROJECT_FILES = ['pyproject.toml', 'setup.cfg', 'setup.py'];
 
 // mutmut's status for each exit code (STATUS_BY_EXIT_CODE in mutmut/stats.py), given as the
 // Stryker status that Exhibit counts the same way. mutmut kills a mutant's test run when it uses
-// too much CPU time, and calls that a timeout. "no tests" means no test ran the mutant's
+// too much CPU time, or, in forkserver mode, too much wall-clock time (half the CPU limit), and
+// calls that a timeout. "no tests" means no test ran the mutant's
 // function. A crash (mutmut's "segfault") and "caught by type check" make the mutant not valid,
 // as Stryker's RuntimeError and CompileError do. Exit code 2 ("check was interrupted by user")
 // and no exit code ("not checked") mean that mutmut did not finish testing the mutant.
