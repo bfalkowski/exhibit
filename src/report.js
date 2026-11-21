@@ -9,8 +9,9 @@ export const HISTORY_REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/
 export const BACKTEST_REPORT = { markdown: '.exhibit/backtest.md', html: '.exhibit/backtest.html' };
 
 // The rule for weak history (spec 8.5). The history is weak when it has fewer than `minFixPrs`
-// fix PRs, when SZZ linked none of them or did not run, or when fewer than half of the escaped
-// defects have a link with a confidence of `strongConfidence` or more.
+// fix PRs, when SZZ linked none of them or did not run, when every linked defect is a deferral,
+// or when fewer than half of the escaped defects have a link with a confidence of
+// `strongConfidence` or more.
 export const WEAK_HISTORY = { minFixPrs: 10, strongConfidence: 0.5 };
 
 // The most lines the report shows for one link. history.jsonl has them all.
@@ -113,7 +114,7 @@ function reportBlocks(lines, { repo, szzRan, fixSignals, labels }) {
   }
   blocks.push(paragraph(
     `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them or did not run, ` +
-    `or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
+    `when every linked defect is a deferral, or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
   ));
 
   if (escaped.length > 0) {

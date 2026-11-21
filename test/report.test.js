@@ -192,7 +192,7 @@ test('outside a clone, the report says that SZZ did not run', () => {
     assert.ok(text.includes('SZZ did not run, because history ran outside a clone of the repo. So this report cannot show escaped defects. Run exhibit history inside a clone of fixture/shop.'), text);
     assert.ok(text.includes('The history is weak'));
     // The rule names this case, as spec 8.5 does.
-    assert.ok(text.includes('Exhibit calls the history weak when it has fewer than 10 fix PRs, when SZZ links none of them or did not run, or when fewer than half of the escaped defects have a link with a confidence of 0.5 or more.'), text);
+    assert.ok(text.includes('Exhibit calls the history weak when it has fewer than 10 fix PRs, when SZZ links none of them or did not run, when every linked defect is a deferral, or when fewer than half of the escaped defects have a link with a confidence of 0.5 or more.'), text);
     assert.deepEqual(factsIn(text).defects, []);
   }
 });
@@ -364,4 +364,5 @@ test('when every linked defect is a deferral, the history is weak, with no "0 of
   assert.equal(factsIn(markdownText(markdown)).weak, true);
   assert.match(markdown, /Every linked defect is a deferral, so there are no escaped defects to judge\./);
   assert.doesNotMatch(markdown, /0 of the 0/);
+  assert.match(markdown, /Exhibit calls the history weak when .*when every linked defect is a deferral, or when/);
 });
