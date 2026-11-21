@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runProbe } from '../src/probe.js';
 
 // A worktree folder for the probe to run in, and an output folder, both removed after the test.
@@ -113,6 +115,23 @@ test('a time-out is failed, not an error, when macOS answers EPERM for a group o
   const result = await runProbe(probe({ run: 'sleep 30 & sleep 30 & wait' }), { ...where, timeoutSeconds: 0.2 });
   assert.equal(result.status, 'failed');
   assert.equal(result.details.timed_out, true);
+});
+
+// stopAllGroups sets state that lasts for the whole process, so this test runs it in a process of
+// its own. runInGroup first opens the log file, and only then starts the command. A stop that
+// comes while the file opens must still keep the command from running.
+test('stopAllGroups during the log file open keeps the command from starting', (t) => {
+  const { dir } = setup(t);
+  const marker = join(dir, 'ran');
+  const probeModule = fileURLToPath(new URL('../src/probe.js', import.meta.url));
+  const script = `
+    import { runInGroup, stopAllGroups } from ${JSON.stringify(probeModule)};
+    runInGroup('echo ran > ' + ${JSON.stringify(marker)}, { cwd: ${JSON.stringify(dir)}, logFile: ${JSON.stringify(join(dir, 'output.log'))}, timeoutMs: 10000 });
+    stopAllGroups();
+    setTimeout(() => process.exit(0), 500);
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script]);
+  assert.equal(existsSync(marker), false);
 });
 
 test('a hidden probe keeps no output and no artifacts', async (t) => {

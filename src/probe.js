@@ -70,9 +70,9 @@ function failure(outcome, missing, timeoutSeconds) {
   return null;
 }
 
-// The kill function of each process group that runInGroup started and that may still run. A probe
-// runs in a group of its own, so a Ctrl-C in the terminal does not reach it. stopAllGroups uses
-// this set to stop the groups when Exhibit itself is stopped.
+// The kill function of each process group that runInGroup started and that may still run: probes,
+// settings.mutation_setup and Stryker. Each runs in a group of its own, so a Ctrl-C in the terminal
+// does not reach it. stopAllGroups uses this set to stop the groups when Exhibit itself is stopped.
 const liveGroups = new Set();
 let stopping = false;
 
@@ -93,6 +93,8 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
   if (stopping) return new Promise(() => {});
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
+    // The stop can come while the log file opens. Check again, so no command starts after it.
+    if (stopping) return await new Promise(() => {});
     const output = log === null ? 'ignore' : log.fd;
     const options = { cwd, env, detached: true, stdio: ['ignore', output, output] };
     const child = args === null ? spawn(command, { ...options, shell: '/bin/sh' }) : spawn(command, args, options);

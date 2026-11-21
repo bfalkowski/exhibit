@@ -120,10 +120,11 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   return code;
 }
 
-// While probes run, a Ctrl-C (SIGINT) or a SIGTERM stops Exhibit in a clean way (spec 9.6). A
-// probe runs in a process group of its own, so the signal does not reach it, and Node would exit
-// at once without running any finally block. So the handler kills every probe's group, runs
-// `cleanUp`, which removes the head worktree, and then exits with the usual code for the signal:
+// While the collectors run, a Ctrl-C (SIGINT) or a SIGTERM stops Exhibit in a clean way (spec
+// 9.6). A probe, settings.mutation_setup and Stryker each run in a process group of their own, so
+// the signal does not reach them, and Node would exit at once without running any finally block.
+// So the handler kills every group that runInGroup started (stopAllGroups), runs `cleanUp`, which
+// removes the head worktree of the probes, and then exits with the usual code for the signal:
 // 128 plus the signal's number, so 130 for SIGINT and 143 for SIGTERM. A second signal while it
 // cleans up changes nothing. `off()` removes the handlers.
 function onStopSignal(cleanUp) {
