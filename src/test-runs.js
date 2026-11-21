@@ -32,6 +32,17 @@ export class TestRunError extends Error {
   }
 }
 
+// The run on the base with the PR's test files gave no results because the command failed:
+// it wrote no JUnit file, or the file names no failing test. Only the PR's test files differ from
+// the plain base run, which gave results, so they broke the command. Most often a new test does
+// not compile or load on the base, for example when it uses a function or type that the base lacks
+// (spec 9.4). `message` says what the command did, and names the log of the first run.
+export class NothingLoaded {
+  constructor(message) {
+    this.message = message;
+  }
+}
+
 // The base's error as it goes in a requirement's details: its message and what to do.
 export function baseErrorDetails(error) {
   return { message: error.message, how_to_fix: error.howToFix };
@@ -78,7 +89,9 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
 // worktree of the base, puts in each path of `paths` as it is on the head, removes each one that
 // the head does not have, and then runs the tests as runTestsOnBaseAndHead does. So a test that
 // the PR added or changed runs against the old code. It gives back one Map, like one side of
-// runTestsOnBaseAndHead, and throws a TestRunError when the run cannot give results. Its logs are
+// runTestsOnBaseAndHead. When the command fails and gives no failing test, on both runs, it gives
+// back a NothingLoaded instead. It throws a TestRunError when the run cannot give results for any
+// other reason, and when only one of the two runs gave results. Its logs are
 // base-pr-tests-first.log and base-pr-tests-again.log.
 export async function runTestsOnBaseWithPrTests({ cwd, base, head, paths, settings = {}, env = process.env }) {
   const { command, results, timeoutSeconds } = checkSettings(settings);
@@ -117,9 +130,17 @@ async function runSide({ cwd, sha, side, tag = side, command, results, timeoutSe
     }
     if (overlay) await putFiles(folder, overlay);
     const roots = [folder, await realpath(folder)];
-    const first = await runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log: log('first') });
-    if (![...first.values()].includes('failed')) return first;
-    const second = await runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log: log('again') });
+    // Only the run with the PR's test files can give back a NothingLoaded.
+    const once = (run) => runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log: log(run), mayNotLoad: Boolean(overlay) });
+    const first = await once('first');
+    if (!(first instanceof NothingLoaded) && ![...first.values()].includes('failed')) return first;
+    const second = await once('again');
+    if (first instanceof NothingLoaded && second instanceof NothingLoaded) return first;
+    if (first instanceof NothingLoaded || second instanceof NothingLoaded) {
+      const [none, some] = first instanceof NothingLoaded ? ['first', 'second'] : ['second', 'first'];
+      throw new TestRunError('error', `the test command on the ${side} gave no results on its ${none} run but did on its ${some}, so it is flaky`,
+        `The test command "${command}" gave no results on the ${side} on its ${none} run, but it did on its ${some} run. So Exhibit cannot tell whether the PR's tests load on the base. Read the output in ${log('first').shown} and ${log('again').shown} to see why the runs differ.`);
+    }
     return settle(first, second);
   } finally {
     await removeWorktree(cwd, folder);
@@ -138,8 +159,9 @@ async function putFiles(folder, { sha, paths }) {
 }
 
 // One run of the test command, read from its JUnit file. The command's output goes to `log.file`,
-// and each how_to_fix names it as `log.shown`.
-async function runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log }) {
+// and each how_to_fix names it as `log.shown`. With `mayNotLoad`, a command that fails and writes
+// no JUnit file, or a file that names no failing test, gives back a NothingLoaded, not an error.
+async function runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log, mayNotLoad = false }) {
   const file = resolve(folder, results);
   await rm(file, { force: true });
   await mkdir(dirname(file), { recursive: true });
@@ -160,6 +182,7 @@ async function runOnce({ folder, roots, side, command, results, timeoutSeconds, 
     xml = await readFile(file, 'utf8');
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
+    if (mayNotLoad && exit.code !== 0) return new NothingLoaded(`the test command failed on the ${side} (${exitWords(exit)}) and wrote no JUnit file at ${results}. Read its output in ${log.shown}`);
     throw new TestRunError('error', `the test command wrote no JUnit file at ${results} on the ${side} (${exitWords(exit)})`,
       `The test command "${command}" ran on the ${side} (${exitWords(exit)}), but it wrote no JUnit file at ${results}. ${read}. Make the command write JUnit XML to settings.test_results, for example with node --test --test-reporter=junit --test-reporter-destination=${results}.`);
   }
@@ -177,6 +200,7 @@ async function runOnce({ folder, roots, side, command, results, timeoutSeconds, 
     if (!old || RANK[item.status] > RANK[old]) tests.set(name, item.status);
   }
   if (exit.code !== 0 && ![...tests.values()].includes('failed')) {
+    if (mayNotLoad) return new NothingLoaded(`the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test. Read its output in ${log.shown}`);
     throw new TestRunError('error', `the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test`,
       `The test command "${command}" failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test, so Exhibit cannot tell what broke. ${read} to see why it fails.`);
   }

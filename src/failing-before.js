@@ -1,4 +1,4 @@
-import { baseErrorDetails, TestRunError } from './test-runs.js';
+import { baseErrorDetails, NothingLoaded, TestRunError } from './test-runs.js';
 
 const LISTED = 20;
 
@@ -24,6 +24,10 @@ export function isTestPath(path) {
 // - it fails in the run with the PR's test files, or its file could not load there. A file that
 //   cannot load, for example because it imports a module the base lacks, shows as one failed test
 //   case named after the file, as node:test writes it. The tests in that file then do not run.
+//   Many tools stop the whole command instead, such as `tsc && node --test`, or Go, where one test
+//   file that does not compile stops its package. When that run fails and gives no failing test
+//   (a NothingLoaded), every PR test file counts as not loaded. Then only a test in a PR test
+//   file, or one that the plain base run does not have, is the PR's.
 // - it passes on the head.
 // - it is not flaky in any of the three runs.
 //
@@ -62,8 +66,10 @@ export async function failingBefore(requirement, context) {
     };
   }
 
+  const nothingLoaded = overlay instanceof NothingLoaded ? overlay : null;
+  if (nothingLoaded) overlay = new Map();
   const flaky = new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky'), ...namesWith(overlay, 'flaky')]);
-  const didNotLoad = testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
+  const didNotLoad = nothingLoaded ? testFiles : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
   const fileOf = (name) => testFiles.find((file) => name.startsWith(`${file} > `));
 
   const tests = [];
@@ -72,7 +78,8 @@ export async function failingBefore(requirement, context) {
     if (status !== 'passed' || flaky.has(name)) continue;
     const file = fileOf(name);
     const onBase = overlay.get(name);
-    const theirs = file !== undefined || !runs.base.has(name) || runs.base.get(name) !== onBase;
+    // With nothing loaded there is no result to compare with the plain base run.
+    const theirs = file !== undefined || !runs.base.has(name) || (!nothingLoaded && runs.base.get(name) !== onBase);
     if (!theirs) continue;
     if (onBase === 'failed') {
       tests.push({ name, on_base: 'failed' });
@@ -87,6 +94,7 @@ export async function failingBefore(requirement, context) {
 
   const flakyHere = [...flaky].sort();
   const details = { test_files: testFiles, tests, passed_on_base: passedOnBase, did_not_load_on_base: didNotLoad };
+  if (nothingLoaded) details.base_with_pr_tests_error = nothingLoaded.message;
   if (tests.length > 0) return { status: 'met', details, flaky_tests: flakyHere };
 
   const shown = passedOnBase.slice(0, LISTED).join('; ');
