@@ -188,3 +188,53 @@ function git(cwd, args, { input, env = process.env } = {}) {
     }
   });
 }
+
+/**
+ * Reads the stored exhibits of the PRs in `heads`, a Map from PR number to the PR's head commit,
+ * for the backtest (spec 9.9). It reads only prs/<number>/<head>.json, the exhibit of the PR's
+ * last head commit. `settings` are the policy's settings: storage, data_branch and local_path, as
+ * exhibit publish reads them. On the data branch, it reads the branch as the clone has it, from
+ * refs/remotes/<remote>/<branch> and then refs/heads/<branch>, and fetches nothing. With no such
+ * branch, or outside a clone, there are no exhibits. Returns { exhibits, where, bad }: a Map from
+ * PR number to exhibit, the place it read, or null, and the paths whose file is not JSON or fails
+ * `check`, which it leaves out.
+ */
+export async function readStoredExhibits(cwd, settings, heads, { remote = 'origin', check = () => [] } = {}) {
+  const exhibits = new Map();
+  const bad = [];
+  const keep = (path, text) => {
+    let exhibit;
+    try {
+      exhibit = JSON.parse(text);
+    } catch {
+      bad.push(path);
+      return;
+    }
+    if (check(exhibit).length > 0) bad.push(path);
+    else exhibits.set(exhibit.pr, exhibit);
+  };
+  if ((settings.storage ?? 'data-branch') === 'local') {
+    const folder = settings.local_path ?? DEFAULT_LOCAL_PATH;
+    for (const [pr, head] of heads) {
+      const path = join(folder, `prs/${pr}/${head}.json`);
+      const text = await readFile(resolve(cwd, path), 'utf8').catch(() => null);
+      if (text !== null) keep(path, text);
+    }
+    return { exhibits, where: folder, bad };
+  }
+  const branch = settings.data_branch ?? DEFAULT_DATA_BRANCH;
+  let ref = null;
+  for (const candidate of [`refs/remotes/${remote}/${branch}`, `refs/heads/${branch}`]) {
+    if (await git(cwd, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`]).then(() => true, () => false)) {
+      ref = candidate;
+      break;
+    }
+  }
+  if (ref === null) return { exhibits, where: null, bad };
+  const paths = new Set((await git(cwd, ['ls-tree', '-r', '--name-only', ref, '--', 'prs'])).split('\n').filter(Boolean));
+  for (const [pr, head] of heads) {
+    const path = `prs/${pr}/${head}.json`;
+    if (paths.has(path)) keep(`${path} on ${branch}`, await git(cwd, ['show', `${ref}:${path}`]));
+  }
+  return { exhibits, where: ref, bad };
+}

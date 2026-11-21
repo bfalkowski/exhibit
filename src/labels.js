@@ -220,7 +220,7 @@ export async function readLabelsToCount(cwd) {
 }
 
 // Parses JSON lines, and refuses the file at the first line that is not JSON or fails `check`.
-function parseLines(text, name, check, fix) {
+export function parseLines(text, name, check, fix) {
   const lines = [];
   for (const [index, row] of text.split('\n').entries()) {
     if (row.trim() === '') continue;
