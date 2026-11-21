@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runProbe } from '../src/probe.js';
+import { fileURLToPath } from 'node:url';
+import { runInGroup, runProbe } from '../src/probe.js';
 
 // A worktree folder for the probe to run in, and an output folder, both removed after the test.
 function setup(t) {
@@ -73,6 +75,50 @@ test('a folder artifact does not copy a symbolic link that leads outside the wor
   assert.equal(existsSync(join(copy, 'leak')), false);
 });
 
+// Lists the files and folders under `dir`, as paths relative to it, without following links.
+function listTree(dir, prefix = '') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = prefix + entry.name;
+    return entry.isDirectory() ? [path, ...listTree(join(dir, entry.name), `${path}/`)] : [path];
+  }).sort();
+}
+
+test('a folder artifact leaves out a symbolic link to its parent folder, and the probe is met', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep && echo a > rep/a && ln -s .. rep/up', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  const copy = join(where.outDir, 'artifacts', 'rep');
+  assert.deepEqual(listTree(copy), ['a']);
+  assert.equal(readFileSync(join(copy, 'a'), 'utf8'), 'a\n');
+});
+
+test('a folder artifact leaves out a symbolic link that leads nowhere', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep && echo a > rep/a && ln -s nowhere rep/dead', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), ['a']);
+});
+
+test('a folder artifact leaves out a symbolic link to the worktree root', async (t) => {
+  const where = setup(t);
+  const result = await runProbe(probe({ run: 'mkdir -p rep/sub && echo a > rep/a && ln -s "$PWD" rep/sub/root', artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), ['a', 'sub']);
+});
+
+test('a folder artifact leaves out two links that point at each other folder, but keeps the folders', async (t) => {
+  const where = setup(t);
+  // rep/a/to-b leads to rep/b, and rep/b/to-a leads back to rep/a. Each folder is copied once,
+  // through the link, and the link that would go back into a folder on the way is left out.
+  const run = 'mkdir -p rep/a rep/b && echo 1 > rep/a/one && echo 2 > rep/b/two && ln -s ../b rep/a/to-b && ln -s ../a rep/b/to-a';
+  const result = await runProbe(probe({ run, artifacts: ['rep'] }), { ...where, timeoutSeconds: 10 });
+  assert.equal(result.status, 'met');
+  assert.deepEqual(listTree(join(where.outDir, 'artifacts', 'rep')), [
+    'a', 'a/one', 'a/to-b', 'a/to-b/two',
+    'b', 'b/to-a', 'b/to-a/one', 'b/two'
+  ]);
+});
+
 test('a probe that runs past the time limit is failed, and the gap says it timed out', async (t) => {
   const where = setup(t);
   const started = Date.now();
@@ -115,6 +161,23 @@ test('a time-out is failed, not an error, when macOS answers EPERM for a group o
   assert.equal(result.details.timed_out, true);
 });
 
+// stopAllGroups sets state that lasts for the whole process, so this test runs it in a process of
+// its own. runInGroup first opens the log file, and only then starts the command. A stop that
+// comes while the file opens must still keep the command from running.
+test('stopAllGroups during the log file open keeps the command from starting', (t) => {
+  const { dir } = setup(t);
+  const marker = join(dir, 'ran');
+  const probeModule = fileURLToPath(new URL('../src/probe.js', import.meta.url));
+  const script = `
+    import { runInGroup, stopAllGroups } from ${JSON.stringify(probeModule)};
+    runInGroup('echo ran > ' + ${JSON.stringify(marker)}, { cwd: ${JSON.stringify(dir)}, logFile: ${JSON.stringify(join(dir, 'output.log'))}, timeoutMs: 10000 });
+    stopAllGroups();
+    setTimeout(() => process.exit(0), 500);
+  `;
+  execFileSync(process.execPath, ['--input-type=module', '-e', script]);
+  assert.equal(existsSync(marker), false);
+});
+
 test('a hidden probe keeps no output and no artifacts', async (t) => {
   const where = setup(t);
   const result = await runProbe(probe({ run: 'echo secret-$((40 + 2)); echo x > a.log; exit 1', artifacts: ['a.log'], hidden: true }), { ...where, timeoutSeconds: 10 });
@@ -140,4 +203,23 @@ async function gone(pid) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
+}
+
+// runInGroup is the one place where probes, test runs and mutation runs start, so it is the one
+// place that drops NODE_TEST_CONTEXT. It does so for a shell command, as a probe, the test command
+// and mutation_setup run, and for a program with args, as the Stryker run starts.
+for (const [form, command, args] of [
+  ['a shell command', 'echo "mark=${MARK-unset} context=${NODE_TEST_CONTEXT-unset}"', null],
+  ['a program with args', '/bin/sh', ['-c', 'echo "mark=${MARK-unset} context=${NODE_TEST_CONTEXT-unset}"']]
+]) {
+  test(`runInGroup drops NODE_TEST_CONTEXT from the env of ${form}, and keeps the rest`, async (t) => {
+    const where = setup(t);
+    const logFile = join(where.dir, 'run.log');
+    const env = { PATH: process.env.PATH, MARK: 'kept', NODE_TEST_CONTEXT: 'child-v8' };
+    const outcome = await runInGroup(command, { cwd: where.worktree, logFile, timeoutMs: 10000, env, args });
+    assert.equal(outcome.code, 0);
+    assert.equal(readFileSync(logFile, 'utf8'), 'mark=kept context=unset\n');
+    // The caller's env is not changed.
+    assert.equal(env.NODE_TEST_CONTEXT, 'child-v8');
+  });
 }

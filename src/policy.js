@@ -21,15 +21,22 @@ const PR_NUMBER = /^[1-9]\d*$/;
 // way. It returns the policy with settings.fix_signals filled in: the defaults when there is no
 // file, or when the file does not set them. A file that is not valid YAML, or that breaks a rule
 // of the schema, is a ToolError, so the run exits 2. The message names each bad field.
-export async function readPolicy(cwd, path = DEFAULT_POLICY) {
+export async function readPolicy(cwd, path = DEFAULT_POLICY, { given = false } = {}) {
   let text;
   try {
     text = await readFile(join(cwd, path), 'utf8');
   } catch (error) {
+    if (error.code === 'ENOENT' && given) throw new ToolError(missingPolicy(path, 'there is no such file'));
     if (error.code === 'ENOENT') return withDefaults({});
     throw new ToolError(`could not read ${path}: ${error.message}`);
   }
+  return parsePolicy(text, path);
+}
 
+// Checks the text of a policy file as readPolicy does, and returns the same result. `text` is
+// null when there is no file. exhibit check uses it for the policy in the base commit (spec 8.1).
+export function parsePolicy(text, path = DEFAULT_POLICY) {
+  if (text === null) return withDefaults({});
   let policy;
   try {
     policy = parse(text);
@@ -118,7 +125,11 @@ function checkSignals(signals, file) {
     // creates or renames the label, and git refuses a space in a branch name. So refuse
     // both, with a message that shows the fix.
     if (value !== value.trim()) throw new ToolError(`${at} is "${signal}". Remove the space before or after the value, as in ${type}:${value.trim()}.`);
-    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, as in pr:96.`);
+    if (type === 'pr' && !PR_NUMBER.test(value)) throw new ToolError(`${at} is "${signal}". A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96.`);
+    // A repeated pr: signal does no harm, as the first match wins, but it is most often a typo
+    // for another number, so that PR would be missed. So refuse it, and name both places.
+    const first = signals.indexOf(signal);
+    if (type === 'pr' && first < i) throw new ToolError(`${at} is "${signal}", the same as settings.fix_signals[${first}]. Name each PR once.`);
     if (type === 'tracker' && !TRACKERS.includes(value)) throw new ToolError(`${at} is "${signal}". A tracker: signal names a tracker Exhibit knows: ${TRACKERS.map((name) => `tracker:${name}`).join(', ')}.`);
   });
 }
@@ -152,6 +163,13 @@ function spaceHint(value) {
 
 function isMapping(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The message for a --policy path that names no file. With no --policy, a missing evidence.yml
+// is an empty policy (spec 8.1). A path that --policy names must be there, so a typo is an error,
+// not a policy that asks for nothing.
+export function missingPolicy(path, where) {
+  return `--policy names ${path}, but ${where}. Check the path.`;
 }
 
 // The value of --policy as a path in the repo, with "/" between folders and no "./" at the start,

@@ -38,6 +38,7 @@ const label = (cwd, args = [], input = '', env = {}) => {
   const base = { ...process.env };
   delete base.ANTHROPIC_API_KEY;
   delete base.EXHIBIT_CLAUDE_MODEL;
+  delete base.GITHUB_TOKEN;
   return spawnSync(process.execPath, [bin, 'label', ...args], { cwd, input, encoding: 'utf8', env: { ...base, ...env } });
 };
 const readLabels = (cwd) => readFileSync(join(cwd, '.exhibit', 'labels.jsonl'), 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
@@ -62,7 +63,7 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
   const cwd = withHistory(t, shopText());
   // D-012: an empty answer and an unknown one are asked again, then it keeps the link to PR 1 and
   // rejects the link to PR 11. D-007: skipped. D-006: keeps its link and picks category 1.
-  const typed = ['', 'x', 'k', 'r', 'Percent taken as money', 'arithmetic', 'A test with a 10% discount', 's', 'k', 'Tax rounded too early', '1', 'A rounding test'].join('\n') + '\n';
+  const typed = ['', 'x', 'k', 'r', 'Percent taken as money', 'arithmetic', 'A test with a 10% discount', 'maybe', 'n', 's', 'k', 'Tax rounded too early', '1', 'A rounding test', ''].join('\n') + '\n';
   const run = label(cwd, ['--json'], typed);
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout), { shown: 3, labeled: 2, skipped: 1, open: 1, output: '.exhibit/labels.jsonl' });
@@ -72,11 +73,15 @@ test('typed answers are written as labels, and --json prints the summary', (t) =
   assert.match(run.stderr, /Please type k, r or s/);
   assert.match(run.stderr, /Link to PR 11, confidence 50%: k to keep it, or r to reject it/);
   assert.match(run.stderr, /1\. arithmetic/);
+  assert.match(run.stderr, /Known at review: did review see this bug and leave it for a later ticket\? Exhibit found no sign of it, so it proposes unknown\./);
+  assert.match(run.stderr, /Please type y, n or u, or press Enter\./);
   const lines = readLabels(cwd);
   assert.deepEqual(lines.map((l) => [l.id, l.introducing_prs, l.rejected_prs, l.szz_link_rejected, l.code, l.category, l.would_have_caught, l.labeled_by]), [
     ['D-012', [1], [11], true, 'Percent taken as money', 'arithmetic', 'A test with a 10% discount', 'person'],
     ['D-006', [1], [], false, 'Tax rounded too early', 'arithmetic', 'A rounding test', 'person']
   ]);
+  // n said review did not see D-012's bug. Enter kept the proposal, unknown, for D-006.
+  assert.deepEqual(lines.map((l) => l.known_at_review), [false, null]);
   for (const line of lines) assert.deepEqual(checkLabelLine(line), [], line.id);
 });
 
@@ -92,7 +97,7 @@ test('a revert link shows revert as its evidence, and the person can keep it or 
   const lines = [...shop, revert(15, 5, 'Revert "Add the shop entry point"'), revert(16, 2, 'Revert "Add discounts"')];
   const cwd = withHistory(t, lines.map((line) => JSON.stringify(line) + '\n').join(''));
   // D-016: reject its link. D-015: keep its link. Then the input ends, which quits.
-  const typed = ['r', 'Not a bug: the revert was a rollback for a launch date', 'rollback', 'Nothing', 'k', 'The entry point broke checkout', 'wiring', 'An end-to-end test of checkout'].join('\n') + '\n';
+  const typed = ['r', 'Not a bug: the revert was a rollback for a launch date', 'rollback', 'Nothing', '', 'k', 'The entry point broke checkout', 'wiring', 'An end-to-end test of checkout', ''].join('\n') + '\n';
   const run = label(cwd, [], typed);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Fix PR 16: Revert "Add discounts"\n.*It is a revert, so SZZ ran no git blame/);
@@ -109,18 +114,33 @@ test('a revert link shows revert as its evidence, and the person can keep it or 
 
 test('the end of the typed input quits and keeps the labels given so far', (t) => {
   const cwd = withHistory(t, shopText());
-  const run = label(cwd, [], 'k\nk\nPercent taken as money\narithmetic\nA test\nhalf an answer\n');
+  const run = label(cwd, [], 'k\nk\nPercent taken as money\narithmetic\nA test\n\nhalf an answer\n');
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /Labeled 1 escaped defect\. Skipped 0\. 2 still have no code\. Run exhibit label again to label them\./);
   assert.deepEqual(readLabels(cwd).map((l) => l.id), ['D-012']);
 });
 
-test('a label that fails the schema exits 2, and the file keeps its earlier lines', (t) => {
+test('a code, category or evidence that is too long is asked again at once, and the other answers are kept', (t) => {
   const cwd = withHistory(t, shopText());
-  const run = label(cwd, [], `k\nk\nfirst\nx\na test\nk\nk\n${'y'.repeat(201)}\nx\na test\n`);
-  assert.equal(run.status, 2);
-  assert.match(run.stderr, /the label for D-007 does not fit the labels schema, so it was not written/);
-  assert.deepEqual(readLabels(cwd).map((l) => l.code), ['first']);
+  const typed = ['k', 'k', 'y'.repeat(201), 'first', 'z'.repeat(61), 'x', 'w'.repeat(501), 'a test', '', 'q'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /That answer has 201 characters\. A code can have at most 200\. Please type a shorter one\./);
+  assert.match(run.stdout, /That answer has 61 characters\. A category can have at most 60\. Please type a shorter one\./);
+  assert.match(run.stdout, /That answer has 501 characters\. The evidence can have at most 500\. Please type a shorter one\./);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.code, l.category, l.would_have_caught]), [['first', 'x', 'a test']]);
+});
+
+test('a category number that is not in the list is asked again, and never becomes a new category', (t) => {
+  const cwd = withHistory(t, shopText());
+  // D-012: no categories yet, so 2 is asked again. D-007: 99 and 0 are asked again, then 1 picks arithmetic.
+  const typed = ['k', 'k', 'first', '2', 'arithmetic', 'a test', '', 'k', 'k', 'second', '99', '0', '1', 'a test', '', 'q'].join('\n') + '\n';
+  const run = label(cwd, [], typed);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /There are no categories yet, so 2 is not one\. Type a new category in words\./);
+  assert.match(run.stdout, /There is no category 99\. Pick a number from 1 to 1, or type a new category in words\./);
+  assert.match(run.stdout, /There is no category 0\./);
+  assert.deepEqual(readLabels(cwd).map((l) => l.category), ['arithmetic', 'arithmetic']);
 });
 
 // The fixture repo with a remote, and `history(args)` to run exhibit history in it with replayed
@@ -152,7 +172,7 @@ test('running exhibit history twice on the fixture repo gives the same defect id
 
   // Label the first defect shown, keeping its one link, then quit.
   assert.equal(first[0], 'D-014');
-  const labeled = label(repo.dir, [], 'k\nA code\na category\nA test\nq\n');
+  const labeled = label(repo.dir, [], 'k\nA code\na category\nA test\n\nq\n');
   assert.equal(labeled.status, 0, labeled.stderr);
   history(['--full']);
   // The labeled defect keeps its label after the new history, so label shows only the others.
@@ -164,7 +184,7 @@ test('after exhibit history runs again on the fixture repo, a labeled defect kee
   const { dir, history, shownIds } = fixtureRepo(t);
   history([]);
   // Skip D-014. For D-012, keep the link to PR 1, reject the link to PR 11, and label it.
-  const run = label(dir, [], 's\nk\nr\nPercent taken as money\narithmetic\nA test with a 10% discount\nq\n');
+  const run = label(dir, [], 's\nk\nr\nPercent taken as money\narithmetic\nA test with a 10% discount\n\nq\n');
   assert.equal(run.status, 0, run.stderr);
   const before = readFileSync(join(dir, '.exhibit', 'labels.jsonl'), 'utf8');
   const [line] = readLabels(dir);
@@ -196,22 +216,22 @@ test('--claude with no ANTHROPIC_API_KEY exits 2 before it shows anything', (t) 
 
 test('without --claude, label needs no ANTHROPIC_API_KEY', (t) => {
   const cwd = withHistory(t, shopText());
-  const run = label(cwd, [], 'k\nk\nA code\na category\nA test\nq\n');
+  const run = label(cwd, [], 'k\nk\nA code\na category\nA test\n\nq\n');
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by]), [['D-012', 'person']]);
 });
 
 // Runs exhibit label --claude with the recorded Anthropic reply in test/fixtures/anthropic/draft.json.
 const anthropicFixture = fileURLToPath(new URL('./fixtures/anthropic/draft.json', import.meta.url));
-const labelWithClaude = (cwd, input, args = []) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude', ...args], {
-  cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: anthropicFixture }
+const labelWithClaude = (cwd, input, args = [], fixture = anthropicFixture) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude', ...args], {
+  cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: fixture }
 });
 
 test('--claude shows a marked draft: the person confirms one and edits another', (t) => {
   const cwd = withHistory(t, shopText());
   // D-012: keep both links, confirm the draft. D-007: keep both links, edit the draft's code and
   // keep its category with an empty answer. Then quit at D-006 with its draft on screen.
-  const typed = ['k', 'k', 'c', 'A test that buys 3 of one item', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', 'k', 'q'].join('\n') + '\n';
+  const typed = ['k', 'k', 'c', 'A test that buys 3 of one item', '', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', '', 'k', 'q'].join('\n') + '\n';
   const run = labelWithClaude(cwd, typed);
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /^exhibit label --claude sends each defect's fix PR title and body, its changed lines, and what git blame says about them \(commit, author and message, and the titles of the linked PRs\) to Anthropic's API\./);
@@ -231,14 +251,14 @@ test('--claude shows a marked draft: the person confirms one and edits another',
 
 test('--claude: t throws the draft away and the person types their own', (t) => {
   const cwd = withHistory(t, shopText());
-  const run = labelWithClaude(cwd, ['k', 'k', 't', 'Stock check ran before the count', 'state', 'A test that sells the last item', 'q'].join('\n') + '\n');
+  const run = labelWithClaude(cwd, ['k', 'k', 't', 'Stock check ran before the count', 'state', 'A test that sells the last item', '', 'q'].join('\n') + '\n');
   assert.equal(run.status, 0, run.stderr);
   const [line] = readLabels(cwd);
   assert.deepEqual([line.labeled_by, line.code, line.category, line.claude_draft.code], ['person', 'Stock check ran before the count', 'state', 'Count ignored the quantity']);
 });
 
 // D-012: confirm the draft. D-007: edit the draft's code. Then quit at D-006.
-const CONFIRM_THEN_EDIT = ['k', 'k', 'c', 'A test that buys 3 of one item', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', 'q'].join('\n') + '\n';
+const CONFIRM_THEN_EDIT = ['k', 'k', 'c', 'A test that buys 3 of one item', '', 'k', 'k', 'e', 'Discount and tax used the wrong base', '', 'A test with a discount and tax', '', 'q'].join('\n') + '\n';
 
 test('--claude: after a second run, the run numbers count only that run, and the file numbers count every draft', (t) => {
   const cwd = withHistory(t, shopText());
@@ -248,7 +268,7 @@ test('--claude: after a second run, the run numbers count only that run, and the
   assert.match(first.stdout, /Claude's drafts in the whole labels file: 2 shown\. 1 kept unchanged, 1 edited, 0 replaced\./);
 
   // D-006: keep its link, throw the draft away and type a label.
-  const second = labelWithClaude(cwd, ['k', 't', 'Tax rounded too early', 'arithmetic', 'A rounding test'].join('\n') + '\n');
+  const second = labelWithClaude(cwd, ['k', 't', 'Tax rounded too early', 'arithmetic', 'A rounding test', ''].join('\n') + '\n');
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /Claude's drafts in this run: 1 shown\. 0 kept unchanged, 0 edited, 1 replaced\. The person kept 0% of the drafts unchanged \(0 of 1, 95% interval 0% to 98%\)\./);
   assert.match(second.stdout, /Claude's drafts in the whole labels file: 3 shown\. 1 kept unchanged, 1 edited, 1 replaced\. The person kept 33% of the drafts unchanged \(1 of 3, 95% interval 0% to 91%\)\./);
@@ -278,4 +298,62 @@ test('without --claude, label prints no draft numbers and its --json has no draf
   const run = label(withHistory(t, shopText()), ['--json'], 'q\n');
   assert.equal(run.status, 0, run.stderr);
   assert.equal(JSON.parse(run.stdout).drafts, undefined);
+});
+
+test('--claude: an edited code that is too long is asked again', (t) => {
+  const cwd = withHistory(t, shopText());
+  const run = labelWithClaude(cwd, ['k', 'k', 'e', 'y'.repeat(201), 'Shorter code', '', 'a test', '', 'q'].join('\n') + '\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /A code can have at most 200/);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.code, l.labeled_by]), [['Shorter code', 'claude_draft_edited']]);
+});
+
+test('--claude with a bad key says once that drafting stopped, and the person labels the next defect by hand', (t) => {
+  const cwd = withHistory(t, shopText());
+  const badKey = fileURLToPath(new URL('./fixtures/anthropic/bad-key.json', import.meta.url));
+  // D-012 and D-007 by hand, then quit at D-006.
+  const typed = ['k', 'k', 'Count ignored the quantity', 'arithmetic', 'A test that buys 3', '', 'k', 'k', 'Stock went below zero', 'state', 'A test that sells the last item', '', 'k', 'q'].join('\n') + '\n';
+  const run = labelWithClaude(cwd, typed, [], badKey);
+  assert.equal(run.status, 0, run.stderr);
+  const said = run.stdout.match(/Claude could not draft/g) ?? [];
+  assert.equal(said.length, 1, run.stdout);
+  assert.match(run.stdout, /Claude could not draft D-012: the Anthropic API answered 401: invalid x-api-key\. Check ANTHROPIC_API_KEY\. Drafting is stopped for the rest of this run/);
+  assert.doesNotMatch(run.stdout, /Claude's draft, not saved yet/);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by, 'claude_draft' in l]), [['D-012', 'person', false], ['D-007', 'person', false]]);
+});
+
+test('a follow-up fix shows the proposed deferral with the sentence that matched, and Enter keeps it', (t) => {
+  // Fix PR 12 links PRs 1 and 11. Its title says it follows up the review of PR 11.
+  const text = shopText().trimEnd().split('\n').map((row) => {
+    const line = JSON.parse(row);
+    return JSON.stringify(line.number === 12 ? { ...line, title: 'Follow-ups from the review of PR 11' } : line) + '\n';
+  }).join('');
+  const cwd = withHistory(t, text);
+  const run = label(cwd, [], ['k', 'k', 'Discount math left for later', 'deferral', 'The review of PR 11 saw it', '', 'q'].join('\n') + '\n');
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Exhibit proposes yes, because the fix PR title says: "Follow-ups from the review of PR 11", and SZZ blamed PR 11\.\n {2}y for yes \(a deferral\), n for no, u for unknown\. Press Enter to keep yes\./);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.known_at_review]), [['D-012', true]]);
+});
+
+test('with GITHUB_TOKEN, a follow-up issue that the fix PR closes makes the proposal', (t) => {
+  // Fix PR 12 links PRs 1 and 11. Its body closes issue 80, whose title follows up the review of
+  // PR 11, and issue 82, which GitHub does not know.
+  const text = shopText().trimEnd().split('\n').map((row) => {
+    const line = JSON.parse(row);
+    return JSON.stringify(line.number === 12 ? { ...line, title: '81: Small fixes', body: 'Closes #80. Fixes #82.' } : line) + '\n';
+  }).join('');
+  const cwd = withHistory(t, text);
+  const fixture = join(cwd, 'replies.json');
+  writeFileSync(fixture, JSON.stringify({
+    '/repos/fixture/shop/issues/80': { status: 200, headers: {}, body: { number: 80, title: 'Follow-ups from the review of PR 11', body: 'Small things the reviewer saw.', created_at: '2026-01-05T09:30:00Z' } },
+    '/repos/fixture/shop/issues/82': { status: 404, headers: {}, body: { message: 'Not Found' } }
+  }));
+  const base = { ...process.env };
+  delete base.ANTHROPIC_API_KEY;
+  const env = { ...base, GITHUB_TOKEN: 't', EXHIBIT_TEST_FIXTURE: fixture, XDG_CACHE_HOME: join(cwd, 'cache') };
+  const typed = ['k', 'k', 'Discount math left for later', 'deferral', 'The review of PR 11 saw it', '', 'q'].join('\n') + '\n';
+  const run = spawnSync(process.execPath, ['--import', preload, bin, 'label'], { cwd, input: typed, encoding: 'utf8', env });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /Exhibit proposes yes, because the title of issue 80 that the fix PR closes says: "Follow-ups from the review of PR 11", and SZZ blamed PR 11\./);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.known_at_review]), [['D-012', true]]);
 });

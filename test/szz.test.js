@@ -305,13 +305,16 @@ test('SZZ gives szz: null and a warning when the fix merge commit is not in the 
 });
 
 // Runs SZZ on fix PR 6 with a body that links issues, and a GitHub that also answers for them.
-// PR 1 added the line that PR 6 fixes, in a commit written at 2026-01-05T10:00:00Z.
-async function szzWithIssues(t, body, issues) {
+// PR 1 added the line that PR 6 fixes, in a commit written at 2026-01-05T10:00:00Z. `repos`
+// gives GitHub's reply for each repo path, such as an old name that leads to this repo.
+async function szzWithIssues(t, body, issues, repos = {}) {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const pulls = commitPullsFetch(repo, REPO);
   const fetch = async (url, init) => {
-    const number = /\/issues\/(\d+)$/.exec(new URL(url).pathname)?.[1];
+    const { pathname } = new URL(url);
+    if (pathname in repos) return new Response(JSON.stringify(repos[pathname]), { status: 200, headers: { 'content-type': 'application/json' } });
+    const number = /\/issues\/(\d+)$/.exec(pathname)?.[1];
     if (number === undefined) return pulls(url, init);
     const issue = issues[number];
     return new Response(JSON.stringify(issue ?? { message: 'Not Found' }), { status: issue ? 200 : 404, headers: { 'content-type': 'application/json' } });
@@ -335,6 +338,19 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
     assert.deepEqual(szz.dropped_lines, []);
   });
 
+  await t.test('a report named by the repo\'s old name, after a rename or a transfer, drops the line too', async (t) => {
+    // GitHub redirects the old name to the repo, so both replies have the same id.
+    const renamed = { [`/repos/${REPO}`]: { id: 9, full_name: REPO, default_branch: 'main' }, '/repos/oldowner/shop': { id: 9, full_name: REPO } };
+    const issue = { 50: { number: 50, created_at: '2026-01-05T09:30:00Z' } };
+    for (const body of ['Fixes oldowner/shop#50', 'Fixes https://github.com/oldowner/shop/issues/50']) {
+      const { szz } = await szzWithIssues(t, body, issue, renamed);
+      assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']], body);
+    }
+    // Another repo has another id, so its issue 50 gives no date.
+    const { szz } = await szzWithIssues(t, 'Fixes other/shop#50', issue, { ...renamed, '/repos/other/shop': { id: 10, full_name: 'other/shop' } });
+    assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+
   await t.test('a linked PR, or an issue GitHub does not know, gives no date', async (t) => {
     const { szz } = await szzWithIssues(t, 'Fixes #51, fixes #52', { 51: { number: 51, created_at: '2026-01-01T00:00:00Z', pull_request: {} } });
     assert.deepEqual(szz.links.map((link) => link.pr), [1]);
@@ -344,7 +360,7 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
 test('SZZ takes the Jira issue\'s created date as the bug report date, when the fix links no GitHub issue', async (t) => {
   // PR 6 fixes a line that PR 1 added in a commit written at 2026-01-05T10:00:00Z. Its fix_signal
   // says the tracker:jira signal found it, by the Bug SHOP-6.
-  async function run(t, created, body = null) {
+  async function run(t, created, body = null, { token = 't', ticket } = {}) {
     const repo = buildSzzRepo();
     t.after(() => repo.cleanup());
     const pulls = commitPullsFetch(repo, REPO);
@@ -355,8 +371,8 @@ test('SZZ takes the Jira issue\'s created date as the bug report date, when the 
       if (pathname.endsWith('/issues/50')) return json(200, { number: 50, created_at: '2026-01-05T11:00:00Z' });
       return pulls(url, init);
     };
-    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token: 't', fetch });
-    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' } };
+    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token, fetch });
+    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' }, ...(ticket ? { ticket } : {}) };
     const [line] = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), tracker });
     return line;
   }
@@ -375,6 +391,13 @@ test('SZZ takes the Jira issue\'s created date as the bug report date, when the 
   await t.test('a GitHub issue that the body links wins over the Jira date', async (t) => {
     const { szz } = await run(t, '2026-01-05T09:30:00.000+0000', 'Fixes #50');
     assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+
+  await t.test('the created date that the line saved in ticket counts, with no Jira request and no token', async (t) => {
+    const ticket = { issue: 'jira:SHOP-6', type: 'Bug', created_at: '2026-01-05T09:30:00.000Z', found_field: null, found: [] };
+    // Jira would say the issue is newer, so only the saved date drops the line.
+    const { szz } = await run(t, '2026-01-05T10:30:00.000+0000', null, { token: undefined, ticket });
+    assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']]);
   });
 });
 

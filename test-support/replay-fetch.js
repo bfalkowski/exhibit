@@ -47,7 +47,7 @@ export function forkGuard({ forks, repo }) {
   };
 }
 
-// The fixture key of a GraphQL query, such as `graphql MergedPulls {"owner":"acme","name":"widgets","after":null}`.
+// The fixture key of a GraphQL query, such as `graphql MergedPulls {"owner":"acme","name":"widgets","after":null,"first":50}`.
 export function graphqlKey(name, variables) {
   return `graphql ${name} ${JSON.stringify(variables)}`;
 }

@@ -97,6 +97,23 @@ test('failing-before with when is needed only for a change of that kind, fix or 
   assert.equal(feature.requirements[1].not_needed, undefined);
 });
 
+test('a change that adds a file under a source path is a feature, with no label', () => {
+  const policy = { ...POLICY, settings: { ...POLICY.settings, source_paths: ['relay/**', 'lib/*.js'] } };
+  const added = classifyChange(policy, ['relay/new.js', 'relay/supervisor.js'], NOT_FIX, 'evidence.yml', ['relay/new.js']);
+  assert.equal(added.classification.feature, true);
+  assert.equal(added.requirements.find((item) => item.type === 'failing-before').not_needed, undefined);
+  // A file that only changes is no feature, and neither is a new file outside the source paths.
+  assert.equal(classifyChange(policy, ['relay/supervisor.js'], NOT_FIX, 'evidence.yml', []).classification.feature, false);
+  assert.equal(classifyChange(policy, ['docs/manual/new.md'], NOT_FIX, 'evidence.yml', ['docs/manual/new.md']).classification.feature, false);
+  // A glob matches the whole path, as for kinds: lib/*.js does not reach into lib/deep/.
+  assert.equal(classifyChange(policy, ['lib/deep/x.js'], NOT_FIX, 'evidence.yml', ['lib/deep/x.js']).classification.feature, false);
+  assert.equal(classifyChange(policy, ['lib/x.js'], NOT_FIX, 'evidence.yml', ['lib/x.js']).classification.feature, true);
+  // With no source_paths, a new file is never a feature.
+  assert.equal(classifyChange(POLICY, ['relay/new.js'], NOT_FIX, 'evidence.yml', ['relay/new.js']).classification.feature, false);
+  // Without the list of added files, as before, only the label counts.
+  assert.equal(classifyChange(policy, ['relay/new.js'], NOT_FIX).classification.feature, false);
+});
+
 test('a failing-before with no when applies to every change', () => {
   const policy = { kinds: {}, settings: POLICY.settings, default: { risk: 'low', needs: ['failing-before'] } };
   assert.deepEqual(types(classifyChange(policy, ['a.js'], NOT_FIX)), ['failing-before']);

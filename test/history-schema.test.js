@@ -162,3 +162,16 @@ test('every line has szz, and the schema describes a line the same way in links 
   const szz = schema.properties.szz.properties;
   assert.deepEqual(szz.links.items.properties.lines.items, szz.unlinked_lines.items);
 });
+
+test('ticket: a known issue needs created_at, found_field and found, and a 404 holds only issue and type', () => {
+  const known = { issue: 'jira:PAY-482', type: 'Bug', created_at: '2026-01-05T09:30:00.000Z', found_field: 'customfield_1', found: ['Production'] };
+  assert.deepEqual(checkHistoryLine({ ...good(), ticket: known }), []);
+  assert.deepEqual(checkHistoryLine({ ...good(), ticket: { issue: 'jira:PAY-404', type: null } }), []);
+  for (const field of ['created_at', 'found_field', 'found']) {
+    const ticket = { ...known };
+    delete ticket[field];
+    assert.deepEqual(checkHistoryLine({ ...good(), ticket }), [`/ticket: misses the field ${field}`], field);
+  }
+  assert.notDeepEqual(checkHistoryLine({ ...good(), ticket: { issue: 'jira:PAY-404', type: null, found: [] } }), []);
+  assert.notDeepEqual(checkHistoryLine({ ...good(), ticket: { issue: 'PAY-1', type: 'Bug' } }), []);
+});

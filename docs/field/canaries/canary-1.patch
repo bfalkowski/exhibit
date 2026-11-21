@@ -1,0 +1,70 @@
+From 7334a60fe8489dd0d07a8b1d8467b6c8f466c17e Mon Sep 17 00:00:00 2001
+From: canary <canary@example.invalid>
+Date: Fri, 20 Nov 2026 20:58:11 -0500
+Subject: [PATCH] Ticket twins: pick the closest match in one helper
+
+---
+ relay/test/ticket-twins.test.js |  9 ++++++++-
+ relay/ticket-twins.js           | 12 ++++++++----
+ 2 files changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/relay/test/ticket-twins.test.js b/relay/test/ticket-twins.test.js
+index 65b63b6..3e84f4e 100644
+--- a/relay/test/ticket-twins.test.js
++++ b/relay/test/ticket-twins.test.js
+@@ -6,7 +6,7 @@ const path = require('path');
+ const test = require('node:test');
+ const assert = require('node:assert');
+ const H = require('./helpers.js');
+-const { likelyTwins } = require('../ticket-twins.js');
++const { likelyTwins, closest } = require('../ticket-twins.js');
+ 
+ const t = (id, title, body, extra) => Object.assign({ id, title, body: body || '', status: 'triage', repo: '/r' }, extra);
+ 
+@@ -48,6 +48,13 @@ test('only open tickets of the same repo count, and the best come first, at most
+   assert.deepStrictEqual(Object.keys(got[0]).sort(), ['id', 'status', 'title']);
+ });
+ 
++test('closest takes the closer match, and only when it is close enough', () => {
++  const byTitle = { both: 4, share: 0.8 }, byAll = { both: 5, share: 0.5 };
++  assert.strictEqual(closest(byTitle, byAll), byTitle);
++  assert.strictEqual(closest(byAll, byTitle), byTitle);
++  assert.strictEqual(closest({ both: 1, share: 0.1 }, { both: 1, share: 0.05 }), null, 'too few words in common');
++});
++
+ test('the ticket itself is never its own duplicate', () => {
+   const me = t('T-9', 'Warn about duplicate tickets', 'Compare titles.');
+   assert.deepStrictEqual(likelyTwins(Object.assign({}, me), [me]), []);
+diff --git a/relay/ticket-twins.js b/relay/ticket-twins.js
+index 9a464eb..6b90460 100644
+--- a/relay/ticket-twins.js
++++ b/relay/ticket-twins.js
+@@ -27,17 +27,21 @@ function share(a, b) {
+   return { both, share: all ? both / all : 0 };
+ }
+ const sets = (t) => { const title = words(t.title); return { title, all: new Set([...title, ...words(t.body)]) }; };
++// The closer of the two matches, by title alone or by title and body, when it is close enough.
++function closest(byTitle, byAll) {
++  const best = byTitle.share >= byAll.share ? byTitle : byAll;
++  return best.share >= MIN_SHARE && best.both > MIN_WORDS ? best : null;
++}
+ 
+ function likelyTwins(ticket, tickets) {
+   const me = sets(ticket);
+   const found = [];
+   for (const t of tickets) {
+     if (t.id === ticket.id || t.repo !== ticket.repo || !OPEN.includes(t.status)) continue;
+-    const them = sets(t), byTitle = share(me.title, them.title), byAll = share(me.all, them.all);
+-    const best = byTitle.share >= byAll.share ? byTitle : byAll;
+-    if (best.share >= MIN_SHARE && best.both >= MIN_WORDS) found.push({ score: best.share, t });
++    const them = sets(t), best = closest(share(me.title, them.title), share(me.all, them.all));
++    if (best) found.push({ score: best.share, t });
+   }
+   return found.sort((x, y) => y.score - x.score).slice(0, MAX_TWINS).map(({ t }) => ({ id: t.id, title: t.title, status: t.status }));
+ }
+ 
+-module.exports = { likelyTwins, MIN_SHARE, MIN_WORDS, MAX_TWINS };
++module.exports = { likelyTwins, closest, MIN_SHARE, MIN_WORDS, MAX_TWINS };
+-- 
+2.39.5 (Apple Git-154)
+

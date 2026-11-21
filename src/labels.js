@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DraftError } from './claude.js';
+import { closingIssues, proposeKnownAtReview } from './deferral.js';
 import { draftAgreement } from './draft-agreement.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
@@ -14,6 +15,22 @@ export const HISTORY = '.exhibit/history.jsonl';
 export const LABELS = '.exhibit/labels.jsonl';
 
 const schema = JSON.parse(readFileSync(new URL('../schema/labels-line.schema.json', import.meta.url), 'utf8'));
+
+// The replies that an answer source gives to skip a defect or to quit. The keyboard in
+// src/commands/label.js gives them, and labelDefects reads them, so both use these names.
+export const SKIP = 'skip';
+export const QUIT = 'quit';
+
+// The most characters that each typed answer can have. They come from the schema's patterns,
+// such as ^\S[^\r\n]{0,199}$ for code, so the keyboard can ask again before the schema check.
+export const ANSWER_LIMITS = Object.fromEntries(['code', 'category', 'would_have_caught'].map((field) => [field, longest(schema.properties[field].pattern)]));
+
+// A pattern that ends in {0,n}$ allows one first character and then at most n more: n + 1 in all.
+function longest(pattern) {
+  const match = /\{0,(\d+)\}\$$/.exec(pattern);
+  if (match === null) throw new Error(`the labels schema pattern ${pattern} has no length limit`);
+  return Number(match[1]) + 1;
+}
 
 // The id of the escaped defect that fix PR `fixPr` fixed, such as D-004 for PR 4. A PR number
 // never changes, so the id stays the same when exhibit history runs again, and policy rules can
@@ -43,14 +60,27 @@ export function checkLabelLine(line) {
  * keyboard, or a script in a test. `defect` has `id`, `fix_pr`, `introducing_prs` and `links`,
  * which holds `pr` and `confidence` for each SZZ link, and `found_by: 'revert'` for a link that
  * SZZ found from a revert with no blame. `text` shows the defect with its SZZ evidence. `categories` are the categories used so far. It returns
- * { code, category, would_have_caught, rejected_prs }, or 'skip', or 'quit'. `rejected_prs` names
+ * { code, category, would_have_caught, rejected_prs }, or SKIP, or QUIT. `rejected_prs` names
  * the links the person rejected. It can name every link: the defect is then a real bug with no
  * known introducing PR.
+ *
+ * Exhibit proposes `known_at_review` for each defect (src/deferral.js), and the answer source gets
+ * it in `context.review`: { known_at_review: true, pr, where, sentence } for a deferral, or
+ * { known_at_review: null }. The reply's `known_at_review` is true, false or null. A reply that
+ * leaves it out keeps the proposal.
+ *
+ * `issues(numbers, fix)` is optional: GitHub, or a script in a test. It gets the numbers of the
+ * issues that the fix PR body closes with closing words, and the fix PR's history line. It returns
+ * each issue's { number, title, body }, and leaves out an issue it cannot read,
+ * so a follow-up ticket's words count too. Without it, only the fix PR's title and body count.
  *
  * `draft({ id, title, body, text, categories })` is optional: Claude, or a script in a test. It
  * returns { code, category, model } before the defect is shown, and the answer source gets it in
  * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
- * holds the message, so the person labels that defect by hand. With a draft, the reply also says
+ * holds the message, so the person labels that defect by hand. When that DraftError has
+ * `stopsDrafting` (a 401, 403 or 404: a bad key or a wrong model), `context.draftStopped` holds
+ * what to fix, and no later defect in this run is sent: each gets `draft`, `draftError` and
+ * `draftStopped` as null, and the person labels it by hand. With a draft, the reply also says
  * `draft: 'confirmed' | 'edited' | 'replaced'`. A replaced draft is always the person's own label,
  * even when they type the draft's words again. Otherwise a reply with the draft's code and
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
@@ -60,8 +90,9 @@ export function checkLabelLine(line) {
  * in the lines this run wrote and in the whole file (spec 9.11). A skipped defect has no line, so
  * its draft is not counted.
  */
-export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) {
+export async function labelDefects({ cwd, ask, draft, issues, now = () => new Date() }) {
   const history = await readHistory(cwd);
+  // endsWithBreak: the file ends in a line break.
   const { labels, endsWithBreak } = await readLabels(cwd);
   const done = new Set(labels.map((label) => label.id));
   const categories = [...new Set(labels.map((label) => label.category))];
@@ -71,15 +102,21 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   let shown = 0;
   let labeled = 0;
   let skipped = 0;
+  // needsBreak: add a line break before the next line, so it does not join the file's last line.
   let needsBreak = !endsWithBreak;
   const written = [];
+  // stopped: a draft failed in a way that every later draft would fail too.
+  let stopped = false;
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const { drafted, draftError } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError });
-    if (reply === 'quit') break;
-    if (reply === 'skip') {
+    const { drafted, draftError, draftStopped } = await askForDraft(stopped ? undefined : draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
+    if (draftStopped !== null) stopped = true;
+    const closed = closingIssues(defect.fix.body);
+    const review = proposeKnownAtReview({ fix: defect.fix, blamed: defect.introducing_prs, issues: issues === undefined || closed.length === 0 ? [] : await issues(closed, defect.fix) });
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped, review });
+    if (reply === QUIT) break;
+    if (reply === SKIP) {
       skipped += 1;
       continue;
     }
@@ -97,6 +134,7 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
       labeled_by: labeledBy(drafted, reply),
       ...(drafted === null ? {} : { claude_draft: drafted }),
       szz_link_rejected: rejected.length > 0,
+      known_at_review: reply.known_at_review === undefined ? review.known_at_review : reply.known_at_review,
       labeled_at: now().toISOString()
     };
     const problems = checkLabelLine(line);
@@ -115,14 +153,14 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
-// Returns { drafted, draftError }. Both are null when there is no drafter.
+// Returns { drafted, draftError, draftStopped }. All three are null when there is no drafter.
 async function askForDraft(draft, input) {
-  if (draft === undefined) return { drafted: null, draftError: null };
+  if (draft === undefined) return { drafted: null, draftError: null, draftStopped: null };
   try {
-    return { drafted: await draft(input), draftError: null };
+    return { drafted: await draft(input), draftError: null, draftStopped: null };
   } catch (error) {
     if (!(error instanceof DraftError)) throw error;
-    return { drafted: null, draftError: error.message };
+    return { drafted: null, draftError: error.message, draftStopped: error.stopsDrafting ?? null };
   }
 }
 
@@ -157,6 +195,28 @@ async function readLabels(cwd) {
   }
   const labels = parseLines(text, LABELS, checkLabelLine, 'the labels schema. Fix or remove that line, then run exhibit label again');
   return { labels, endsWithBreak: text === '' || text.endsWith('\n') };
+}
+
+/**
+ * Reads labels.jsonl only to count it, for the funnel in the history report (spec 8.5). It never
+ * writes the file. Returns { state: 'none' } when there is no file, { state: 'read', lines }, or
+ * { state: 'unreadable', problem } when the file cannot be read, or a line is not JSON or fails
+ * the labels schema. It does not throw for those, so the history run still succeeds.
+ */
+export async function readLabelsToCount(cwd) {
+  let text;
+  try {
+    text = await readFile(join(cwd, LABELS), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { state: 'none' };
+    return { state: 'unreadable', problem: `could not read ${LABELS}: ${error.message}` };
+  }
+  try {
+    return { state: 'read', lines: parseLines(text, LABELS, checkLabelLine, 'the labels schema. Fix or remove that line, then run exhibit history again') };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { state: 'unreadable', problem: error.message };
+  }
 }
 
 // Parses JSON lines, and refuses the file at the first line that is not JSON or fails `check`.

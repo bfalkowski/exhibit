@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createGitHub, createGitHubForge, GITHUB_FORGE, PERMISSIONS } from '../src/github.js';
+import { createGitHub, createGitHubForge, GitHubReplyError, GITHUB_FORGE, PERMISSIONS } from '../src/github.js';
 import { ToolError } from '../src/tool-error.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 
@@ -240,6 +240,41 @@ test('the GitHub forge gives CI results in one shape: check runs first, then com
   assert.deepEqual((await forge.ciResults('c'.repeat(39) + '1')), [{ name: 'test', conclusion: null, url: null }]);
 });
 
+// The commit statuses on the last head commit of PR 352 in codecov/example-python, as GitHub's
+// status check rollup gave them on 2026-11-20: A to Z by context. The REST combined status lists
+// them oldest first, by id: project, org, account, coverage-patch, coverage-project. Two of them
+// have the same createdAt, so only the id in the node id puts them in the REST order.
+const ROLLUP_352 = [
+  ['SC_kwDOAXN2Ks8AAAAM7nC2YA', '2026-10-04T07:07:23Z', 'cov_gh_py_acct_account-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nC0Jw', '2026-10-04T07:07:21Z', 'cov_gh_py_acct_org-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nCzPQ', '2026-10-04T07:07:21Z', 'cov_gh_py_acct_project-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nDpeQ', '2026-10-04T07:07:58Z', 'coverage-patch'],
+  ['SC_kwDOAXN2Ks8AAAAM7nDq5Q', '2026-10-04T07:07:59Z', 'coverage-project']
+];
+
+// A fetch that answers the CommitCi query with the status check rollup `nodes`, on one page.
+function rollupFetch(nodes) {
+  return async () => new Response(JSON.stringify({ data: { rateLimit: { cost: 1 }, repository: { object: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } } }), { status: 200 });
+}
+const statusNode = ([id, createdAt, context]) => ({ __typename: 'StatusContext', id, createdAt, context, state: 'SUCCESS', targetUrl: null });
+
+test('ciResults lists commit statuses oldest first, by id within the same second, as the REST combined status does', async () => {
+  const forge = createGitHubForge({ repo: 'codecov/example-python', token: 't', fetch: rollupFetch(ROLLUP_352.map(statusNode)) });
+  assert.deepEqual((await forge.ciResults('fb2c8d651fb9422e982a27000b73a35934dd8d89')).map((result) => result.name), [
+    'cov_gh_py_acct_project-pythonPipBuildTestHostedLin...',
+    'cov_gh_py_acct_org-pythonPipBuildTestHostedLin...',
+    'cov_gh_py_acct_account-pythonPipBuildTestHostedLin...',
+    'coverage-patch',
+    'coverage-project'
+  ]);
+});
+
+test('ciResults keeps GitHub order for statuses with the same createdAt and ids it cannot read', async () => {
+  const nodes = [['old-style-b', '2026-10-04T07:07:21Z', 'b'], ['old-style-a', '2026-10-04T07:07:21Z', 'a'], ['SC_x', '2026-10-04T07:07:20Z', 'first']].map(statusNode);
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: rollupFetch(nodes) });
+  assert.deepEqual((await forge.ciResults('c'.repeat(40))).map((result) => result.name), ['first', 'b', 'a']);
+});
+
 test('the GitHub forge gives PRs, files, reviews and comments in forge-neutral shapes', async () => {
   const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: await widgets() });
   const merged = await forge.mergedPulls();
@@ -275,7 +310,7 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
   const replies = {
     '/repos/acme/widgets/commits/abc/pulls': [restPull, { ...restPull, number: 10, user: null, merged_at: null, merge_commit_sha: 'd'.repeat(40) }],
     '/repos/acme/widgets/pulls/9': restPull,
-    '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z' },
+    '/repos/acme/widgets/issues/50': { number: 50, created_at: '2026-01-05T09:30:00Z', title: 'Follow-ups from the review of PR 46', body: '' },
     '/repos/acme/widgets/issues/51': { number: 51, created_at: '2026-01-06T09:30:00Z', pull_request: {} }
   };
   const fetch = async (url) => {
@@ -290,9 +325,80 @@ test('the GitHub forge gives the PRs of a commit, one PR and an issue in forge-n
   };
   assert.deepEqual(await forge.pullsForCommit('abc'), [nine, { ...nine, number: 10, author: null, mergedAt: null, mergeSha: null }]);
   assert.deepEqual(await forge.pull(9), nine);
-  assert.deepEqual(await forge.issue(50), { createdAt: '2026-01-05T09:30:00Z', isPull: false });
-  assert.deepEqual(await forge.issue(51), { createdAt: '2026-01-06T09:30:00Z', isPull: true });
+  assert.deepEqual(await forge.issue(50), { createdAt: '2026-01-05T09:30:00Z', isPull: false, title: 'Follow-ups from the review of PR 46', body: null });
+  assert.deepEqual(await forge.issue(51), { createdAt: '2026-01-06T09:30:00Z', isPull: true, title: null, body: null });
   assert.equal(await forge.issue(52), null);
+});
+
+test('sameRepo says whether a repo name leads to this repo, as an old name does after a rename or a transfer', async () => {
+  // GitHub answers GET /repos/{old name} with a redirect to the repo, and fetch follows it, so the
+  // reply is the renamed repo. The id stays the same after a rename or a transfer.
+  const replies = {
+    '/repos/acme/widgets': { id: 7, full_name: 'acme/widgets', default_branch: 'main' },
+    '/repos/oldacme/widgets': { id: 7, full_name: 'acme/widgets' },
+    '/repos/acme/gadgets': { id: 8, full_name: 'acme/gadgets' }
+  };
+  const asked = [];
+  const fetch = async (url) => {
+    const path = new URL(url).pathname;
+    asked.push(path);
+    const reply = replies[path];
+    return new Response(JSON.stringify(reply ?? { message: 'Not Found' }), { status: reply ? 200 : 404, headers: { 'content-type': 'application/json' } });
+  };
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch });
+  assert.equal(await forge.sameRepo('oldacme/widgets'), true);
+  assert.equal(await forge.sameRepo('acme/gadgets'), false);
+  // A name GitHub does not know, or a private repo the token cannot read, is not this repo.
+  assert.equal(await forge.sameRepo('gone/widgets'), false);
+  // Each name costs one request at most, in any case, and this repo is read once, for defaultBranch too.
+  assert.equal(await forge.sameRepo('OldAcme/Widgets'), true);
+  assert.equal(await forge.sameRepo('acme/gadgets'), false);
+  assert.equal(await forge.defaultBranch(), 'main');
+  assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/acme/widgets', '/repos/acme/gadgets', '/repos/gone/widgets']);
+});
+
+test('sameRepo: a repo the token cannot read is another repo, and only a refused token or a rate limit stops the run', async () => {
+  const json = (status, body, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+  // A reset far away, so the client does not wait for it and the reply stays a rate limit.
+  const farReset = String(Math.floor(Date.now() / 1000) + 3600);
+  let flaky = 0;
+  const replies = {
+    '/repos/acme/widgets': () => json(200, { id: 7, full_name: 'acme/widgets' }),
+    '/repos/samlorg/private': () => json(403, { message: 'Resource protected by organization SAML enforcement.' }, { 'x-ratelimit-remaining': '4999' }),
+    '/repos/blocked/repo': () => json(451, { message: 'Repository access blocked' }),
+    '/repos/limited/repo': () => json(403, { message: 'API rate limit exceeded' }, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': farReset }),
+    '/repos/many/requests': () => json(429, { message: 'Too many requests' }, { 'retry-after': '3600' }),
+    '/repos/refused/token': () => json(401, { message: 'Bad credentials' }),
+    // A 502 first, then the old name of this repo.
+    '/repos/oldacme/widgets': () => (flaky++ === 0 ? json(502, { message: 'Server Error' }) : json(200, { id: 7, full_name: 'acme/widgets' }))
+  };
+  const asked = [];
+  const fetch = async (url) => {
+    const path = new URL(url).pathname;
+    asked.push(path);
+    return replies[path]();
+  };
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch, sleep: async () => {} });
+  // A private repo behind SAML SSO (403, not a rate limit) and a repo blocked for legal reasons
+  // (451) are other repos. The answer is kept, so a second mention sends no request.
+  assert.equal(await forge.sameRepo('samlorg/private'), false);
+  assert.equal(await forge.sameRepo('blocked/repo'), false);
+  assert.equal(await forge.sameRepo('samlorg/private'), false);
+  assert.deepEqual(asked, ['/repos/samlorg/private', '/repos/blocked/repo']);
+  // A rate limit (a 403 with no requests left, or a 429) and a refused token still stop the run.
+  for (const [name, status] of [['limited/repo', 403], ['many/requests', 429], ['refused/token', 401]]) {
+    await assert.rejects(forge.sameRepo(name), (error) => error instanceof GitHubReplyError && error.status === status && error.stopsRun, name);
+  }
+  // A 502 is another repo for now, but that answer is not kept: the next call asks again.
+  asked.length = 0;
+  assert.equal(await forge.sameRepo('oldacme/widgets'), false);
+  assert.equal(await forge.sameRepo('oldacme/widgets'), true);
+  assert.deepEqual(asked, ['/repos/oldacme/widgets', '/repos/oldacme/widgets', '/repos/acme/widgets']);
+  // An error on this repo's own reply is not an answer about the name: it is thrown.
+  const own = createGitHubForge({ repo: 'acme/widgets', token: 't', sleep: async () => {}, fetch: async (url) => (new URL(url).pathname === '/repos/acme/widgets'
+    ? json(403, { message: 'Resource not accessible by integration' }, { 'x-ratelimit-remaining': '4999' })
+    : json(200, { id: 7, full_name: 'acme/widgets' })) });
+  await assert.rejects(own.sameRepo('oldacme/widgets'), (error) => error instanceof GitHubReplyError && error.status === 403);
 });
 
 test('a PR whose files, reviews, comments and CI results need more than one page gets them all', async () => {

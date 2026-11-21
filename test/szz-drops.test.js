@@ -235,7 +235,8 @@ test('whitespace: a quote mark in a regex opens no string, so the whitespace in 
 test('whitespace: a division that reads as a regex can drop a change in a later string that has a "/" in it', () => {
   // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
   // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round.
-  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';"]) {
+  // A later regex, such as /'/, does the same.
+  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + s.replace(/'/, '') + 'c d';"]) {
     const after = before.replace("'c d'", "'cd'");
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
     assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']], before);
@@ -435,26 +436,48 @@ test('a deleted line that starts with "-- " is a line, not a file header', () =>
   assert.deepEqual(counted(countedLines(text)), [['q.sql', [2, 7]], ['b.js', [1]]]);
 });
 
-test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', () => {
-  assert.deepEqual(bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', 'owner/repo'), [12, 7, 30]);
-  assert.deepEqual(bugReportNumbers('FIX #4 and Close #4', 'owner/repo'), [4]);
-  assert.deepEqual(bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', 'owner/repo'), []);
-  assert.deepEqual(bugReportNumbers(null, 'owner/repo'), []);
+// A forge for bugReportNumbers: `repo` is its name, and `oldNames` are names that GitHub
+// redirects to it, as after a rename or a transfer. `asked` lists each name it was asked about.
+function forgeOf(repo, oldNames = []) {
+  const asked = [];
+  return {
+    repo,
+    asked,
+    sameRepo: async (name) => {
+      asked.push(name);
+      return oldNames.includes(name.toLowerCase());
+    }
+  };
+}
+
+test('bugReportNumbers reads the GitHub closing words that link an issue in this repo', async () => {
+  assert.deepEqual(await bugReportNumbers('Fixes #12.\nAlso closes #7, and resolved: #30', forgeOf('owner/repo')), [12, 7, 30]);
+  assert.deepEqual(await bugReportNumbers('FIX #4 and Close #4', forgeOf('owner/repo')), [4]);
+  assert.deepEqual(await bugReportNumbers('See #12. Prefix #3. other/repo#9 fixes other/repo#5', forgeOf('owner/repo')), []);
+  assert.deepEqual(await bugReportNumbers(null, forgeOf('owner/repo')), []);
 });
 
-test('bugReportNumbers reads a full issue URL when it names this repo', () => {
+test('bugReportNumbers reads a full issue URL when it names this repo', async () => {
   const body = 'Fixes https://github.com/Owner/Repo/issues/12\nCloses https://github.com/owner/other/issues/9\nresolves: https://github.com/owner/repo/issues/12 and fixes https://github.com/owner/repo/pull/3';
-  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12]);
-  assert.deepEqual(bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', 'owner/repo'), [4, 5]);
+  assert.deepEqual(await bugReportNumbers(body, forgeOf('owner/repo')), [12]);
+  assert.deepEqual(await bugReportNumbers('Fixes #4, closes https://github.com/owner/repo/issues/5.', forgeOf('owner/repo')), [4, 5]);
 });
 
-test('bugReportNumbers reads owner/name#12 when it names this repo', () => {
+test('bugReportNumbers reads owner/name#12 when it names this repo', async () => {
   const body = 'Fixes Owner/Repo#12\nCloses owner/other#9 and fixes other/repo#8\nresolves: owner/repo#12, closes owner/repo#5.';
-  assert.deepEqual(bugReportNumbers(body, 'owner/repo'), [12, 5]);
+  assert.deepEqual(await bugReportNumbers(body, forgeOf('owner/repo')), [12, 5]);
   // A repo name with dots and dashes, and a mix of all three forms.
-  assert.deepEqual(bugReportNumbers('fixes my-org/my.repo#3, closes #4, fixes https://github.com/my-org/my.repo/issues/6', 'my-org/my.repo'), [3, 4, 6]);
+  assert.deepEqual(await bugReportNumbers('fixes my-org/my.repo#3, closes #4, fixes https://github.com/my-org/my.repo/issues/6', forgeOf('my-org/my.repo')), [3, 4, 6]);
   // The words must close the issue: a bare mention does not count.
-  assert.deepEqual(bugReportNumbers('See owner/repo#7. Prefixes owner/repo#2', 'owner/repo'), []);
+  assert.deepEqual(await bugReportNumbers('See owner/repo#7. Prefixes owner/repo#2', forgeOf('owner/repo')), []);
+});
+
+test('bugReportNumbers reads a closing word that names this repo by an old name, after a rename or a transfer', async () => {
+  const forge = forgeOf('newowner/repo', ['oldowner/repo']);
+  const body = 'Fixes oldowner/repo#12\nCloses https://github.com/OldOwner/Repo/issues/13\nfixes other/repo#9, fixes #14';
+  assert.deepEqual(await bugReportNumbers(body, forge), [12, 13, 14]);
+  // The current name and a bare number need no question.
+  assert.deepEqual(forge.asked, ['oldowner/repo', 'OldOwner/Repo', 'other/repo']);
 });
 
 test('newer than the bug report: a line whose commit came after the report is dropped', () => {
@@ -539,6 +562,22 @@ test('comments: a later comment row that only names "/*" does not stop the look 
   }
 });
 
+test('comments: a JSDoc row with a glob such as **/*.js is still a comment', () => {
+  for (const deleted of [
+    [' * Old words.', ' * Matches src/**/*.js files.', ' */'],
+    ['/**', ' * Matches src/**/*.js files.', ' * Old words.', ' */']
+  ]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted }] }));
+    assert.deepEqual(counted(result), [], deleted.join(' | '));
+    assert.ok(result.dropped.every((d) => d.reason === 'comment'), deleted.join(' | '));
+  }
+});
+
+test('comments: without the file, a glob with a name after "**/" still ends the block, so its row counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' * Matches src/**/foo.js files.', ' */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [6]]]);
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
@@ -570,6 +609,30 @@ test('comments: a // or # inside a string is code, not a comment', () => {
     { path: 'a.py', hunks: [{ at: 1, deleted: ["tag = 'a # b'", 'say = "it\\"s # 1"'], added: ["tag = 'a # c'", 'say = "it\\"s # 2"'] }] }
   ));
   assert.deepEqual(counted(result), [['a.js', [1, 2, 3]], ['a.py', [1, 2]]]);
+});
+
+test('comments: a division that reads as a regex can drop a line when a later string has a "/" in it', () => {
+  // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
+  // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round, and the
+  // "//" in 'c // d' reads as a comment.
+  // A later regex, such as /'/, does the same.
+  const lines = [
+    "  y = x++ / 2 + 'a / b' + 'c // d';",
+    "  y = x-- / 2 + 'a / b' + 'c // d';",
+    "  y = obj.of / 2 + 'a / b' + 'c // d';",
+    "  y = x++ / 2 + s.replace(/'/, '') + 'c // d';"
+  ];
+  for (const before of lines) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(dropped(result), [['a.js', 3, 'comment']], before);
+  }
+  // A plain division reads right, so the change counts.
+  for (const before of ["  y = a / 2 + 'a / b' + 'c // d';", "  y = a / 2 + s.replace(/'/, '') + 'c // d';"]) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(plain), [['a.js', [3]]], before);
+  }
 });
 
 test('comments: a trailing comment pairs only with a line in the same hunk', () => {
@@ -634,6 +697,13 @@ test('comments: with the file, a JSDoc text row whose block opens and closes out
   const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
   assert.deepEqual(counted(result), []);
   assert.deepEqual(dropped(result), [['a.js', 2, 'comment']]);
+});
+
+test('comments: with the file, a row whose block ends at a "*/" with a "/" after it counts', () => {
+  const before = '/*\n  a *//b/.test(s) && go();\nx = 1;\n';
+  const after = '/*\n*/\nx = 1;\n';
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: ['  a *//b/.test(s) && go();'], added: ['*/'] }] }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), [['a.js', [2]]]);
 });
 
 test('comments: with the file, a row that starts with the * operator outside a block counts', () => {
@@ -704,4 +774,24 @@ test('comments: with the file, an indented Python comment that the fix turns bac
   const after = 'def f():\n    return total\n';
   const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['    # return total'], added: ['    return total'] }] }), files({ 'a.py': before }, { 'a.py': after }));
   assert.deepEqual(counted(result), [['a.py', [2]]]);
+});
+
+test('comments: a later code row with "/*" only in quotes or after "//" does not stop the look for the block end', () => {
+  for (const code of ['x = 1; // see /*', "s = '/*';", 's = "a/*b";', 's = `/*`;', "s = '\\'/*';"]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', code, ' */'] }] }));
+    const comments = dropped(result).filter(([, line]) => line !== 6);
+    assert.deepEqual(comments, [['a.js', 5, 'comment'], ['a.js', 7, 'comment']], code);
+  }
+});
+
+test('comments: a later code row with a real "/*" after a string still stops the look for the block end', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', "s = '//'; /* a", ' * b */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
+});
+
+test('comments: a known wrong guess: a quote or "//" in a regex literal hides a later "/*" on the row', () => {
+  for (const code of ["r = /'/; /* a", 'r = /\\/\\//; /* a']) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', code, ' * b */'] }] }));
+    assert.deepEqual(counted(result), [['a.js', [6]]], code);
+  }
 });

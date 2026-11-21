@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, cp, mkdir, open, realpath } from 'node:fs/promises';
-import { isAbsolute, join, posix, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 
 // The time limit for one probe when the policy does not set settings.probe_timeout_seconds.
 export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
@@ -17,14 +17,17 @@ export const DEFAULT_PROBE_TIMEOUT_SECONDS = 600;
 // `failed`, and how_to_fix says why: the exit code, the artifacts that are missing, or the time
 // limit.
 //
+// `env` is the env of the command, and the env of Exhibit when it is left out. It is the run's env,
+// the same one the test command gets (spec 9.6).
+//
 // `outDir` is the folder for this probe's files, and `outPath` is the same folder as the exhibit
 // names it, such as .exhibit/probes/link-check. The command's output goes to output.log there,
 // and each artifact that exists is copied there under its own path. A hidden probe (`hidden`) keeps
 // nothing: its output goes nowhere and its artifacts are not copied, so the exhibit holds only its
 // status (spec 9.7).
-export async function runProbe({ name, run, artifacts = [], hidden = false }, { worktree, outDir, outPath, timeoutSeconds }) {
+export async function runProbe({ name, run, artifacts = [], hidden = false }, { worktree, outDir, outPath, timeoutSeconds, env = process.env }) {
   if (!hidden) await mkdir(outDir, { recursive: true });
-  const outcome = await runInGroup(run, { cwd: worktree, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
+  const outcome = await runInGroup(run, { cwd: worktree, env, logFile: hidden ? null : join(outDir, 'output.log'), timeoutMs: timeoutSeconds * 1000 });
 
   const root = await realpath(worktree);
   const found = [];
@@ -38,9 +41,7 @@ export async function runProbe({ name, run, artifacts = [], hidden = false }, { 
   if (!hidden) {
     for (const { path, source } of found) {
       const name = posix.normalize(path);
-      // A folder artifact can hold symbolic links. Copy only the entries whose real path is inside
-      // the worktree, so a link cannot bring a file from elsewhere on the machine.
-      const filter = async (entry) => (await insideRoot(root, entry)) !== null;
+      const filter = (entry) => keepInCopy(root, source, entry);
       await cp(source, join(outDir, 'artifacts', name), { recursive: true, dereference: true, filter });
       copied.push({ path, copy: `${outPath}/artifacts/${name}` });
     }
@@ -70,13 +71,71 @@ function failure(outcome, missing, timeoutSeconds) {
   return null;
 }
 
+// The process groups that runInGroup has started and not yet killed: probes, test runs,
+// settings.mutation_setup and Stryker. Each one is a function that kills its group.
+const liveGroups = new Set();
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+let stopping = false;
+
+// Kills every process group that runInGroup started and that may still run, for a signal handler
+// that stops Exhibit (spec 9.6). After it, runInGroup starts no new command, and a call that waits
+// for a command never returns, so no probe goes on to read a worktree that is being removed. Call
+// it only when Exhibit is about to exit.
+export function stopAllGroups() {
+  stopping = true;
+  for (const kill of liveGroups) kill();
+}
+
+// True after stopAllGroups, so the caller can stop too, and write nothing for a stopped run.
+export function stopped() {
+  return stopping;
+}
+
+// A group of its own does not get the SIGINT that Ctrl-C sends to Exhibit's group, or the SIGHUP
+// that a closing terminal sends. So Exhibit kills every live group itself when it gets SIGINT,
+// SIGTERM or SIGHUP. Then it sends the signal to itself again with no listener left, so it ends
+// by that signal, as it did before. exhibit check adds a listener of its own while the collectors
+// run, which removes the head worktree and then exits (src/commands/check.js), so there the
+// signal sent again changes nothing.
+function onStopSignal(signal) {
+  stopAllGroups();
+  liveGroups.clear();
+  for (const name of STOP_SIGNALS) process.removeListener(name, onStopSignal);
+  process.kill(process.pid, signal);
+}
+
+function watchGroup(kill) {
+  if (liveGroups.size === 0) for (const name of STOP_SIGNALS) process.on(name, onStopSignal);
+  liveGroups.add(kill);
+}
+
+function unwatchGroup(kill) {
+  if (!liveGroups.delete(kill) || liveGroups.size > 0) return;
+  for (const name of STOP_SIGNALS) process.removeListener(name, onStopSignal);
+}
+
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
-// Then it kills the whole group. Gives back { code, signal, timedOut }.
-async function runInGroup(command, { cwd, logFile, timeoutMs }) {
+// Then it kills the whole group. When Exhibit gets SIGINT, SIGTERM or SIGHUP while the group
+// runs, as from Ctrl-C or a closing terminal, it kills the group and then ends by that signal.
+// Gives back { code, signal, timedOut }. With `args`, `command` is a program that runs with those
+// arguments, and no shell. `env` is the env of the command, and the env of Exhibit when it is
+// left out. The output goes to `logFile`, or nowhere when it is null.
+//
+// It drops NODE_TEST_CONTEXT from the env. node:test sets it when Exhibit itself runs under
+// node:test. With it, a node:test run in the command sends its results to that parent run and
+// writes no JUnit file. Probes, test runs and mutation runs all start here, so all get the same
+// env.
+export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
+  if (stopping) return new Promise(() => {});
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
+    // The stop can come while the log file opens. Check again, so no command starts after it.
+    if (stopping) return await new Promise(() => {});
     const output = log === null ? 'ignore' : log.fd;
-    const child = spawn(command, { cwd, shell: '/bin/sh', detached: true, stdio: ['ignore', output, output] });
+    const clean = { ...env };
+    delete clean.NODE_TEST_CONTEXT;
+    const options = { cwd, env: clean, detached: true, stdio: ['ignore', output, output] };
+    const child = args === null ? spawn(command, { ...options, shell: '/bin/sh' }) : spawn(command, args, options);
     const killGroup = () => {
       try {
         process.kill(-child.pid, 'SIGKILL');
@@ -86,6 +145,7 @@ async function runInGroup(command, { cwd, logFile, timeoutMs }) {
         if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
       }
     };
+    if (child.pid !== undefined) watchGroup(killGroup);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -96,9 +156,11 @@ async function runInGroup(command, { cwd, logFile, timeoutMs }) {
         child.once('error', reject);
         child.once('exit', (code, signal) => resolve({ code, signal }));
       });
+      if (stopping) await new Promise(() => {});
       return { code, signal, timedOut };
     } finally {
       clearTimeout(timer);
+      unwatchGroup(killGroup);
       if (child.pid !== undefined) killGroup();
     }
   } finally {
@@ -116,6 +178,29 @@ async function artifactSource(root, path) {
   return real === root ? null : real;
 }
 
+// Whether the copy of a folder artifact keeps `entry`, a path that cp reached under `source`, the
+// artifact's real path. A folder artifact can hold symbolic links, and cp follows them. So it keeps
+// only an entry whose real path is inside the worktree, so a link cannot bring a file from
+// elsewhere on the machine. And it leaves out an entry whose real path is a folder that holds the
+// entry, such as rep/up -> .. or a link to the worktree root, because cp would copy that folder
+// into itself until it fails with ELOOP. An entry that cannot be read, or a link that leads nowhere,
+// is left out too.
+async function keepInCopy(root, source, entry) {
+  const real = await insideRoot(root, entry);
+  if (real === null) return false;
+  if (entry === source) return true;
+  for (let folder = dirname(entry); ; folder = dirname(folder)) {
+    if (holds(real, await realpath(folder))) return false;
+    if (folder === source || folder === dirname(folder)) return true;
+  }
+}
+
+// Whether `folder` is `path` or a folder above it. Both are real paths.
+function holds(folder, path) {
+  const inside = relative(folder, path);
+  return !(inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside));
+}
+
 // The real path of `path` when it exists, can be read, and is inside `root` or is `root`. Otherwise
 // null.
 async function insideRoot(root, path) {
@@ -126,7 +211,5 @@ async function insideRoot(root, path) {
   } catch {
     return null;
   }
-  const inside = relative(root, real);
-  if (inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
-  return real;
+  return holds(root, real) ? real : null;
 }

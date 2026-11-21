@@ -108,9 +108,12 @@ async function askForge(forge, sha, defaultBranch) {
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A fix that the
 // revert signal marked links the PRs it reverts, with no blame (revertLinks). A PR that is
-// not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
-// the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
-// warning first, because blame there can give old lines to the shallow boundary commit.
+// not a fix gets null. A revert that takes back only reverts that take a change out
+// (takesOut) is a re-land, such as "Reland: add cache" after a click on Revert. It puts work
+// back, so it comes back as no fix, with szz null, as a title 'Revert "Revert "' would (spec
+// 9.1). A fix whose merge commit is not in the clone, where git fails, or where the forge fails
+// for one of its requests, gets null and a warning. A shallow clone gives one warning first,
+// because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
 // `known` holds every history line that maps a commit to its PR, `lines` when left out. An
 // incremental run passes the whole file there, and only the lines SZZ must run on as `lines`.
@@ -120,6 +123,8 @@ async function askForge(forge, sha, defaultBranch) {
 export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {}, known = lines }) {
   const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
   const knownPrs = new Map(known.map((line) => [line.number, line]));
+  const revertContext = { findPr, forge, knownPrs };
+  revertContext.takesOut = createTakesOut(dir, revertContext);
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -137,9 +142,10 @@ export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {
     }
     try {
       const szz = revert
-        ? await revertLinks(dir, line, { findPr, forge, knownPrs })
+        ? await revertLinks(dir, line, revertContext)
         : await szzForFix(dir, line, findPr, (await bugReportDate(line, forge)) ?? (await trackerReportDate(line, tracker)));
-      out.push({ ...line, szz });
+      if (szz.no_link_reason === REVERTS_A_REVERT) out.push({ ...line, classification: { ...line.classification, fix: false, fix_signal: null }, szz: null });
+      else out.push({ ...line, szz });
     } catch (error) {
       if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
@@ -239,29 +245,21 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
 // The no_link_reason of a revert for which SZZ found no PR in this repo: the body named none,
 // named only PRs in other repos, or named work that neither the history nor the forge knows.
 export const REVERT_NOT_FOUND = 'reverted change not found';
-// The no_link_reason of a revert whose every found PR is itself a revert. It puts work back (a
-// re-land), so the PR it takes back did not bring a bug.
+// What revertLinks says of a revert whose every found PR is itself a revert. It puts work back (a
+// re-land), so the PR it takes back did not bring a bug. addSzz then makes the line no fix. A
+// history file from before that rule can still hold it on a fix line.
 export const REVERTS_A_REVERT = 'reverts a revert';
 
 // A revert names the work it reverts, so SZZ blames no line: it links each reverted PR straight
-// away, marked as found by revert. The PRs share the confidence evenly. A PR the body names is
-// linked when the history holds it, or when the forge says it is a PR. A commit maps to its PR as
-// a blamed commit does (createPrFinder). A revert of a PR in another repo links nothing here.
-// A found PR whose history line is itself a revert is not linked: a re-land with an edited
-// title, such as "Reland: add cache", still takes back a revert, not a bug.
-async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
-  const { prs, commits } = revertedWork(fix.body, forge.repo);
-  const found = new Set();
-  for (const number of prs) {
-    if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
-  }
-  for (const sha of commits) {
-    const full = await fullSha(dir, sha);
-    const pr = full === null ? null : await findPr(full);
-    if (pr !== null) found.add(pr);
-  }
-  found.delete(fix.number);
-  const reverts = [...found].filter((number) => knownPrs.has(number) && isRevert({ ...knownPrs.get(number), repo: forge.repo }));
+// away, marked as found by revert. The PRs share the confidence evenly. The reverted PRs come
+// from revertedPrs. A revert of a PR in another repo links nothing here.
+// A found PR that takes a change out (takesOut) is not linked: a re-land with an edited title,
+// such as "Reland: add cache", takes back a revert, not a bug. A found re-land is linked: a
+// revert of it takes the change out again, so the re-land brought the bug back.
+async function revertLinks(dir, fix, context) {
+  const found = await revertedPrs(dir, fix, context);
+  const reverts = [];
+  for (const number of found) if (await context.takesOut(number)) reverts.push(number);
   for (const number of reverts) found.delete(number);
   const linked = [...found].sort((a, b) => a - b);
   return {
@@ -271,6 +269,54 @@ async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
     dropped_lines: [],
     no_link_reason: linked.length > 0 ? null : reverts.length > 0 ? REVERTS_A_REVERT : REVERT_NOT_FOUND
   };
+}
+
+// Returns the set of PRs that the body of the revert `line` names. A PR named by number counts
+// when the history holds it, or when the forge says it is a PR. A commit maps to its PR as a
+// blamed commit does (createPrFinder), after a short SHA is made full in the clone. The revert
+// PR itself is never in the set.
+async function revertedPrs(dir, line, { findPr, forge, knownPrs }) {
+  const { prs, commits } = revertedWork(line.body, forge.repo);
+  const found = new Set();
+  for (const number of prs) {
+    if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
+  }
+  for (const sha of commits) {
+    const full = await fullSha(dir, sha);
+    const pr = full === null ? null : await findPr(full);
+    if (pr !== null) found.add(pr);
+  }
+  found.delete(line.number);
+  return found;
+}
+
+// Returns takesOut(number): whether the history line of PR `number` is a revert that takes a
+// change out. A revert whose every reverted PR takes a change out puts the change back (a
+// re-land), so it is not one. So in a chain of reverts, every second one takes out, and the
+// others put back. The reverted PRs come from revertedPrs, as for the links, so a PR is a
+// re-land here exactly when SZZ writes it as no fix. Each PR is decided once per run. A PR that
+// the history does not hold is no revert. A revert that names no PR takes out. `path` holds the
+// PRs above this one in the chain, and stops a loop.
+function createTakesOut(dir, context) {
+  const decided = new Map();
+  const takesOut = async (number, path = new Set()) => {
+    if (decided.has(number)) return decided.get(number);
+    const line = context.knownPrs.get(number);
+    if (line === undefined || !isRevert({ ...line, repo: context.forge.repo })) return false;
+    if (path.has(number)) return true;
+    const above = new Set([...path, number]);
+    const named = await revertedPrs(dir, line, context);
+    let out = named.size === 0;
+    for (const pr of named) {
+      if (!(await takesOut(pr, above))) {
+        out = true;
+        break;
+      }
+    }
+    decided.set(number, out);
+    return out;
+  };
+  return takesOut;
 }
 
 // git revert writes the whole SHA, but a person can shorten it. A short SHA is looked up in the
@@ -352,8 +398,11 @@ function noLinkReason(dropped) {
 
 // Returns the numbers of the issues that a PR body links with GitHub's closing words, such as
 // "Fixes #12", "closes: #7", "Fixes owner/name#12" or "Fixes https://github.com/owner/name/issues/12".
-// Only issues in `repo` ("owner/name") count. Case does not matter in the repo name.
-export function bugReportNumbers(body, repo) {
+// Only issues in the forge's repo count. Case does not matter in the repo name. A name that is
+// not the repo's current name, such as its name before a rename or a transfer, counts when the
+// forge says it leads to the same repo (forge.sameRepo). GitHub follows that redirect and closes
+// the issue, so SZZ reads it too.
+export async function bugReportNumbers(body, forge) {
   const numbers = [];
   const name = '[\\w.-]+\\/[\\w.-]+';
   const closing = new RegExp(
@@ -362,7 +411,7 @@ export function bugReportNumbers(body, repo) {
   );
   for (const [, short, refRepo, refNumber, urlRepo, urlNumber] of (body ?? '').matchAll(closing)) {
     const named = refRepo ?? urlRepo;
-    if (named !== undefined && named.toLowerCase() !== repo.toLowerCase()) continue;
+    if (named !== undefined && named.toLowerCase() !== forge.repo.toLowerCase() && !(await forge.sameRepo(named))) continue;
     const number = Number(short ?? refNumber ?? urlNumber);
     if (!numbers.includes(number)) numbers.push(number);
   }
@@ -375,7 +424,7 @@ export function bugReportNumbers(body, repo) {
 // it came before the newest one.
 async function bugReportDate(fix, forge) {
   let newest = null;
-  for (const number of bugReportNumbers(fix.body, forge.repo)) {
+  for (const number of await bugReportNumbers(fix.body, forge)) {
     const issue = await forge.issue(number);
     if (issue === null || issue.isPull || issue.createdAt === null) continue;
     if (newest === null || Date.parse(issue.createdAt) > Date.parse(newest)) newest = issue.createdAt;
@@ -384,11 +433,14 @@ async function bugReportDate(fix, forge) {
 }
 
 // Returns the created time of the tracker issue that marked `fix` as a fix, such as jira:PAY-482
-// in its fix_signal, or null. The fix signals asked the tracker for the issue already, and the
-// tracker keeps each answer, so this sends no new request.
+// in its fix_signal, or null. The line's saved `ticket` holds it (spec 8.3). Else the fix signals
+// asked the tracker for the issue already, and the tracker keeps each answer, so this sends no
+// new request. A tracker with no token gives null.
 async function trackerReportDate(fix, tracker) {
   const signal = fix.classification?.fix_signal ?? '';
   if (!tracker || !signal.startsWith(`${tracker.name}:`)) return null;
+  if (fix.ticket?.issue === signal && fix.ticket.created_at) return fix.ticket.created_at;
+  if (!tracker.canAsk) return null;
   const issue = await tracker.ticket(signal.slice(tracker.name.length + 1));
   return issue?.createdAt ?? null;
 }
@@ -863,6 +915,8 @@ const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').rep
 // And a "//" in JSX text, with a closing tag after it on the line, such as
 // "<p>Price // 10 USD</p>", is text. Other text that only looks like a comment, such as a "#"
 // in a docstring or a "//" in a template literal that spans lines, is still read as a comment.
+// A division that reads as a regex, such as "x++ / 2", can make a "//" in a later string read
+// as a comment, when a later string or regex on the line has a "/" in it.
 // The whitespace right before a comment that comes off goes too, so it cannot stop a match.
 // Other whitespace at the end of the line stays: it can be text in a string that goes on to
 // the next line.
@@ -956,10 +1010,41 @@ function closesEarlierBlock(texts) {
   return false;
 }
 
-const opensBlock = (text) => {
+// Says whether a code row opens a block comment with "/*". As in blockStarts, a "/*" in quotes,
+// such as "s = '/*';", or after "//", such as "x = 1; // see /*", opens nothing.
+// A regex literal reads as code, as in blockStarts. So a quote or "//" in one, such as
+// "r = /'/; /* a", hides a real "/*" after it on the row: a rare wrong guess.
+// A row that starts with "*" opens no block here, so the code row " * rate /* a" is a rare wrong
+// guess: one row alone cannot tell it from the comment row " * Use /* to open.".
+function opensBlock(text) {
   const rest = text.trim();
-  return !rest.startsWith('*') && !rest.startsWith('//') && rest.includes('/*');
-};
+  if (rest.startsWith('*')) return false;
+  let quote = null;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (quote !== null) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+    } else if (rest.startsWith('//', i)) {
+      return false;
+    } else if (rest.startsWith('/*', i)) {
+      return true;
+    } else if ('\'"`'.includes(ch)) {
+      quote = ch;
+    }
+  }
+  return false;
+}
+
+// Finds where a block comment ends in a row: the first "*/" with no "*" or "/" straight after it.
+// A "*/" inside a glob such as "src/**/*.js" has a "*" after it, so it is comment text, not the end.
+// Returns -1 when the row has no end.
+function blockEnd(rest) {
+  for (let i = rest.indexOf('*/'); i !== -1; i = rest.indexOf('*/', i + 1)) {
+    if (!'*/'.includes(rest[i + 2] ?? ' ')) return i;
+  }
+  return -1;
+}
 
 // Says for each row of one side of a hunk whether it is only a comment. A hunk shows only the
 // changed rows, so a block comment can open before the hunk. `starts` says for each row whether
@@ -978,14 +1063,15 @@ function markComments(texts, path, starts = []) {
     if (!inBlock) {
       if (rest.startsWith('//')) return true;
       if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
-        const end = rest.indexOf('*/');
+        const end = blockEnd(rest);
         if (end !== -1) return rest.slice(end + 2).trim() === '';
         return /^\*\s*@\w/.test(rest) || closesEarlierBlock(texts.slice(i + 1));
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
     }
-    const end = rest.indexOf('*/');
+    // With the file, the first "*/" ends the block, as in JavaScript. Only the guess skips a glob.
+    const end = starts[i] === undefined ? blockEnd(rest) : rest.indexOf('*/');
     inBlock = end === -1;
     if (inBlock) return true;
     const after = rest.slice(end + 2).trim();

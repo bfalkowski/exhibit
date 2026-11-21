@@ -3,15 +3,18 @@ export const DEFAULT_FIX_SIGNALS = Object.freeze(['label:bug', 'title:fix', 'bra
 
 const WORD_CHARACTER = /[\p{L}\p{N}_]/u;
 // One or more ticket keys at the start of a title, such as "T-170: ", "KEY-123 ", "[KEY-123] ",
-// "(KEY-123): ", "T-170 - ", "T-170, T-171: " or "#79: ". A key is letters and digits, a hyphen
-// and digits, or "#" and digits. After a key in brackets, a colon, a comma or a dash may follow.
-// A bare key needs a colon, a comma or a space after it, so "T-170Fix" keeps its key, and a dash
-// after a bare key needs a space before it, so "T-170-Fix" keeps its key too. Titles are
+// "(KEY-123): ", "T-170 - ", "T-170, T-171: ", "ZOOKEEPER-123. ", "#79: " or "192: ". A key is
+// letters and digits, a hyphen and digits, or "#" and digits. After a key in brackets, a colon, a
+// comma or a dash may follow. A bare key needs a colon, a comma, a period and a space, or a space
+// after it, so "T-170Fix" and "T-170.Fix" keep their key, and a dash after a bare key needs a space
+// before it, so "T-170-Fix" keeps its key too. A ticket number alone, such as "192", is a key only
+// bare and with a colon after it, so "79 fixes" and "1.2: fix" keep their number. Titles are
 // lowercase by the time they get here.
 const KEY = '(?:[a-z][a-z0-9_]*-\\d+|#\\d+)';
 const BRACKETED = `(?:\\[${KEY}\\]|\\(${KEY}\\))\\s*(?:[:,-]\\s*)?`;
-const BARE = `${KEY}(?:\\s*[:,]\\s*|\\s+-\\s*|\\s+)`;
-const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE})+`);
+const BARE = `${KEY}(?:\\s*[:,]\\s*|\\.\\s+|\\s+-\\s*|\\s+)`;
+const NUMBER = '\\d+\\s*:\\s*';
+const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE}|${NUMBER})+`);
 
 // A Jira issue key, such as PAY-482: letters and digits, a hyphen, and digits.
 const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
@@ -38,29 +41,43 @@ export function classifyFix(pr, signals, ticket = null) {
 // Classifies `pr` as classifyFix does, and asks `tracker` about the PR's ticket when it must: when
 // the signals hold tracker:<name>, no signal before it matches, and the PR names a ticket key.
 // `tracker` is a connected tracker module, such as JIRA_TRACKER.connect in src/jira.js, or null
-// when there is no token, so the tracker signal matches nothing.
-// Returns { classification, problem }. problem is null, or a text that says why the tracker could
-// not answer for one request, such as a 503. Then the tracker signal does not match this PR, and
-// the caller warns and goes on. An error that stops every later request, such as a refused
-// token, is thrown.
-export async function classifyWithTracker(pr, signals, tracker) {
+// when the signals hold no tracker signal. A tracker with no token (canAsk false) asks nothing.
+// `saved` is the ticket record that the PR's line in the old history file holds, or undefined
+// (spec 8.3). It counts only when it names the same issue that the PR names now. With `reuse`
+// true, as for a line the run keeps, a saved record answers, and the tracker is not asked. Else
+// the tracker is asked, and the saved record answers only when the tracker cannot.
+// Returns { classification, problem, ticket }. ticket is the record for the PR's line to save:
+// the new answer, the saved one, or null when there is none. problem is null, or a text that
+// says why the tracker could not answer for one request, such as a 503. Then the saved record
+// answers, or else the tracker signal does not match this PR, and the caller warns and goes on.
+// No token gives no problem: the history command says so in one note. An error that stops every
+// later request, such as a refused token, is thrown.
+export async function classifyWithTracker(pr, signals, tracker, { saved, reuse = false } = {}) {
+  const none = { classification: classifyFix(pr, signals), problem: null, ticket: null };
   const at = signals.findIndex((signal) => signalType(signal) === 'tracker');
-  const before = at === -1 ? signals : signals.slice(0, at);
-  if (!tracker || at === -1 || signals[at] !== `tracker:${tracker.name}` || before.some((signal) => matches(pr, signal, null))) {
-    return { classification: classifyFix(pr, signals), problem: null };
-  }
+  if (!tracker || at === -1 || signals[at] !== `tracker:${tracker.name}`) return none;
   const key = ticketKey(pr);
-  if (key === null) return { classification: classifyFix(pr, signals), problem: null };
+  if (key === null) return none;
+  const old = saved?.issue === `${tracker.name}:${key}` ? saved : null;
+  const oldAnswer = old ? tracker.saved(old) : undefined;
+  const fromOld = () => ({ classification: classifyFix(pr, signals, ticketOf(tracker, oldAnswer)), ticket: old });
+  // The signal before tracker:jira matched, so the tracker is not asked, and an old record stays.
+  if (signals.slice(0, at).some((signal) => matches(pr, signal, null))) return { ...none, ticket: old };
+  if (oldAnswer !== undefined && (reuse || !tracker.canAsk)) return { ...fromOld(), problem: null };
+  if (!tracker.canAsk) return none;
   let found;
   try {
     found = await tracker.ticket(key);
   } catch (error) {
     if (error.stopsRun !== false) throw error;
-    return { classification: classifyFix(pr, signals), problem: `the ${signals[at]} signal could not check ${key}, so it does not match. ${error.message}` };
+    if (oldAnswer !== undefined) return { ...fromOld(), problem: `the ${signals[at]} signal could not check ${key}, so the PR keeps the answer saved in the history file (${old.issue}). ${error.message}` };
+    return { ...none, problem: `the ${signals[at]} signal could not check ${key}, so it does not match. ${error.message}` };
   }
-  const ticket = found === null ? null : { signal: `${tracker.name}:${found.key}`, bug: found.bug, escaped: found.escaped };
-  return { classification: classifyFix(pr, signals, ticket), problem: null };
+  return { classification: classifyFix(pr, signals, ticketOf(tracker, found)), problem: null, ticket: tracker.record(key, found) };
 }
+
+// The tracker's answer as classifyFix takes it, or null when the tracker does not know the issue.
+const ticketOf = (tracker, found) => (found === null ? null : { signal: `${tracker.name}:${found.key}`, bug: found.bug, escaped: found.escaped });
 
 // Returns the ticket key that a PR names, in capitals, such as PAY-482, or null. The key comes
 // from the start of the title, where title_after_key finds keys, and else from the start of the

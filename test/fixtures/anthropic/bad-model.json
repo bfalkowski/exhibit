@@ -1,0 +1,15 @@
+{
+  "/v1/messages": {
+    "status": 404,
+    "headers": {
+      "request-id": "req_fixture"
+    },
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "not_found_error",
+        "message": "model: claude-nope"
+      }
+    }
+  }
+}

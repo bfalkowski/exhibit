@@ -52,6 +52,8 @@ const graphqlQueries = (n) => `Made ${n} GitHub GraphQL ${n === 1 ? 'query' : 'q
 // Every recorded GraphQL reply costs 1 point, so the points equal the queries.
 const madeRequests = (cwd, requests, queries, notModified = 0) => `Made ${restRequests(requests)}. ${notModified} got a 304 and came from the cache in ${cacheOf(cwd)}.\n` + graphqlQueries(queries);
 const githubCounts = (cwd, requests, queries, notModified = 0) => ({ requests, not_modified: notModified, cache: cacheOf(cwd), graphql: { queries, points: queries } });
+// The funnel outside a clone, with no labels file: SZZ did not run, so it stops at the fix PRs.
+const outsideClone = (prs, fixes) => ({ merged_prs: prs, fix_prs: fixes, szz_linked: null, labeled: null, kept: null, labels: 'none' });
 const readLines = (path) => readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
 
 test('exhibit history writes one schema-valid line for each merged PR, then exits 0', (t) => {
@@ -106,7 +108,7 @@ test('a pr: signal that is not a PR number gives exit 2 with a message, and writ
   writeFileSync(join(cwd, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug, pr:abc]\n');
   const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, as in pr:96\./);
+  assert.match(run.stderr, /evidence\.yml settings\.fix_signals\[1\] is "pr:abc"\. A pr: signal needs a PR number of 1 or more, with no leading zero, as in pr:96\./);
   assert.ok(!existsSync(run.historyPath));
 });
 
@@ -136,7 +138,7 @@ test('a PR with more files than GitHub lists gives a warning on stderr that name
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stderr, NO_POLICY + 'exhibit: warning: PR 9 changed 3412 files, but GitHub listed only the first 3000, so its files field is cut short.\n' + notAClone('acme/big'));
   // 1 query for the PRs, and 29 more pages of 100 files for each of PRs 9 and 8.
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 3, output: '.exhibit/history.jsonl', szz: null, funnel: outsideClone(3, 0), report: REPORT, github: githubCounts(run.cwd, 0, 59), mode: 'full', read: 3 });
   assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.files.length]), [[9, 3000], [8, 3000], [7, 2]]);
 });
 
@@ -222,7 +224,7 @@ test('--json gives the SZZ counts inside a clone', (t) => {
   t.after(replay.cleanup);
   const run = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath: replay.path, cwd: repo.dir });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, report: REPORT, github: githubCounts(repo.dir, 6, 1), mode: 'incremental', read: 14 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 4, skipped: 0 }, funnel: { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' }, report: REPORT, github: githubCounts(repo.dir, 6, 1), mode: 'incremental', read: 14 });
 });
 
 test('a second run inside a clone keeps the SZZ result of each fix it reads again, and asks GitHub nothing for SZZ', (t) => {
@@ -262,7 +264,7 @@ test('the summary counts the fix PRs that SZZ skipped, in text and in --json', (
 
   const json = exhibit(t, ['history', '--repo', 'fixture/shop', '--json'], { fixturePath, cwd: shallow });
   assert.equal(json.status, 0, json.stderr);
-  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, report: REPORT, github: githubCounts(shallow, 0, 1), mode: 'incremental', read: 14 });
+  assert.deepEqual(JSON.parse(json.stdout), { prs: 14, output: '.exhibit/history.jsonl', szz: { fix_prs: 7, linked: 0, skipped: 7 }, funnel: { merged_prs: 14, fix_prs: 7, szz_linked: 0, labeled: null, kept: null, labels: 'none' }, report: REPORT, github: githubCounts(shallow, 0, 1), mode: 'incremental', read: 14 });
 });
 
 test('--since keeps PRs merged on or after the date', (t) => {
@@ -281,7 +283,7 @@ test('--json prints a short machine summary', (t) => {
   const run = exhibit(t, ['history', '--repo', 'acme/widgets', '--json']);
   assert.equal(run.status, 0, run.stderr);
   // 2 pages of PRs, then the second pages of PR 7's files, reviews, comments and CI results, and of PR 4's CI results.
-  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, report: REPORT, github: githubCounts(run.cwd, 0, 7), mode: 'full', read: 5 });
+  assert.deepEqual(JSON.parse(run.stdout), { prs: 5, output: '.exhibit/history.jsonl', szz: null, funnel: outsideClone(5, 1), report: REPORT, github: githubCounts(run.cwd, 0, 7), mode: 'full', read: 5 });
 });
 
 test('a record that fails the schema gives exit 2, names the PR, and writes no file', (t) => {
@@ -494,16 +496,16 @@ test('a policy that breaks the schema gives exit 2 with a message that names the
 // PAY-482, PR 3's branch names the Story PAY-483, PR 1 names PAY-404, which Jira does not know,
 // and PR 7 names PAY-503, which Jira answers with a 503. PR 5 has the label bug, so the signal
 // label:bug before tracker:jira matches it, and Jira is not asked.
-function jiraFixture(t) {
+// `titles` and `jiraReplies` replace those, for a test that needs other ones.
+function jiraFixture(t, { titles = { 4: 'PAY-482: Rename the widget table', 1: 'PAY-404: First commit of widgets', 7: 'PAY-503: Add the widget cache' }, jiraReplies = {} } = {}) {
   const replies = JSON.parse(readFileSync(fixture('acme-widgets'), 'utf8'));
-  const titles = { 4: 'PAY-482: Rename the widget table', 1: 'PAY-404: First commit of widgets', 7: 'PAY-503: Add the widget cache' };
   for (const reply of Object.values(replies)) {
     for (const pr of reply.body?.data?.repository?.pullRequests?.nodes ?? []) {
       if (titles[pr.number]) pr.title = titles[pr.number];
       if (pr.number === 3) pr.headRefName = 'PAY-483-readme';
     }
   }
-  Object.assign(replies, JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8')));
+  Object.assign(replies, JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8')), jiraReplies);
   const dir = newFolder(t);
   const path = join(dir, 'acme-jira.json');
   writeFileSync(path, JSON.stringify(replies));
@@ -550,6 +552,72 @@ test('with tracker:jira and no JIRA_API_TOKEN, the signal matches nothing, the r
   assert.equal(JSON.parse(json.stdout).jira, null);
 });
 
+// PR 1 is merged before the look-back window, so a second run keeps its line. Here it names the
+// Bug PAY-482, PR 3's branch names the Story PAY-483, PR 7 names PAY-503, and PR 4 names the
+// Defect PAY-484. PR 4 and PR 7 are in the window, so a second run reads them again.
+const KEPT_JIRA = { titles: { 1: 'PAY-482: First commit of widgets', 4: 'PAY-484: Rename the widget table', 7: 'PAY-503: Add the widget cache' } };
+const jiraFixes = (path) => readLines(path).filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]);
+// PAY-503 as a Bug, for a first run that Jira answers.
+const PAY_503_BUG = { '/rest/api/2/issue/PAY-503?fields=issuetype,created': { status: 200, headers: {}, body: { key: 'PAY-503', fields: { issuetype: { name: 'Bug' }, created: '2026-03-04T08:00:00.000+0000' } } } };
+
+test('a kept line keeps the Jira answer that its line saved, so a plain run asks Jira only for the PRs it reads', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), JIRA_POLICY);
+  const env = { JIRA_API_TOKEN: JIRA_TOKEN };
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, KEPT_JIRA), moreEnv: env });
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /^Made 4 Jira requests\. 0 named an issue that Jira does not know\.$/m);
+  const lines = readLines(first.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.find((l) => l.number === 1).ticket, { issue: 'jira:PAY-482', type: 'Bug', created_at: '2026-01-05T09:30:00.000Z', found_field: null, found: [] });
+  assert.equal(lines.find((l) => l.number === 3).ticket.type, 'Story');
+  assert.equal(lines.find((l) => l.number === 7).ticket, undefined, 'a 503 saves no answer');
+  assert.equal(lines.find((l) => l.number === 5).ticket, undefined, 'label:bug matched first, so Jira was not asked');
+
+  // PRs 1 and 3 are kept, and their saved answers classify them. Only PRs 4 and 7 ask Jira.
+  const second = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, KEPT_JIRA), moreEnv: env });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /^Made 2 Jira requests\. 0 named an issue that Jira does not know\.$/m);
+  assert.deepEqual(jiraFixes(second.historyPath), [[5, 'label:bug'], [1, 'jira:PAY-482']]);
+  assert.doesNotMatch(second.stderr, /classified another way/);
+
+  // --full asks Jira again for every PR.
+  const full = exhibit(t, ['history', '--repo', 'acme/widgets', '--full'], { cwd, fixturePath: jiraFixture(t, KEPT_JIRA), moreEnv: env });
+  assert.match(full.stdout, /^Made 4 Jira requests\./m);
+});
+
+test('with no JIRA_API_TOKEN, a line keeps the Jira answer that the old file saved, and one note says so', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), JIRA_POLICY);
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, { ...KEPT_JIRA, jiraReplies: PAY_503_BUG }), moreEnv: { JIRA_API_TOKEN: JIRA_TOKEN } });
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(jiraFixes(first.historyPath), [[7, 'jira:PAY-503'], [5, 'label:bug'], [1, 'jira:PAY-482']]);
+  const saved = readLines(first.historyPath).map((l) => [l.number, l.ticket]);
+
+  // PR 1 is kept, and PR 7 is read again, in the window: both keep their answers.
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, KEPT_JIRA) });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(jiraFixes(run.historyPath), [[7, 'jira:PAY-503'], [5, 'label:bug'], [1, 'jira:PAY-482']]);
+  assert.deepEqual(readLines(run.historyPath).map((l) => [l.number, l.ticket]), saved);
+  const notice = 'exhibit: note: JIRA_API_TOKEN is not set, so Exhibit did not ask Jira. 4 PRs keep the Jira answer saved in .exhibit/history.jsonl, and the tracker:jira fix signal matched no other PR. Set it to a Jira API token, and for Jira Cloud set JIRA_EMAIL to the email of its account.\n';
+  assert.equal(run.stderr.split(notice).length - 1, 1, run.stderr);
+  assert.doesNotMatch(run.stderr, /classified another way/);
+  assert.doesNotMatch(run.stdout, /Jira request/);
+});
+
+test('a PR that is read keeps the Jira answer that its line saved when Jira answers 5xx, with a warning', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), JIRA_POLICY);
+  const env = { JIRA_API_TOKEN: JIRA_TOKEN };
+  const first = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, { ...KEPT_JIRA, jiraReplies: PAY_503_BUG }), moreEnv: env });
+  assert.equal(first.status, 0, first.stderr);
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd, fixturePath: jiraFixture(t, KEPT_JIRA), moreEnv: env });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(jiraFixes(run.historyPath), [[7, 'jira:PAY-503'], [5, 'label:bug'], [1, 'jira:PAY-482']]);
+  assert.match(run.stderr, /^exhibit: warning: PR 7: the tracker:jira signal could not check PAY-503, so the PR keeps the answer saved in the history file \(jira:PAY-503\)\. Jira answered 503 /m);
+  assert.doesNotMatch(run.stderr, /classified another way/);
+});
+
 test('tracker:jira with no settings.jira gives exit 2 with a message, and writes no file', (t) => {
   const cwd = newFolder(t);
   writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [tracker:jira]\n');
@@ -557,4 +625,50 @@ test('tracker:jira with no settings.jira gives exit 2 with a message, and writes
   assert.equal(run.status, 2);
   assert.match(run.stderr, /settings\.fix_signals has tracker:jira, so settings needs jira: \{ site: /);
   assert.equal(existsSync(run.historyPath), false);
+});
+
+// Runs history inside a clone of the fixture shop repo, with `labels` as the text of
+// .exhibit/labels.jsonl, or no labels file when it is undefined.
+function shopRunWithLabels(t, labels, args = []) {
+  const repo = buildSzzRepo();
+  t.after(() => repo.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/fixture/shop.git'], { cwd: repo.dir, env: gitEnv(repo.dir) });
+  const replay = writeHistoryReplay(repo, 'fixture/shop');
+  t.after(replay.cleanup);
+  const labelsPath = join(repo.dir, '.exhibit', 'labels.jsonl');
+  if (labels !== undefined) writeFileSync(labelsPath, labels);
+  const run = exhibit(t, ['history', '--repo', 'fixture/shop', ...args], { fixturePath: replay.path, cwd: repo.dir });
+  return { ...run, labelsPath, markdown: existsSync(join(repo.dir, REPORT.markdown)) ? readFileSync(join(repo.dir, REPORT.markdown), 'utf8') : '' };
+}
+
+// Fix PR 12 keeps both its links. Fix PR 7 has both its links rejected.
+const SHOP_LABELS = [
+  { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-21T10:00:00.000Z' },
+  { id: 'D-007', fix_pr: 7, introducing_prs: [], rejected_prs: [2, 3], code: 'Total off', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: true, known_at_review: null, labeled_at: '2026-11-21T10:00:00.000Z' }
+].map((line) => JSON.stringify(line) + '\n').join('');
+
+test('history counts the labels in the funnel, in report.md and in --json, and leaves labels.jsonl as it was', (t) => {
+  const run = shopRunWithLabels(t, SHOP_LABELS, ['--json']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 2, kept: 1, labels: 'read' });
+  assert.match(run.markdown, /- Defects labeled with exhibit label: 2\n- Defects with at least one link that a person kept: 1\n/);
+  assert.equal(readFileSync(run.labelsPath, 'utf8'), SHOP_LABELS);
+});
+
+test('with no labels file, history says "not labeled yet" for the last two steps, and writes no labels file', (t) => {
+  const run = shopRunWithLabels(t, undefined, ['--json']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(JSON.parse(run.stdout).funnel, { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' });
+  assert.match(run.markdown, /- Defects labeled with exhibit label: not labeled yet\n- Defects with at least one link that a person kept: not labeled yet\n/);
+  assert.equal(existsSync(run.labelsPath), false);
+});
+
+test('a labels line that fails its schema makes the report say the labels could not be read, and the run still succeeds', (t) => {
+  const bad = SHOP_LABELS + JSON.stringify({ id: 'D-006', fix_pr: 6 }) + '\n';
+  const run = shopRunWithLabels(t, bad);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stderr, /^exhibit: warning: the report does not count the labels, because \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./m);
+  assert.match(run.markdown, /- Defects labeled with exhibit label: the labels could not be read\n/);
+  assert.match(run.markdown, /Exhibit could not read the labels, so it does not count them: \.exhibit\/labels\.jsonl line 3 does not fit the labels schema\./);
+  assert.equal(readFileSync(run.labelsPath, 'utf8'), bad);
 });

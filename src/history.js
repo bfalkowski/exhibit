@@ -23,15 +23,16 @@ export async function readHistory(options) {
 // both, so it can stop its list of merged PRs early. It may list more PRs than these two options
 // keep, and they pick from the list.
 // `previous` holds the lines of the old history file, which must pass the schema. A kept PR that
-// has a line there is not read again, and keeps that line as it is, unless it was merged in the
-// look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
+// has a line there is not read again, and keeps that line, except for its title, body, labels and
+// classification (see below), unless it was merged in the look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
 // line there is read. So an empty `previous` reads every kept PR.
 // Only the PRs that are read ask for their files, reviews, comments and CI results.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification` on every line, kept
 // lines too, so a change to the signals reaches the whole file with no extra request. A kept
-// line is classified from its own title, body and labels, and from the branch name in the list of
-// merged PRs, as a line does not hold its branch name. The lines that are
-// read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
+// line takes the title, body and labels that the list of merged PRs holds now, and is classified
+// from them and from the branch name in that list. So a bug label that a person adds to an old PR
+// reaches its line with no extra request, and the line's fields agree with its classification.
+// The lines that are read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
 // exhibit) are left out. The schema requires szz, so the history command
 // (src/commands/history.js) adds szz to each line that has none before it checks and writes the
 // lines.
@@ -40,7 +41,11 @@ export async function readHistory(options) {
 // `exhibit check` (matchKinds in src/classify.js). A kept line is matched from its own files, so a
 // change to the kinds reaches the whole file with no extra request, as a change to the signals does.
 // `tracker` is a connected tracker, such as Jira, for the tracker:jira signal, or null. Each PR
-// asks it at most once, kept lines too (see classifyWithTracker in src/fix-signals.js).
+// that is read asks it at most once. A kept line asks it only when its line saves no answer for
+// the issue the PR names now: else the saved `ticket` answers (spec 8.3). A PR that is read and
+// whose tracker cannot answer, for a 5xx or no token, takes the answer that its old line saved
+// (see classifyWithTracker in src/fix-signals.js). Each line saves the answer in `ticket`, or
+// has no `ticket` when there is none.
 // `warn` gets one text for each PR whose files list the forge cut short, one for each comment
 // whose only verdict is in a quoted line, and one for each PR whose ticket the tracker could not
 // read, in the order of the lines.
@@ -54,9 +59,10 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
   const windowStart = previous.length === 0 ? null : Math.max(...previous.map((line) => Date.parse(line.merged_at))) - LOOK_BACK_MS;
   const toRead = merged.filter((pr) => !old.has(pr.number) || Date.parse(pr.mergedAt) >= windowStart);
 
-  const classify = async (pr) => {
-    const { classification, problem } = await classifyWithTracker({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, tracker);
-    return { classification, warnings: problem ? [`PR ${pr.number}: ${problem}`] : [] };
+  const classify = async (pr, reuse) => {
+    const saved = old.get(pr.number)?.ticket;
+    const { classification, problem, ticket } = await classifyWithTracker({ number: pr.number, title: pr.title, body: pr.body, labels: pr.labels, branch: pr.headRef, repo: forge.repo }, fixSignals, tracker, { saved, reuse });
+    return { classification, ticket, warnings: problem ? [`PR ${pr.number}: ${problem}`] : [] };
   };
   const withKinds = (classification, files) => ({ kinds: matchKinds(kinds, files.map((file) => file.path)), ...classification });
 
@@ -68,23 +74,23 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
       forge.pullComments(pr.number),
       // The CI results on the PR's last head commit: the CI result the PR was merged with.
       forge.ciResults(pr.headSha),
-      classify(pr)
+      classify(pr, false)
     ]);
     const filesWarning = await checkFilesComplete(forge, pr.number, files.length);
     return {
       number: pr.number,
-      line: toHistoryLine(forge, pr, files, reviews, comments, ci, withKinds(classified.classification, files)),
+      line: withTicket(toHistoryLine(forge, pr, files, reviews, comments, ci, withKinds(classified.classification, files)), classified.ticket),
       warnings: [...(filesWarning ? [filesWarning] : []), ...quotedVerdictWarnings(pr.number, comments), ...classified.warnings]
     };
   });
   const fresh = new Map(read.map((one) => [one.number, one]));
-  // A kept line is classified again from its own title, body, labels and files, and from the branch
-  // name in the list of merged PRs, as a line does not hold its branch name. It keeps its szz: the history
-  // command sets szz to null on a line that is no fix.
+  // A kept line takes the title, body and labels from the list of merged PRs, which the run reads
+  // anyway, and is classified again from them, its branch name in the list, and its own files.
+  // It keeps its szz: the history command sets szz to null on a line that is no fix.
   const kept = await mapInBatches(merged.filter((pr) => !fresh.has(pr.number)), PRS_AT_ONCE, async (pr) => {
     const line = old.get(pr.number);
-    const { classification, warnings } = await classify({ ...pr, title: line.title, body: line.body, labels: line.labels });
-    return { number: pr.number, line: { ...line, classification: withKinds(classification, line.files) }, warnings };
+    const { classification, ticket, warnings } = await classify(pr, true);
+    return { number: pr.number, line: withTicket({ ...line, title: pr.title, body: pr.body, labels: pr.labels, classification: withKinds(classification, line.files) }, ticket), warnings };
   });
   const byNumber = new Map([...fresh, ...kept.map((one) => [one.number, one])]);
   const lines = merged.map((pr) => byNumber.get(pr.number));
@@ -92,17 +98,28 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
   return { lines: lines.map(({ line }) => line), read: read.length };
 }
 
-// Returns a warning when the forge listed fewer files than the PR changed, or null. Only a PR
-// whose list reached the forge's limit is asked for its count of changed files.
-// The count is only for this warning. So when that request fails, the run goes on, and the
-// warning says that the count is unknown and the list may be cut short.
+// Returns `line` with `ticket` set to the tracker's answer, or with no `ticket` when it is null.
+function withTicket(line, ticket) {
+  const rest = { ...line };
+  delete rest.ticket;
+  return ticket === null ? rest : { ...rest, ticket };
+}
+
+// Returns a warning when the forge listed fewer files than the PR changed, or null. Every PR
+// that is read is asked for its count of changed files, not only a PR whose list reached the
+// forge's limit, so the warning still fires when a list stops at another number. GitHub gives the
+// count with the PR, so this costs no request there.
+// The count is only for this warning. So when that request fails, the run goes on. A list that
+// reached the limit then gets a warning that the count is unknown and the list may be cut short.
+// A shorter list gets none: it is most likely complete, and one warning on every PR would hide
+// the others.
 async function checkFilesComplete(forge, number, listed) {
-  if (listed < forge.mostFilesListed) return null;
   let changed;
   try {
     changed = await forge.pullFileCount(number);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
+    if (listed < forge.mostFilesListed) return null;
     return `PR ${number} has ${listed} files listed, the most ${forge.displayName} lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
   }
   if (!(changed > listed)) return null;

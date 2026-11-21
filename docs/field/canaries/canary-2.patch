@@ -1,0 +1,60 @@
+From 41fe291295f6cf0fec80eba3b3d5a32ca5cde241 Mon Sep 17 00:00:00 2001
+From: canary <canary@example.invalid>
+Date: Fri, 20 Nov 2026 20:58:27 -0500
+Subject: [PATCH] PR watch: lateness has a default time
+
+---
+ relay/pr-watch-plan.js           |  7 +++++--
+ relay/test/pr-watch-plan.test.js | 10 +++++++++-
+ 2 files changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/relay/pr-watch-plan.js b/relay/pr-watch-plan.js
+index 5354ef2..6457ead 100644
+--- a/relay/pr-watch-plan.js
++++ b/relay/pr-watch-plan.js
+@@ -46,7 +46,10 @@ function nextMove(s) {
+ }
+ 
+ const WAITS_ON_OTHERS = ['Dev', 'reviewer', 'CI', 'Lead'];
+-function lateness(move, since, now, late) {
++// How long another seat may owe the next move before the person is told, when the caller sets no
++// time: half an hour.
++const LATE_MS = 30 * 1000;
++function lateness(move, since, now, late = LATE_MS) {
+   if (!WAITS_ON_OTHERS.includes(move.owner) || now - since < late) return null;
+   return { owner: 'you', why: (move.owner === 'CI' ? 'CI has' : 'the ' + move.owner + ' has') + ' owed the next move for ' + Math.round((now - since) / 60000) + ' min. ' + move.why };
+ }
+@@ -57,4 +60,4 @@ function lineOf(rec, now) {
+   return { owner: rec.owner, minutes: mins, why: rec.why, late: !!rec.late, words: 'waits on ' + (['you', 'CI', 'Autopilot'].includes(rec.owner) ? rec.owner : 'the ' + rec.owner) + ' for ' + mins + ' min: ' + rec.why };
+ }
+ 
+-module.exports = { nextMove, lateness, lineOf, CLEAN };
++module.exports = { nextMove, lateness, lineOf, CLEAN, LATE_MS };
+diff --git a/relay/test/pr-watch-plan.test.js b/relay/test/pr-watch-plan.test.js
+index 49cd29a..8ff374c 100644
+--- a/relay/test/pr-watch-plan.test.js
++++ b/relay/test/pr-watch-plan.test.js
+@@ -2,7 +2,7 @@
+ // Who owes the next move on an open task PR (relay/pr-watch-plan.js), one row at a time.
+ const test = require('node:test');
+ const assert = require('node:assert');
+-const { nextMove, lateness, lineOf } = require('../pr-watch-plan.js');
++const { nextMove, lateness, lineOf, LATE_MS } = require('../pr-watch-plan.js');
+ 
+ const H = 'a'.repeat(40), OLD = 'b'.repeat(40);
+ const GREEN = [{ name: 'pipeline', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+@@ -92,3 +92,11 @@ test('waiting past the set time goes to the person, and the line says who and ho
+   const line = lineOf({ owner: 'Dev', why: 'It conflicts with main.', since: 0 }, 5 * 60000);
+   assert.deepStrictEqual([line.owner, line.minutes, line.words], ['Dev', 5, 'waits on the Dev for 5 min: It conflicts with main.']);
+ });
++
++test('with no time set, a wait is late after the default time', () => {
++  const move = nextMove(base({ verdict: { kind: 'fix', commit: H, posted: 'u' } }));
++  const hour = 60 * 60 * 1000;
++  assert.strictEqual(lateness(move, 0, 0), null, 'a wait that just began is not late');
++  assert.strictEqual(lateness(move, 0, 2 * hour).owner, 'you', 'two hours is late');
++  assert.strictEqual(lateness(move, 0, LATE_MS).owner, 'you', 'late at the default time');
++});
+-- 
+2.39.5 (Apple Git-154)
+
