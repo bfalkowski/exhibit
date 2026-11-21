@@ -93,17 +93,21 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
   return { lines: lines.map(({ line }) => line), read: read.length };
 }
 
-// Returns a warning when the forge listed fewer files than the PR changed, or null. Only a PR
-// whose list reached the forge's limit is asked for its count of changed files.
-// The count is only for this warning. So when that request fails, the run goes on, and the
-// warning says that the count is unknown and the list may be cut short.
+// Returns a warning when the forge listed fewer files than the PR changed, or null. Every PR
+// that is read is asked for its count of changed files, not only a PR whose list reached the
+// forge's limit, so the warning still fires when a list stops at another number. GitHub gives the
+// count with the PR, so this costs no request there.
+// The count is only for this warning. So when that request fails, the run goes on. A list that
+// reached the limit then gets a warning that the count is unknown and the list may be cut short.
+// A shorter list gets none: it is most likely complete, and one warning on every PR would hide
+// the others.
 async function checkFilesComplete(forge, number, listed) {
-  if (listed < forge.mostFilesListed) return null;
   let changed;
   try {
     changed = await forge.pullFileCount(number);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
+    if (listed < forge.mostFilesListed) return null;
     return `PR ${number} has ${listed} files listed, the most ${forge.displayName} lists, so its files field may be cut short. Exhibit could not read how many files it changed: ${error.message}`;
   }
   if (!(changed > listed)) return null;

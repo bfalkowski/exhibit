@@ -222,6 +222,29 @@ test('readHistory warns that the count is unknown, and goes on, when the forge c
   ]);
 });
 
+test('readHistory warns when a files list stops below the most GitHub lists, but short of the count', async (t) => {
+  const { writeShortListFixture } = await import('./fixtures/github/acme-big.js');
+  const short = writeShortListFixture();
+  t.after(short.cleanup);
+  const fetch = replayFetch(short.path);
+  const warnings = [];
+  const lines = await readHistory({ forge: createGitHubForge({ repo: 'acme/short', token: 't', fetch }), warn: (text) => warnings.push(text) });
+
+  assert.deepEqual(lines.map((l) => [l.number, l.files.length]), [[6, 2500]]);
+  assert.deepEqual(warnings, ['PR 6 changed 2600 files, but GitHub listed only the first 2500, so its files field is cut short.']);
+  // The count comes with the PR, so no query asks for one PR.
+  assert.ok(!fetch.calls.some((c) => c.key.startsWith('graphql Pull {')));
+});
+
+test('readHistory gives no warning when the count is unknown and the list is shorter than the most the forge lists', async () => {
+  const { GitHubReplyError } = await import('../src/github.js');
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't0ken', fetch: replayFetch(fixture('acme-widgets')) });
+  const failing = { ...forge, pullFileCount: async () => { throw new GitHubReplyError('GitHub answered 500 (Server Error) for /graphql. GitHub had a problem: try again later.', 500); } };
+  const warnings = [];
+  await readHistory({ forge: failing, warn: (text) => warnings.push(text) });
+  assert.deepEqual(warnings.filter((text) => text.includes('files')), []);
+});
+
 test('the files warning names the forge by its display name', async (t) => {
   const { writeBigFixture } = await import('./fixtures/github/acme-big.js');
   const big = writeBigFixture();

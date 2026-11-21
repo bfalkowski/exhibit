@@ -357,15 +357,21 @@ export const GITHUB_FORGE = {
   }
 };
 
-// How many merged PRs one GraphQL query reads, with the first page of each PR's lists.
-const PULLS_PER_QUERY = 50;
+// How many merged PRs one GraphQL query reads, with the first page of each PR's lists. A query
+// for 50 PRs, each with up to 100 files, reviews, comments and CI results, can take longer than
+// GitHub's time limit for one GraphQL query on a large repo. GitHub then answers 502 or 504. So
+// after such an answer, the list asks for the same page again with the next, smaller number of
+// PRs, and keeps that number for the rest of the list. After the last number, the run fails.
+const PULLS_PER_QUERY = [50, 25, 10];
+// The answers that mean the query took too long.
+const TIMED_OUT = [502, 504];
 // How many items of one list (files, reviews, comments, labels, CI results) one query reads.
 const ITEMS_PER_PAGE = 100;
 
 // The fields of one GraphQL query. An author is a user, a bot or another kind of account, and is
 // null when the account was deleted.
 const AUTHOR = 'author { __typename login }';
-const CI_RESULT = '__typename ... on CheckRun { databaseId name conclusion url } ... on StatusContext { context state targetUrl }';
+const CI_RESULT = '__typename ... on CheckRun { databaseId name conclusion url } ... on StatusContext { id createdAt context state targetUrl }';
 // The lists inside one PR, each with the fields of one item.
 const PULL_LISTS = {
   labels: 'name',
@@ -388,10 +394,10 @@ const PULL = `number url title body mergedAt updatedAt changedFiles ${AUTHOR} me
 
 const REPO_VARIABLES = '$owner: String!, $name: String!';
 
-const MERGED_PULLS = `query MergedPulls(${REPO_VARIABLES}, $after: String) {
+const MERGED_PULLS = `query MergedPulls(${REPO_VARIABLES}, $after: String, $first: Int!) {
   rateLimit { cost }
   repository(owner: $owner, name: $name) {
-    pullRequests(states: MERGED, first: ${PULLS_PER_QUERY}, after: $after) {
+    pullRequests(states: MERGED, first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes { ${PULL} }
     }
@@ -400,10 +406,10 @@ const MERGED_PULLS = `query MergedPulls(${REPO_VARIABLES}, $after: String) {
 
 // The merged PRs, the PR updated last first. With --since or --limit, history reads this list
 // and stops early (see mergedPulls).
-const RECENT_MERGED_PULLS = `query RecentMergedPulls(${REPO_VARIABLES}, $after: String) {
+const RECENT_MERGED_PULLS = `query RecentMergedPulls(${REPO_VARIABLES}, $after: String, $first: Int!) {
   rateLimit { cost }
   repository(owner: $owner, name: $name) {
-    pullRequests(states: MERGED, orderBy: { field: UPDATED_AT, direction: DESC }, first: ${PULLS_PER_QUERY}, after: $after) {
+    pullRequests(states: MERGED, orderBy: { field: UPDATED_AT, direction: DESC }, first: $first, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes { ${PULL} }
     }
@@ -552,8 +558,20 @@ export function createGitHubForge({ repo, ...client }) {
       const query = byUpdate ? RECENT_MERGED_PULLS : MERGED_PULLS;
       const merged = [];
       const seen = new Set();
+      // Which number of PRs in PULLS_PER_QUERY the list asks for now.
+      let size = 0;
+      async function askPage(after) {
+        for (;;) {
+          try {
+            return await github.graphql(query, { owner, name, after, first: PULLS_PER_QUERY[size] }, forHistory);
+          } catch (error) {
+            if (!(error instanceof GitHubReplyError && TIMED_OUT.includes(error.status)) || size === PULLS_PER_QUERY.length - 1) throw error;
+            size += 1;
+          }
+        }
+      }
       async function readPage(after) {
-        const data = await github.graphql(query, { owner, name, after }, forHistory);
+        const data = await askPage(after);
         const page = data.repository?.pullRequests;
         if (!Array.isArray(page?.nodes)) throw notShaped(GRAPHQL, 'a list of PRs');
         for (const found of page.nodes) {
@@ -610,7 +628,7 @@ export function createGitHubForge({ repo, ...client }) {
       const checkRuns = results.filter((result) => result.__typename === 'CheckRun').sort((a, b) => b.databaseId - a.databaseId);
       // GitHub adds an EXPECTED status for a required check that has not posted yet. The REST
       // API does not list it, so it is left out here too.
-      const statuses = results.filter((result) => result.__typename === 'StatusContext' && result.state !== 'EXPECTED');
+      const statuses = results.filter((result) => result.__typename === 'StatusContext' && result.state !== 'EXPECTED').sort(restStatusOrder);
       return [...checkRuns.map(fromCheckRun), ...statuses.map(fromStatus)];
     },
 
@@ -735,6 +753,42 @@ async function allItems(page, nextPage) {
     if (!page.pageInfo?.hasNextPage) return items;
     page = await nextPage(page.pageInfo.endCursor);
   }
+}
+
+// The REST combined status lists commit statuses oldest first, by id. The status check rollup
+// lists them A to Z by context. On codecov/example-python, 5 of 20 PRs had their statuses in
+// another order (spec 11). GraphQL gives a status no database id, so this sorts by createdAt, and
+// within the same second by the id inside the node id (see statusId). A status with no createdAt,
+// or two with ids that do not read, keep GitHub's order: Array.prototype.sort is stable.
+function restStatusOrder(a, b) {
+  const byTime = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  if (byTime !== 0) return Number.isNaN(byTime) ? 0 : byTime;
+  const [idA, idB] = [statusId(a.id), statusId(b.id)];
+  if (idA === null || idB === null || idA === idB) return 0;
+  return idA < idB ? -1 : 1;
+}
+
+// The REST id of a commit status, read from its GraphQL node id, or null when it does not read.
+// A node id such as SC_kwDOAXN2Ks8AAAAM7nCzPQ is "SC_" and then base64 of a MessagePack list:
+// a version, the repo's id and the status's id, each a whole number. This one holds 55539970877,
+// the id that the REST API gives for that status. GitHub does not document this form, so it is
+// used only to break a tie in createdAt, and any other form gives null.
+function statusId(nodeId) {
+  if (typeof nodeId !== 'string' || !nodeId.startsWith('SC_')) return null;
+  const bytes = Buffer.from(nodeId.slice(3), 'base64url');
+  // 0x93 starts a MessagePack list of three.
+  if (bytes[0] !== 0x93) return null;
+  let at = 1;
+  let last = null;
+  for (let item = 0; item < 3; item++) {
+    const kind = bytes[at];
+    // A number below 128 is one byte. 0xcc, 0xcd, 0xce and 0xcf hold one of 1, 2, 4 or 8 bytes.
+    const size = kind < 0x80 ? 0 : { 0xcc: 1, 0xcd: 2, 0xce: 4, 0xcf: 8 }[kind];
+    if (size === undefined || at + 1 + size > bytes.length) return null;
+    last = size === 0 ? BigInt(kind) : BigInt(`0x${bytes.subarray(at + 1, at + 1 + size).toString('hex')}`);
+    at += 1 + size;
+  }
+  return at === bytes.length ? last : null;
 }
 
 // A PR from GraphQL, in the forge-neutral shape. GraphQL gives an empty body as "", and the REST
