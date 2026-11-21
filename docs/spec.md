@@ -73,7 +73,7 @@ All commands accept `--json` for machine output and `--repo owner/name`, except 
 | `exhibit init` | Writes a starter `evidence.yml` and example workflow files. |
 | `exhibit history [--since DATE] [--limit N] [--full] [--no-cache]` | Exports merged PRs to `.exhibit/history.jsonl`, runs SZZ, and writes a report. When the file is there, it reads only what is new (section 8.3). `--full` reads every PR again. `--no-cache` turns off the reply cache (section 8.6). |
 | `exhibit label [--json] [--claude]` | Shows each escaped defect that has no code yet, one at a time, with its SZZ evidence. The person types a code, a category and the evidence that would have caught it, or skips the defect. Each label goes to `.exhibit/labels.jsonl` at once (section 8.4). With `--claude`, Claude drafts a code and a category first, and the person confirms the draft, edits it, or throws it away (section 9.11). |
-| `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It never writes the file itself. |
+| `exhibit policy suggest` | Drafts policy rules from the labeled categories and prints them as a diff to `evidence.yml`. It drafts a rule only for a category that two or more labeled defects share, counting only defects with a link that a person kept. Each rule names what in a diff triggers it: the file paths of those defects in `match`, and the defect IDs in `source`. It never writes the file itself. A person approves the diff (section 9.13). |
 | `exhibit backtest [--from DATE] [--rerun]` | Applies the policy to PRs merged after a date and reports caught, missed and false demands for each kind of change. |
 | `exhibit check --base REF [--head REF]` or `exhibit check --pr N --repo owner/name`, each with `[--policy FILE] [--shadow]` | Works out what the change needs, collects the evidence, and writes `.exhibit/evidence.json` and `.exhibit/summary.md` (sections 8.2 and 9.8). Exits 0 for `meets_policy`, 1 for `needs_person` and 2 for `error`. When it fails before it has a verdict, such as on a bad argument, a bad policy or a commit that is not in the clone, it writes no `evidence.json`, and `summary.md` says that the verdict is `error` and why. It reads the policy from the base commit, not from the files on disk (section 8.1). `--policy` reads the policy from that path in the repo in place of `evidence.yml`, and a change to that file is then the policy change (section 8.2). `--shadow` is shadow mode: the run and the files are the same, but the exit code is 0 for every verdict, `error` too, and `summary.md` says so (section 10). `--head` is `HEAD` when left out. With `--pr`, the forge gives the base, the head, and the PR's title, body, labels and branch, and `GITHUB_TOKEN` must be set. Without `--pr`, only the local branch name is known for the fix signals. Both commits must be in the clone. |
 | `exhibit publish --evidence FILE [--policy FILE] [--storage data-branch\|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment] [--enforce]` | Stores one exhibit, the `evidence.json` that `exhibit check` wrote, at `prs/<number>/<head-sha>.json` (section 9.12). It checks the file against the exhibit schema first, and an invalid file, or one with no PR number, gives exit 2 and stores nothing. It never runs code from the PR, so it is the step that can have write access. `--policy` reads the settings from that path in the repo in place of `evidence.yml`. `--storage` picks the place and wins over `settings.storage`. `--remote` is `origin` when left out. Storing the same exhibit again changes nothing and exits 0. With `--comment`, it then posts a short summary of the exhibit as one comment on the PR, or updates the comment it posted before (section 9.12). It reads the PR from the exhibit's `repo` and `pr`, and `GITHUB_TOKEN` must be set. Without `--enforce`, the comment says that it is shadow mode. Without `--comment`, nothing is posted, and `--enforce` changes nothing. |
@@ -598,7 +598,7 @@ Exhibit only reports these numbers. It never changes a rung.
 
 ### 9.11 Claude
 
-- Claude is used only by `exhibit label --claude` and `exhibit policy suggest`.
+- Claude is used only by `exhibit label --claude` and `exhibit policy suggest`. In `exhibit policy suggest`, Claude drafts only a rule's `needs`, never its `match` or `source` (section 9.13).
 - It needs `ANTHROPIC_API_KEY`. Every command works without it. `exhibit label --claude` with no key exits 2 before it shows anything, with a message that says to set the key or run without `--claude`.
 - The model is `claude-opus-5-5` by default. Set `EXHIBIT_CLAUDE_MODEL` to use another one. Each draft keeps the name of the model that wrote it.
 - For each defect, Claude reads what the person reads: the fix PR's title and body, and the defect text with the changed lines and the SZZ links with their evidence. It also gets the categories used so far, so it can reuse one. It answers with a code and a category in a fixed JSON form. A draft that does not fit the labels schema counts as a failed draft.
@@ -639,6 +639,62 @@ The place is a setting, `settings.storage` in `evidence.yml`, and `--storage` wi
 Later tickets add the rest of storage:
 
 - The history cache and reports live on the data branch too.
+
+### 9.13 Policy suggest
+
+`exhibit policy suggest` is not built yet. This part says what it must do, so the limits shape the command before anyone builds it. The limits come from "How the Claude Code team thinks about verification" (section 17.2). That team keeps a mined rule only if it "occurs in at least two PRs and is identifiable from a diff". Then agents try to disprove it, and a person approves it in a PR. A rule from one defect is a guess. A rule with no trigger in the diff cannot be checked.
+
+It reads `.exhibit/labels.jsonl` (section 8.4), `.exhibit/history.jsonl` (section 8.3) and `evidence.yml` (section 8.1).
+
+**Which defects count.** A defect counts only when it has a link that a person kept: its `introducing_prs` is not empty. A defect whose every link the person rejected does not count, because nothing ties it to a PR.
+
+**The two-defect minimum.** It drafts a rule only for a category that two or more counted defects share. The category is the `category` text in the labels file, matched exactly. The counted defects must also have at least two different PRs among their kept introducing PRs. Two fixes of one bad PR show one mistake, not a pattern. A category with one counted defect gets no rule. The output lists it under "Waiting for a second defect", with its defect ID, so the person can see it.
+
+**The trigger.** Each drafted rule is a kind of change (section 6) and says what in a diff triggers it:
+
+- `match` holds the file paths from those defects' introducing PRs. For a link found by blame, these are the `path` of each line in the kept link (`szz.links` in the fix's history line), so the rule points at the files where the bug was. For a link found from a revert, which has no lines, they are the paths in the introducing PR's `files`. The paths are written as they are, sorted, with no copies and no wildcards. A person can widen them to a glob when they review the diff.
+- `source` holds the IDs of the counted defects, sorted, such as `[D-012, D-019]`. The backtest uses it for its leak check (section 9.9).
+- `match` and `source` come only from these files, never from Claude, so a person can check each path and each ID.
+- `needs` says what evidence the rule asks for. With `ANTHROPIC_API_KEY` set, Claude drafts it from the defects' `would_have_caught` text (section 9.11). Without the key, `needs` is empty, and the defects' `would_have_caught` text is written above the rule as YAML comments, for the person to turn into `needs`.
+- `risk` is `medium` and `merge_without_reading` is `never`. A person changes them if they want.
+- The kind's name is the category in lowercase, with each run of characters that are not letters or digits made into one `-`. "Restart state lost" gives `restart-state-lost`.
+
+**When a rule is there already.** A category whose counted defects are all in the `source` of one kind already gets no draft. When the drafted kind's name is in `evidence.yml` already, the diff adds the new paths to that kind's `match` and the new IDs to its `source`, and keeps its `needs`, `risk` and `merge_without_reading`.
+
+**The output.** It prints a unified diff to `evidence.yml` on stdout. It never writes the file, as section 7 says. A person reads the diff, applies it, and opens a PR, and that PR gets a `policy-change` gap and `needs_person` like any other change to the policy (section 9.8). With no category that has two counted defects, it prints no diff and says so.
+
+Example. The labels file has three defects, each with a kept link.
+
+| Defect | Category | Kept introducing PR | Paths of the linked lines |
+|---|---|---|---|
+| D-012 | Restart state lost | 40 | `relay/supervisor.js` |
+| D-019 | Restart state lost | 55 | `relay/supervisor.js`, `relay/session-host.js` |
+| D-023 | Broken doc link | 61 | `docs/manual/setup.md` |
+
+D-012 and D-019 share a category and come from two different PRs, so one rule is drafted. D-023 is alone in its category, so it waits for a second defect. Without `ANTHROPIC_API_KEY`, the diff is:
+
+```diff
+--- a/evidence.yml
++++ b/evidence.yml
+@@ -35,2 +35,10 @@
+     merge_without_reading: allowed
++  restart-state-lost:
++    # D-012 would have been caught by: a test that restarts the supervisor mid-run
++    # D-019 would have been caught by: a restart probe that checks the session list
++    match: ["relay/session-host.js", "relay/supervisor.js"]
++    risk: medium
++    needs: []
++    merge_without_reading: never
++    source: [D-012, D-019]
+ default:
+```
+
+After the diff it prints: `Waiting for a second defect: "Broken doc link" (D-023).`
+
+**Later, not version 1:**
+
+- **A disprove step.** For each drafted rule, list the clean PRs in the history that the rule would have blocked, so the person sees the cost before approving. A clean PR is one with no SZZ link to any fix, or whose every link a person rejected, as in section 9.9. A PR is blocked when it matches the rule's `match` and would get `needs_person` because a requirement of the rule is missing. The list gives each PR's number and title, and the count. The backtest's "rules that do not pay" (section 9.9) finds such a rule only after it is in the policy. This step shows the cost before.
+- **Review comments as a source.** A finding that comes back in the reviews of two or more different PRs could seed a candidate category, with the same two-PR minimum as above. A person still names the category and labels the defects. Today the history keeps only each review's `state`, `author` and `source` (section 8.3), not its text, so this cannot be built yet. For it, each entry in `reviews.list` would need the review's text, and the text of its line comments with the `path` and `line` each one is on. For a review posted as a PR comment, the comment's text is the review's text.
 
 ## 10. GitHub Action
 
@@ -783,7 +839,7 @@ No work found so far does the whole loop: learn a policy from one repo's escaped
 |---|---|---|
 | [Reading evidence instead of code](https://developertoolkit.ai/en/ladder/evidence-not-diffs/), Autonomy Ladder guide, 2026 | Read four things in place of the diff: the spec delta, the acceptance results, oracle strength and runtime signals. Run mutation testing on changed files with Stryker or mutmut. Ask whether the decisive check existed before the change. Keep a trust log that moves classes of change up or down. | The ideas are very close to Exhibit's. The guide gives them as prompts and a log kept by hand. Exhibit makes them a CLI with a policy file, a backtest and numbers. |
 | [Make Every PR Prove Itself](https://builders.abnormal.ai/p/make-every-pr-prove-itself), Abnormal, 2026 | Each agent PR shows evidence from a near-production test environment, such as real API responses and screenshots. Misses that become incidents are written back into the checks. | Reviewers still review each PR. The checks are not measured. |
-| [How the Claude Code team thinks about verification](https://claude.dev/blog/how-the-claude-code-team-thinks-about-verification/), Anthropic, 2026 | Measures bug finders on real changes. When the team reviews its reviewers, it tracks how they do on "a size-matched subset of changes that have stayed clean". It replays bug finders on PRs tied to known incidents. It measures "the recall rate for raw findings, post-verification, and final review separately", so a bug that is found and then lost shows up. It tidies checks on a routine, because they "only grow if you let them". | Backtest takes four measures from it (section 9.9): false demands on size-matched clean PRs, each defect replayed at its introducing PR, the funnel, and rules that do not pay. Exhibit learns its rules from SZZ-traced defects, and a person removes a rule, never Exhibit. |
+| [How the Claude Code team thinks about verification](https://claude.dev/blog/how-the-claude-code-team-thinks-about-verification/), Anthropic, 2026 | Measures bug finders on real changes. When the team reviews its reviewers, it tracks how they do on "a size-matched subset of changes that have stayed clean". It replays bug finders on PRs tied to known incidents. It measures "the recall rate for raw findings, post-verification, and final review separately", so a bug that is found and then lost shows up. It tidies checks on a routine, because they "only grow if you let them". It keeps a rule mined from reverts and review comments only if it "occurs in at least two PRs and is identifiable from a diff", then agents try to disprove it, and a person approves it in a PR. | Backtest takes four measures from it (section 9.9): false demands on size-matched clean PRs, each defect replayed at its introducing PR, the funnel, and rules that do not pay. `exhibit policy suggest` takes the two-PR minimum and the trigger in the diff, and names the disprove step and review comments as later work (section 9.13). Exhibit learns its rules from SZZ-traced defects, and a person removes a rule, never Exhibit. |
 | Lauren Tan's trust ladder, in [a talk with Matt Pocock](https://www.youtube.com/watch?v=MN9dGgmLyso) | Give agents more as verification earns trust. Near the top, agents merge their own PRs and a person samples them after they land. | Exhibit gives the numbers for each step, for one kind of change at a time. |
 
 ### 17.3 Prior work for each part
