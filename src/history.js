@@ -23,15 +23,16 @@ export async function readHistory(options) {
 // both, so it can stop its list of merged PRs early. It may list more PRs than these two options
 // keep, and they pick from the list.
 // `previous` holds the lines of the old history file, which must pass the schema. A kept PR that
-// has a line there is not read again, and keeps that line as it is, unless it was merged in the
-// look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
+// has a line there is not read again, and keeps that line, except for its title, body, labels and
+// classification (see below), unless it was merged in the look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
 // line there is read. So an empty `previous` reads every kept PR.
 // Only the PRs that are read ask for their files, reviews, comments and CI results.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification` on every line, kept
 // lines too, so a change to the signals reaches the whole file with no extra request. A kept
-// line is classified from its own title, body and labels, and from the branch name in the list of
-// merged PRs, as a line does not hold its branch name. The lines that are
-// read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
+// line takes the title, body and labels that the list of merged PRs holds now, and is classified
+// from them and from the branch name in that list. So a bug label that a person adds to an old PR
+// reaches its line with no extra request, and the line's fields agree with its classification.
+// The lines that are read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
 // exhibit) are left out. The schema requires szz, so the history command
 // (src/commands/history.js) adds szz to each line that has none before it checks and writes the
 // lines.
@@ -78,13 +79,13 @@ export async function updateHistory({ forge, since, limit, previous, fixSignals 
     };
   });
   const fresh = new Map(read.map((one) => [one.number, one]));
-  // A kept line is classified again from its own title, body, labels and files, and from the branch
-  // name in the list of merged PRs, as a line does not hold its branch name. It keeps its szz: the history
-  // command sets szz to null on a line that is no fix.
+  // A kept line takes the title, body and labels from the list of merged PRs, which the run reads
+  // anyway, and is classified again from them, its branch name in the list, and its own files.
+  // It keeps its szz: the history command sets szz to null on a line that is no fix.
   const kept = await mapInBatches(merged.filter((pr) => !fresh.has(pr.number)), PRS_AT_ONCE, async (pr) => {
     const line = old.get(pr.number);
-    const { classification, warnings } = await classify({ ...pr, title: line.title, body: line.body, labels: line.labels });
-    return { number: pr.number, line: { ...line, classification: withKinds(classification, line.files) }, warnings };
+    const { classification, warnings } = await classify(pr);
+    return { number: pr.number, line: { ...line, title: pr.title, body: pr.body, labels: pr.labels, classification: withKinds(classification, line.files) }, warnings };
   });
   const byNumber = new Map([...fresh, ...kept.map((one) => [one.number, one])]);
   const lines = merged.map((pr) => byNumber.get(pr.number));

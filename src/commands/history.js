@@ -201,15 +201,18 @@ async function readPrevious(cwd, forge, note) {
 // A kept line that the fix signals no longer mark as a fix gets szz null, as every other PR
 // that is no fix has. An szz found by blame no longer fits a fix that the revert signal now
 // marks, and a revert's szz no longer fits a fix that another signal now marks, so SZZ runs
-// on that line again.
+// on that line again. A revert's links come from its body, and a line takes the body that the
+// forge holds now, so SZZ also runs again on a revert whose body differs from the old file.
 function keepSzz(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line]));
   return lines.map((line) => {
     if (!line.classification.fix && line.szz) return { ...line, szz: null };
-    if (line.szz) return fitsSignal(line.szz, line) ? line : { ...line, szz: undefined };
-    if (line.szz !== undefined) return line;
     const before = old.get(line.number);
-    return before?.szz && line.classification.fix && fitsSignal(before.szz, line) ? { ...line, szz: before.szz } : line;
+    const newBody = line.classification.fix_signal === REVERT_SIGNAL && before !== undefined && before.body !== line.body;
+    const fits = (szz) => fitsSignal(szz, line) && !newBody;
+    if (line.szz) return fits(line.szz) ? line : { ...line, szz: undefined };
+    if (line.szz !== undefined) return line;
+    return before?.szz && line.classification.fix && fits(before.szz) ? { ...line, szz: before.szz } : line;
   });
 }
 
@@ -218,7 +221,8 @@ const fitsSignal = (szz, line) => (szz.blamed_commit === null) === (line.classif
 
 // Returns one text that lists the PRs whose classification differs from their line in the old
 // file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so
-// this is how a person sees what a change to the signals did.
+// this is how a person sees what a change to the signals did. A PR can also change with the same
+// signals, such as when a person adds the label bug to it on GitHub, so the text does not say why.
 function classificationChanges(lines, previous) {
   const old = new Map(previous.map((line) => [line.number, line.classification]));
   const changed = lines.filter((line) => {
@@ -231,7 +235,8 @@ function classificationChanges(lines, previous) {
     return old.get(number).fix ? `PR ${number} is a fix by ${signal} now` : `PR ${number} is now a fix (${signal})`;
   });
   const more = changed.length > 10 ? `, and ${changed.length - 10} more` : '';
-  return `the fix signals now classify ${changed.length} PR${changed.length === 1 ? '' : 's'} in ${OUTPUT} another way: ${said.join(', ')}${more}.`;
+  const count = changed.length === 1 ? `1 PR in ${OUTPUT} is` : `${changed.length} PRs in ${OUTPUT} are`;
+  return `${count} classified another way than in the old file: ${said.join(', ')}${more}.`;
 }
 
 // Returns one text that lists the PRs whose kinds differ from their line in the old file, or ''
