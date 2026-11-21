@@ -114,12 +114,13 @@ test('check maps policy to --policy and enforce false to --shadow, with the PR f
 
 test('publish maps data-branch, comment and enforce to their flags, each on its own', (t) => {
   const map = stubNode(t);
-  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--policy', 'evidence.yml'];
+  // --pr and --repo let publish post the error on the PR when the check wrote no evidence.json.
+  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml'];
   assert.deepEqual(map({ command: 'publish' }).argv, base);
   assert.deepEqual(map({ command: 'publish', 'data-branch': 'store', comment: 'true', enforce: 'true' }).argv, [...base, '--data-branch', 'store', '--comment', '--enforce']);
   assert.deepEqual(map({ command: 'publish', enforce: 'true' }).argv, [...base, '--enforce']);
   // A value with spaces or a $ stays one argument, and nothing in it runs.
-  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--policy', 'my policy $(touch x).yml']);
+  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name', '--policy', 'my policy $(touch x).yml']);
 });
 
 test('the step exits with the exit code of the CLI', (t) => {

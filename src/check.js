@@ -220,6 +220,9 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
     const hidden = item.author === 'hidden' ? ', hidden check' : '';
     lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.${probeFiles(item)}${otherDetails(item)}`);
   }
+  if (exhibit.requirements.some((item) => probeFiles(item) !== '')) {
+    lines.push('', 'The probe files are in .exhibit in the repo. In GitHub Actions, they are in the workflow artifact named exhibit.');
+  }
   lines.push('');
 
   lines.push('## Gaps', '');
@@ -245,16 +248,24 @@ function otherDetails(item) {
   return describeTests(item.details);
 }
 
-// The links to a probe's output and artifacts, for its line in summary.md. The files are under
-// .exhibit, beside summary.md, so each link is relative to that folder. A hidden probe has none.
+// The paths of a probe's output and artifacts, for its line in summary.md. They are plain paths,
+// not links: in the GitHub job summary, a relative link leads nowhere, because the files are in the
+// workflow artifact. A line after the list says where to find them. A hidden probe has none.
 function probeFiles(item) {
   if (item.type !== 'probe' || item.author === 'hidden') return '';
-  const link = (text, path) => `[${text}](${encodeURI(path.replace(/^\.exhibit\//, ''))})`;
   const parts = [];
-  if (item.details.output) parts.push(` Output: ${link('output.log', item.details.output)}.`);
+  if (item.details.output) parts.push(` Output: ${codePath(item.details.output)}.`);
   const artifacts = item.details.artifacts ?? [];
-  if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => link(artifact.path, artifact.copy)).join(', ')}.`);
+  if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => codePath(artifact.copy)).join(', ')}.`);
   return parts.join('');
+}
+
+// A path as inline code, with more backticks around it than any run inside it.
+function codePath(path) {
+  const longest = Math.max(0, ...(path.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = longest > 0 ? ' ' : '';
+  return `${fence}${pad}${path}${pad}${fence}`;
 }
 
 // The summary.md for a check that failed before it had a verdict, such as a bad argument, a bad
@@ -263,9 +274,22 @@ function probeFiles(item) {
 export function renderErrorSummary(message, { shadow = false } = {}) {
   const lines = [`# Exhibit check: ${VERDICT_WORDS.error}`, ''];
   lines.push(...verdictLines({ verdict: 'error', skip: null }, shadow));
-  lines.push('Exhibit could not finish the check, so it wrote no evidence.json. The reason:', '');
-  lines.push(...message.split('\n').map((line) => (line === '' ? '' : `    ${line}`)));
+  lines.push(REASON_LINE, '');
+  lines.push(...message.split('\n').map((line) => (line === '' ? '' : `${REASON_INDENT}${line}`)));
   return lines.join('\n') + '\n';
+}
+
+const REASON_LINE = 'Exhibit could not finish the check, so it wrote no evidence.json. The reason:';
+const REASON_INDENT = '    ';
+
+// The reason in a summary.md that renderErrorSummary wrote, as it was given, or null when the text
+// is not such a summary. exhibit publish reads it, to post the reason on the PR.
+export function readErrorReason(summary) {
+  const lines = summary.split('\n');
+  const start = lines.indexOf(REASON_LINE);
+  if (start === -1) return null;
+  const reason = lines.slice(start + 1).map((line) => (line.startsWith(REASON_INDENT) ? line.slice(REASON_INDENT.length) : line)).join('\n').trim();
+  return reason === '' ? null : reason;
 }
 
 // The verdict line, with the exit code that exhibit check gives for `exhibit`, and in shadow mode a line that

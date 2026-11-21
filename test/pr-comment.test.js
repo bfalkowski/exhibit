@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { publish } from '../src/commands/publish.js';
-import { COMMENT_MARKER, renderComment } from '../src/pr-comment.js';
+import { renderErrorSummary } from '../src/check.js';
+import { COMMENT_MARKER, renderComment, renderErrorComment } from '../src/pr-comment.js';
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
 const MEETS_POLICY = JSON.parse(fixture('pr-comment/meets-policy.json'));
@@ -162,4 +163,110 @@ test('without --comment, publish sends nothing to GitHub', async (t) => {
 
   assert.equal(code, 0);
   assert.deepEqual(github.calls, []);
+});
+
+// When exhibit check fails before it has a verdict, it writes summary.md and no evidence.json.
+// Publish then posts the reason from summary.md, so the PR says why there is no verdict.
+const REASON = 'evidence.yml kinds.x: needs must be a list.\n\nSee docs/spec.md section 8.1.';
+
+test('the comment for a check with no verdict gives the reason from summary.md in a code block', () => {
+  assert.equal(renderErrorComment(REASON, { enforce: false }), [
+    COMMENT_MARKER,
+    '### Exhibit: Exhibit failed',
+    '',
+    'Verdict: **error**. exhibit check stopped before it had a verdict, so it wrote no exhibit, and nothing was stored.',
+    '',
+    'Shadow mode: nothing waits on this.',
+    '',
+    'The reason:',
+    '',
+    '```text',
+    'evidence.yml kinds.x: needs must be a list.',
+    '',
+    'See docs/spec.md section 8.1.',
+    '```',
+    '',
+    'The check job\'s summary says the same. Fix the cause, then run the check again.',
+    ''
+  ].join('\n'));
+  // A reason with backticks cannot close the block early.
+  assert.match(renderErrorComment('a ```b``` c', { enforce: true }), /\n````text\na ```b``` c\n````\n/);
+  assert.match(renderErrorComment(null, { enforce: true }), /\nExhibit found no reason to show: there is no summary\.md with one beside the evidence file\. The check job's log says what went wrong\.\n/);
+});
+
+// A folder with only the summary.md that a failed check wrote, and a run of exhibit publish in it.
+function setupFailedCheck(t, summary = renderErrorSummary(REASON, { shadow: true })) {
+  const dir = mkdtempSync(join(tmpdir(), 'exhibit-comment-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, '.exhibit'));
+  if (summary !== null) writeFileSync(join(dir, '.exhibit', 'summary.md'), summary);
+  const run = async (github, extra) => {
+    let out = '';
+    const stdout = { write: (text) => { out += text; } };
+    const code = await publish(['--evidence', '.exhibit/evidence.json', '--storage', 'local', ...extra], { cwd: dir, env: { GITHUB_TOKEN: 'test-token' }, fetch: github.fetch, stdout });
+    return { code, out };
+  };
+  return { dir, run };
+}
+
+test('with no evidence.json, --comment --pr --repo posts the error and its reason, stores nothing, and exits 0', async (t) => {
+  const { dir, run } = setupFailedCheck(t);
+  const github = fakeGitHub();
+
+  const { code, out } = await run(github, ['--comment', '--pr', '7', '--repo', 'acme/widgets']);
+
+  assert.equal(code, 0);
+  assert.deepEqual(github.calls, ['POST /graphql', 'POST /repos/acme/widgets/issues/7/comments']);
+  assert.equal(github.comments[0].body, renderErrorComment(REASON, { enforce: false }));
+  assert.equal(out, 'exhibit check wrote no .exhibit/evidence.json, so nothing was stored. .exhibit/summary.md says why.\nPosted the comment on PR 7: https://github.com/acme/widgets/pull/7#issuecomment-9000000001\n');
+  assert.deepEqual(readdirSync(join(dir, '.exhibit')), ['summary.md']);
+});
+
+test('with no evidence.json, the error replaces the comment of an earlier verdict, and the next verdict replaces it again', async (t) => {
+  const { write, run: runWithEvidence } = setup(t);
+  const github = fakeGitHub();
+  write(forPr7(NEEDS_PERSON));
+  await runWithEvidence(github);
+
+  const { run } = setupFailedCheck(t);
+  const failed = await run(github, ['--comment', '--enforce', '--pr', '7', '--repo', 'acme/widgets', '--json']);
+  assert.equal(failed.code, 0);
+  assert.deepEqual(JSON.parse(failed.out), { storage: 'local', path: null, where: null, changed: false, commit: null, comment: { action: 'updated', url: 'https://github.com/acme/widgets/pull/7#issuecomment-9000000001' } });
+  assert.equal(github.comments.length, 1);
+  assert.equal(github.comments[0].body, renderErrorComment(REASON, { enforce: true }));
+
+  await runWithEvidence(github);
+  assert.equal(github.comments.length, 1);
+  assert.match(github.comments[0].body, /^<!-- exhibit:pr-summary -->\n### Exhibit: needs a person\n/);
+});
+
+test('with no evidence.json and no summary.md, the comment says there is no reason to show', async (t) => {
+  const { run } = setupFailedCheck(t, null);
+  const github = fakeGitHub();
+  const { code } = await run(github, ['--comment', '--pr', '7', '--repo', 'acme/widgets']);
+  assert.equal(code, 0);
+  assert.equal(github.comments[0].body, renderErrorComment(null, { enforce: false }));
+});
+
+test('with no evidence.json, publish without --comment, or without --pr and --repo, exits 2 with a plain message and sends nothing', async (t) => {
+  const { run } = setupFailedCheck(t);
+  const github = fakeGitHub();
+  const why = 'exhibit check wrote no .exhibit/evidence.json, so there is no exhibit, and nothing was stored. The check failed before it had a verdict. .exhibit/summary.md says why: in GitHub Actions, read the check job\'s summary, or summary.md in the workflow artifact named exhibit.';
+  await assert.rejects(run(github, []), { message: why });
+  await assert.rejects(run(github, ['--comment']), { message: `${why} To post the error on the PR, give --pr N and --repo owner/name.` });
+  await assert.rejects(run(github, ['--comment', '--pr', '7']), { message: `${why} To post the error on the PR, give --pr N and --repo owner/name.` });
+  assert.deepEqual(github.calls, []);
+});
+
+test('--pr and --repo must match the exhibit when there is one', async (t) => {
+  const { write, run } = setup(t);
+  const github = fakeGitHub();
+  write(forPr7(NEEDS_PERSON));
+  await assert.rejects(run(github, ['--comment', '--pr', '8', '--repo', 'acme/widgets']), { message: 'evidence.json is the exhibit for PR 7 in acme/widgets, not for PR 8 in acme/widgets, so nothing was stored.' });
+  await assert.rejects(run(github, ['--pr', '7', '--repo', 'acme/gadgets']), { message: 'evidence.json is the exhibit for PR 7 in acme/widgets, not for PR 7 in acme/gadgets, so nothing was stored.' });
+  await assert.rejects(run(github, ['--pr', 'seven']), { message: /^--pr must be a PR number, such as 12, not "seven"\./ });
+  await assert.rejects(run(github, ['--repo', 'widgets']), { message: /^--repo must look like owner\/name, not "widgets"\./ });
+  const same = await run(github, ['--comment', '--pr', '7', '--repo', 'Acme/Widgets']);
+  assert.equal(same.code, 0);
+  assert.deepEqual(github.calls, ['POST /graphql', 'POST /repos/acme/widgets/issues/7/comments']);
 });
