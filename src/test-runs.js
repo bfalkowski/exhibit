@@ -14,8 +14,8 @@ const LISTED = 20;
 export const DEFAULT_TEST_TIMEOUT_SECONDS = 1800;
 
 // A test run that could not give results. `status` is the requirement status it leads to:
-// `missing` when the policy gives no test command, and `error` when the command could not run or
-// wrote no JUnit file. `howToFix` says what to do, in plain words.
+// `missing` when the policy gives no test command, and `error` when the command could not run,
+// wrote no JUnit file, or ran past the time limit settings.test_timeout_seconds. `howToFix` says what to do, in plain words.
 export class TestRunError extends Error {
   name = 'TestRunError';
   constructor(status, message, howToFix) {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -161,10 +161,11 @@ test('a test command that is not found gives error, and verdict error', async (t
   assertNoWorktreeLeft(fixture);
 });
 
-test('a test that never ends hits the time limit: Exhibit stops it and its children, gives error, and removes the worktrees', async (t) => {
-  const fixture = buildRepo(t);
-  // node --test runs each test file in a child process. The hanging test writes the pid of that
-  // child, so the test can see that Exhibit stopped the children too, not only the shell.
+// Adds the branch hang, with a test that never ends, and sets the base policy's time limit to
+// `seconds`. node --test runs each test file in a child process. The hanging test writes the pid
+// of that child to the file that this gives back, so a test can see that Exhibit stopped the
+// children too, not only the shell.
+function addHangBranch(fixture, seconds) {
   const pidFile = join(dirname(fixture.repo), 'hang.pid');
   const HANG_TEST = `import { test } from 'node:test';
 import { writeFileSync } from 'node:fs';
@@ -178,7 +179,32 @@ test('never ends', () => new Promise(() => {
   fixture.git('add', 'test/hang.test.js');
   fixture.git('commit', '-q', '-m', 'hang');
   fixture.git('checkout', '-q', 'main');
-  fixture.setBasePolicy(policy().replace('settings:\n', 'settings:\n  test_timeout_seconds: 5\n'));
+  fixture.setBasePolicy(policy().replace('settings:\n', `settings:\n  test_timeout_seconds: ${seconds}\n`));
+  return pidFile;
+}
+
+// Waits until `check` gives true, for at most `ms` milliseconds.
+async function waitFor(check, ms, what) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) assert.fail(`waited ${ms} ms for ${what}`);
+    await new Promise((done) => setTimeout(done, 50));
+  }
+}
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+test('a test that never ends hits the time limit: Exhibit stops it and its children, gives error, and removes the worktrees', async (t) => {
+  const fixture = buildRepo(t);
+  const pidFile = addHangBranch(fixture, 5);
 
   const started = Date.now();
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'hang');
@@ -194,6 +220,29 @@ test('never ends', () => new Promise(() => {
   const pid = Number(readFileSync(pidFile, 'utf8'));
   assert.ok(pid > 0);
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, `the test process ${pid} still runs`);
+});
+
+test('Ctrl-C on exhibit check stops the test command and its children too', async (t) => {
+  const fixture = buildRepo(t);
+  const pidFile = addHangBranch(fixture, 600);
+  // A terminal runs exhibit check in a process group of its own, and Ctrl-C sends SIGINT to that
+  // group. The test command runs in a group of its own too, so it does not get that SIGINT.
+  const bin = new URL('../bin/exhibit.js', import.meta.url).pathname;
+  const exhibit = spawn(process.execPath, [bin, 'check', '--base', 'start', '--head', 'hang'], { cwd: fixture.repo, env: gitEnv(fixture.home), detached: true, stdio: 'ignore' });
+  const exited = new Promise((done) => exhibit.once('exit', (code, signal) => done({ code, signal })));
+  t.after(() => {
+    if (exhibit.exitCode === null && exhibit.signalCode === null) process.kill(-exhibit.pid, 'SIGKILL');
+  });
+  await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '', 60_000, 'the hanging test to start');
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  t.after(() => {
+    if (alive(pid)) process.kill(pid, 'SIGKILL');
+  });
+
+  process.kill(-exhibit.pid, 'SIGINT');
+  const { signal } = await exited;
+  assert.equal(signal, 'SIGINT', 'exhibit check still ends by the signal, as before');
+  await waitFor(() => !alive(pid), 5_000, `the test process ${pid} to stop`);
 });
 
 test('a policy with no test command gives missing, so a person must check the tests', async (t) => {

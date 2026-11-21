@@ -70,8 +70,34 @@ function failure(outcome, missing, timeoutSeconds) {
   return null;
 }
 
+// The process groups that runInGroup has started and not yet killed. Each one is a function that
+// kills its group.
+const liveGroups = new Set();
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM'];
+
+// A group of its own does not get the SIGINT that Ctrl-C sends to Exhibit's group, so Exhibit
+// kills every live group itself when it gets SIGINT or SIGTERM. Then it sends the signal to
+// itself again with no listener left, so it ends by that signal, as it did before.
+function onStopSignal(signal) {
+  for (const kill of liveGroups) kill();
+  liveGroups.clear();
+  for (const name of STOP_SIGNALS) process.removeListener(name, onStopSignal);
+  process.kill(process.pid, signal);
+}
+
+function watchGroup(kill) {
+  if (liveGroups.size === 0) for (const name of STOP_SIGNALS) process.on(name, onStopSignal);
+  liveGroups.add(kill);
+}
+
+function unwatchGroup(kill) {
+  if (!liveGroups.delete(kill) || liveGroups.size > 0) return;
+  for (const name of STOP_SIGNALS) process.removeListener(name, onStopSignal);
+}
+
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
-// Then it kills the whole group. Gives back { code, signal, timedOut }. With `args`, `command` is
+// Then it kills the whole group. When Exhibit gets SIGINT or SIGTERM, as from Ctrl-C, while the
+// group runs, it kills the group and then ends by that signal. Gives back { code, signal, timedOut }. With `args`, `command` is
 // a program that runs with those arguments, and no shell. `env` is the env of the command, and the
 // env of Exhibit when it is left out. The output goes to `logFile`, or nowhere when it is null.
 export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
@@ -89,6 +115,7 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
         if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
       }
     };
+    if (child.pid !== undefined) watchGroup(killGroup);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -102,6 +129,7 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
       return { code, signal, timedOut };
     } finally {
       clearTimeout(timer);
+      unwatchGroup(killGroup);
       if (child.pid !== undefined) killGroup();
     }
   } finally {
