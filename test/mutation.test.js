@@ -324,7 +324,7 @@ test('Exhibit runs Stryker once more only when its first run failed a test', asy
     const runStryker = async (options) => {
       logs.push(options.logFile.slice(context.cwd.length + 1));
       const outcome = outcomes[logs.length - 1];
-      return { ...outcome, mutants: outcome.complete ? killed(options) : [] };
+      return { ...outcome, mutants: outcome.mutants ?? (outcome.complete ? killed(options) : []) };
     };
     return { logs, runStryker };
   };
@@ -346,6 +346,14 @@ test('Exhibit runs Stryker once more only when its first run failed a test', asy
   assert.equal(error.status, 'error');
   assert.match(error.how_to_fix, /test\/inside\.test\.js \(a path in the root is inside\)/);
   assert.equal(error.flaky_tests, undefined);
+
+  // The second run is complete but made no mutant: its coverage run passed, so the test is flaky.
+  const noMutants = stand([failedFirstRun, { ...done, mutants: [] }]);
+  const empty = await mutationCollector({ runStryker: noMutants.runStryker })({ params: { min: 0.8 } }, context);
+  assert.equal(noMutants.logs.length, 2);
+  assert.equal(empty.status, 'met');
+  assert.equal(empty.details.n, 0);
+  assert.deepEqual(empty.flaky_tests, ['test/inside.test.js']);
 
   // The first run fails a test, and the second stops for another reason, such as a crash.
   const crashedAgain = stand([failedFirstRun, { complete: false, timedOut: false, code: 1, signal: null, failedInFirstRun: [] }]);
