@@ -1,3 +1,5 @@
+import { COMMENT_MARKER } from './pr-comment.js';
+
 // Some rooms post their reviews as PR comments, not as GitHub reviews. A comment like that counts
 // as a review when it gives a verdict, merge or fix (spec 8.3). Two forms give one:
 //   - the word "verdict", then merge or fix: "Verdict: fix", "**Verdict:** merge", "verdict merge"
@@ -52,7 +54,12 @@ const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 // The room marks its own notes, and the Dev's replies to a review, with an HTML comment such as
 // <!-- office:dev --> at the start. A Dev's reply often repeats the verdict ("Verdict merge, so I
 // push nothing"), so a comment that starts with such a marker is never a review.
-const ROOM_NOTE = /^\s*<!-- office:/;
+// Exhibit's own summary comment (spec 9.12) starts with <!-- exhibit:pr-summary -->. It is not a
+// review either, though it can hold a skip reason from the PR body, such as "verdict: merge".
+function notAReview(body) {
+  const start = body.trimStart();
+  return start.startsWith('<!-- office:') || start.startsWith(COMMENT_MARKER);
+}
 
 // Splits the body into the comment's own lines and the lines that quote another comment.
 function splitQuotes(body) {
@@ -144,7 +151,7 @@ function verdictIn(text) {
 
 // Returns 'merge' or 'fix' when the comment body is a review with that verdict, or null.
 export function commentVerdict(body) {
-  if (typeof body !== 'string' || ROOM_NOTE.test(body)) return null;
+  if (typeof body !== 'string' || notAReview(body)) return null;
   return verdictIn(splitQuotes(body).own);
 }
 
@@ -152,7 +159,7 @@ export function commentVerdict(body) {
 // a comment is not a review. Most are replies that quote a review. But a review that quotes its
 // own verdict is lost, so the caller warns about each one, and a person can check it.
 export function quotedVerdict(body) {
-  if (typeof body !== 'string' || ROOM_NOTE.test(body)) return null;
+  if (typeof body !== 'string' || notAReview(body)) return null;
   const { own, quoted } = splitQuotes(body);
   return verdictIn(own) === null ? verdictIn(quoted) : null;
 }
