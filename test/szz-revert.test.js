@@ -146,6 +146,21 @@ test('a re-land with an edited title is no fix: it links nothing, and its szz is
     assert.deepEqual([relandAgain.classification.fix, relandAgain.szz], [false, null]);
   });
 
+  await t.test('a re-land that names its revert by a branch commit is a re-land in the chain too', async () => {
+    // PR 10 is a merge-commit PR. Here it is a revert of PR 5. PR 17 re-lands it by `git revert`
+    // of one commit on PR 10's branch, not its merge commit, so only the forge maps that commit
+    // to PR 10. PR 18 reverts PR 17, so it takes the change out again.
+    const byNumber = new Map(lines.map((line) => [line.number, line]));
+    const pr10 = { ...byNumber.get(10), title: 'Revert "Add the shop entry point"', body: 'Reverts fixture/shop#5' };
+    const branchCommit = git(repo.dir, ['rev-parse', `${pr10.merge_sha}^2`]);
+    const relandByCommit = { ...reland, body: `This reverts commit ${branchCommit}.` };
+    const revertOfReland = { ...reland, number: 18, title: 'Revert "Reland: add the shop entry point"', body: 'Reverts fixture/shop#17', url: `https://github.com/${REPO}/pull/18` };
+    const known = [...lines.filter((line) => line.number !== 10), pr10, relandByCommit, revertOfReland];
+    const [landed, fix] = await addSzz([relandByCommit, revertOfReland], { dir: repo.dir, forge, known });
+    assert.deepEqual([landed.classification.fix, landed.szz], [false, null]);
+    assert.deepEqual([fix.classification.fix, fix.szz?.links], [true, [revertLink(17)]]);
+  });
+
   await t.test('a revert of a re-land that names it by its merge commit links it too', async () => {
     // The re-land is on main as PR 5's squash commit would be, so the history maps that commit to PR 17.
     const relandOnMain = { ...reland, merge_sha: 'f'.repeat(40) };

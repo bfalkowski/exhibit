@@ -123,6 +123,8 @@ async function askForge(forge, sha, defaultBranch) {
 export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {}, known = lines }) {
   const findPr = createPrFinder({ lines: known, forge, onMainLine: mainLineCheck(dir, forge) });
   const knownPrs = new Map(known.map((line) => [line.number, line]));
+  const revertContext = { findPr, forge, knownPrs };
+  revertContext.takesOut = createTakesOut(dir, revertContext);
   if ((await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
     warn('This clone is shallow, so blame can give old lines to the wrong commit and SZZ links can be wrong. Run git fetch --unshallow, then run history again.');
   }
@@ -140,7 +142,7 @@ export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {
     }
     try {
       const szz = revert
-        ? await revertLinks(dir, line, { findPr, forge, knownPrs })
+        ? await revertLinks(dir, line, revertContext)
         : await szzForFix(dir, line, findPr, (await bugReportDate(line, forge)) ?? (await trackerReportDate(line, tracker)));
       if (szz.no_link_reason === REVERTS_A_REVERT) out.push({ ...line, classification: { ...line.classification, fix: false, fix_signal: null }, szz: null });
       else out.push({ ...line, szz });
@@ -249,25 +251,15 @@ export const REVERT_NOT_FOUND = 'reverted change not found';
 export const REVERTS_A_REVERT = 'reverts a revert';
 
 // A revert names the work it reverts, so SZZ blames no line: it links each reverted PR straight
-// away, marked as found by revert. The PRs share the confidence evenly. A PR the body names is
-// linked when the history holds it, or when the forge says it is a PR. A commit maps to its PR as
-// a blamed commit does (createPrFinder). A revert of a PR in another repo links nothing here.
-// A found PR that is a fix revert (takesOut) is not linked: a re-land with an edited title,
+// away, marked as found by revert. The PRs share the confidence evenly. The reverted PRs come
+// from revertedPrs. A revert of a PR in another repo links nothing here.
+// A found PR that takes a change out (takesOut) is not linked: a re-land with an edited title,
 // such as "Reland: add cache", takes back a revert, not a bug. A found re-land is linked: a
 // revert of it takes the change out again, so the re-land brought the bug back.
-async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
-  const { prs, commits } = revertedWork(fix.body, forge.repo);
-  const found = new Set();
-  for (const number of prs) {
-    if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
-  }
-  for (const sha of commits) {
-    const full = await fullSha(dir, sha);
-    const pr = full === null ? null : await findPr(full);
-    if (pr !== null) found.add(pr);
-  }
-  found.delete(fix.number);
-  const reverts = [...found].filter((number) => takesOut(number, knownPrs, forge.repo));
+async function revertLinks(dir, fix, context) {
+  const found = await revertedPrs(dir, fix, context);
+  const reverts = [];
+  for (const number of found) if (await context.takesOut(number)) reverts.push(number);
   for (const number of reverts) found.delete(number);
   const linked = [...found].sort((a, b) => a - b);
   return {
@@ -279,24 +271,52 @@ async function revertLinks(dir, fix, { findPr, forge, knownPrs }) {
   };
 }
 
-// Says whether the history line of PR `number` is a revert that takes a change out. A revert
-// whose every reverted PR in the history takes a change out puts the change back (a re-land), so
-// it is not one. So in a chain of reverts, every second one takes out, and the others put back.
-// The chain goes through the history only: a PR the body names by number, or by a commit that is
-// a merge_sha in the history. So this asks nobody. A revert that names nothing the history holds
-// takes out. `path` holds the PRs above this one in the chain, and stops a loop.
-function takesOut(number, knownPrs, repo, path = new Set()) {
-  const line = knownPrs.get(number);
-  if (line === undefined || !isRevert({ ...line, repo })) return false;
-  if (path.has(number)) return true;
-  const { prs, commits } = revertedWork(line.body, repo);
-  const named = new Set(prs.filter((pr) => knownPrs.has(pr)));
-  for (const sha of commits) {
-    for (const [other, known] of knownPrs) if (known.merge_sha?.startsWith(sha)) named.add(other);
+// Returns the set of PRs that the body of the revert `line` names. A PR named by number counts
+// when the history holds it, or when the forge says it is a PR. A commit maps to its PR as a
+// blamed commit does (createPrFinder), after a short SHA is made full in the clone. The revert
+// PR itself is never in the set.
+async function revertedPrs(dir, line, { findPr, forge, knownPrs }) {
+  const { prs, commits } = revertedWork(line.body, forge.repo);
+  const found = new Set();
+  for (const number of prs) {
+    if (knownPrs.has(number) || (await forge.issue(number))?.isPull) found.add(number);
   }
-  named.delete(number);
-  const above = new Set([...path, number]);
-  return named.size === 0 || ![...named].every((pr) => takesOut(pr, knownPrs, repo, above));
+  for (const sha of commits) {
+    const full = await fullSha(dir, sha);
+    const pr = full === null ? null : await findPr(full);
+    if (pr !== null) found.add(pr);
+  }
+  found.delete(line.number);
+  return found;
+}
+
+// Returns takesOut(number): whether the history line of PR `number` is a revert that takes a
+// change out. A revert whose every reverted PR takes a change out puts the change back (a
+// re-land), so it is not one. So in a chain of reverts, every second one takes out, and the
+// others put back. The reverted PRs come from revertedPrs, as for the links, so a PR is a
+// re-land here exactly when SZZ writes it as no fix. Each PR is decided once per run. A PR that
+// the history does not hold is no revert. A revert that names no PR takes out. `path` holds the
+// PRs above this one in the chain, and stops a loop.
+function createTakesOut(dir, context) {
+  const decided = new Map();
+  const takesOut = async (number, path = new Set()) => {
+    if (decided.has(number)) return decided.get(number);
+    const line = context.knownPrs.get(number);
+    if (line === undefined || !isRevert({ ...line, repo: context.forge.repo })) return false;
+    if (path.has(number)) return true;
+    const above = new Set([...path, number]);
+    const named = await revertedPrs(dir, line, context);
+    let out = named.size === 0;
+    for (const pr of named) {
+      if (!(await takesOut(pr, above))) {
+        out = true;
+        break;
+      }
+    }
+    decided.set(number, out);
+    return out;
+  };
+  return takesOut;
 }
 
 // git revert writes the whole SHA, but a person can shorten it. A short SHA is looked up in the
