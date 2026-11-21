@@ -7,7 +7,7 @@ Every pull request brings its own evidence. Exhibit decides what evidence a PR n
 What works today:
 
 - `exhibit history --repo owner/name` exports the merged PRs, with their files, reviews and CI results, to `.exhibit/history.jsonl`. Inside a clone of the repo it also runs SZZ, which traces each fix back to the PR that added the bug (docs/spec.md section 9.2). It writes a report to `.exhibit/report.md` and `.exhibit/report.html` (section 8.5). A second run reads only what is new, and `--full` reads every PR again. It needs `GITHUB_TOKEN`: section 8.3 lists the permissions the token needs.
-- `exhibit label` lets a person label each escaped defect, with optional Claude drafts.
+- `exhibit label` lets a person label each escaped defect, with optional Claude drafts. `exhibit label --review` does it on a page in the browser.
 - `exhibit check` checks one PR against the policy, and `exhibit publish` stores the result and posts a comment on the PR. The GitHub Action runs both.
 - Exhibit checks its own pull requests in shadow mode, with its own `evidence.yml`.
 

@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -6,10 +7,12 @@ import { DEFAULT_MODEL, createDrafter } from '../claude.js';
 import { draftAgreementText } from '../draft-agreement.js';
 import { GITHUB_FORGE } from '../github.js';
 import { cacheFolder, createReplyCache } from '../github-cache.js';
+import { createReviewSession } from '../label-review.js';
 import { ANSWER_LIMITS, LABELS, QUIT, SKIP, labelDefects } from '../labels.js';
+import { startReviewServer } from '../review-server.js';
 import { ToolError } from '../tool-error.js';
 
-const USAGE = 'Usage: exhibit label [--json] [--claude]';
+const USAGE = 'Usage: exhibit label [--json] [--claude] [--review [--no-open]]';
 // Its presence means the note about what --claude sends was shown in this repo.
 const NOTICE_SHOWN = '.exhibit/claude-notice-shown';
 // What each too-long answer is called in the message that asks again.
@@ -29,20 +32,32 @@ function plural(n, word, words = `${word}s`) {
 // with ANTHROPIC_API_KEY and the model in EXHIBIT_CLAUDE_MODEL. With GITHUB_TOKEN, it reads the
 // issues that each fix PR closes, so a follow-up ticket's words count when it proposes
 // known_at_review.
-export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr, now }) {
+//
+// With --review, it asks no question in the terminal. It starts a small server on 127.0.0.1 and
+// opens the review page in the browser, where the person labels one defect per screen and can go
+// back and forth (src/label-review.js). Each action writes labels.jsonl at once, in the same
+// format. It stops when the person presses Finish on the page, or Ctrl+C here, and then prints the
+// same summary. --no-open prints the page's address and does not open a browser. `openBrowser` and
+// `signals` are for tests: what opens the page, and where SIGINT comes from.
+export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr, now, openBrowser = openInBrowser, signals = process }) {
   const options = parseOptions(argv);
   const screen = options.json ? stderr : stdout;
   let draft;
   if (options.claude) {
-    if (!env.ANTHROPIC_API_KEY) throw new ToolError('exhibit label --claude needs ANTHROPIC_API_KEY. Set it, or run exhibit label without --claude.');
+    if (!env.ANTHROPIC_API_KEY) throw new ToolError(`exhibit label --claude needs ANTHROPIC_API_KEY. Set it, or run exhibit label${options.review ? ' --review' : ''} without --claude.`);
     draft = withNotice(createDrafter({ apiKey: env.ANTHROPIC_API_KEY, model: env.EXHIBIT_CLAUDE_MODEL || DEFAULT_MODEL, fetch }), { cwd, screen });
   }
-  const keyboard = createKeyboard({ input: stdin, output: screen });
+  const issues = issueReader({ env, fetch, screen });
   let summary;
-  try {
-    summary = await labelDefects({ cwd, ask: keyboard.ask, draft, issues: issueReader({ env, fetch, screen }), now });
-  } finally {
-    keyboard.close();
+  if (options.review) {
+    summary = await reviewInBrowser({ cwd, draft, issues, now, screen, open: options.open ? openBrowser : null, signals });
+  } else {
+    const keyboard = createKeyboard({ input: stdin, output: screen });
+    try {
+      summary = await labelDefects({ cwd, ask: keyboard.ask, draft, issues, now });
+    } finally {
+      keyboard.close();
+    }
   }
 
   if (options.json) {
@@ -57,6 +72,47 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
     ? 'Every escaped defect has a code now.'
     : `${summary.open} still ${plural(summary.open, 'has', 'have')} no code. Run exhibit label again to label ${plural(summary.open, 'it', 'them')}.`;
   stdout.write(`\nLabeled ${summary.labeled} escaped ${plural(summary.labeled, 'defect')}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+}
+
+// Runs the review page until the person presses Finish, or SIGINT comes. Returns the summary in
+// the shape labelDefects returns it.
+async function reviewInBrowser({ cwd, draft, issues, now, screen, open, signals }) {
+  const session = await createReviewSession({ cwd, draft, issues, now });
+  const total = session.state().items.length;
+  if (total > 0) {
+    const server = await startReviewServer(session);
+    let stop;
+    const interrupted = new Promise((resolve) => {
+      stop = resolve;
+      signals.once('SIGINT', stop);
+    });
+    try {
+      screen.write(`${total} escaped ${plural(total, 'defect has', 'defects have')} no code yet. Label ${plural(total, 'it', 'them')} on the review page:\n  ${server.url}\n` +
+        `Each answer is saved to ${LABELS} at once. Press Finish on the page, or Ctrl+C here, when you are done.\n`);
+      if (open !== null) open(server.url, (problem) => screen.write(`exhibit: warning: could not open a browser (${problem}). Open the address above by hand.\n`));
+      // A bug while preparing a defect fails the run, so it is not lost behind the page.
+      const failed = session.prepared.then(() => new Promise(() => {}));
+      await Promise.race([server.finished, interrupted, failed]);
+    } finally {
+      signals.off('SIGINT', stop);
+      await server.close();
+      await session.idle();
+    }
+  }
+  const { run, drafts } = session.summary();
+  return draft === undefined ? run : { ...run, drafts };
+}
+
+// Opens `url` in the person's browser. Calls `warn` with the problem when it cannot.
+function openInBrowser(url, warn) {
+  const [command, args] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '""', url]] : ['xdg-open', [url]];
+  try {
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.on('error', (error) => warn(error.message));
+    child.unref();
+  } catch (error) {
+    warn(error.message);
+  }
 }
 
 // Reads the issues that a fix PR closes, from GitHub, with the reply cache (spec 8.6). Returns
@@ -266,9 +322,11 @@ function notInList(answer, categories) {
 
 function parseOptions(argv) {
   try {
-    const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' }, claude: { type: 'boolean' } }, strict: true, allowPositionals: false });
-    return { json: values.json === true, claude: values.claude === true };
+    const { values } = parseArgs({ args: argv, options: { json: { type: 'boolean' }, claude: { type: 'boolean' }, review: { type: 'boolean' }, 'no-open': { type: 'boolean' } }, strict: true, allowPositionals: false });
+    if (values['no-open'] && !values.review) throw new ToolError(`--no-open works only with --review. ${USAGE}`);
+    return { json: values.json === true, claude: values.claude === true, review: values.review === true, open: values['no-open'] !== true };
   } catch (error) {
+    if (error instanceof ToolError) throw error;
     throw new ToolError(`${error.message}. ${USAGE}`);
   }
 }

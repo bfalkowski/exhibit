@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exhibit: label escaped defects</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1d2330; --muted: #5d6677; --line: #dde1e8;
+    --accept: #1f7a3f; --accept-bg: #e5f4ea; --no: #a23b2c; --no-bg: #fbe9e6; --later: #8a6100; --later-bg: #fdf3dc;
+    --edit: #2453a6; --edit-bg: #e6eefb; --del: #fdecea; --del-ink: #8f2a1d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: var(--ink); color: #fff; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .count { margin-left: auto; font-weight: 600; }
+  header button { background: transparent; color: #fff; border: 1px solid #ffffff66; }
+  .layout { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 48px); }
+  nav { border-right: 1px solid var(--line); background: var(--card); overflow-y: auto; max-height: calc(100vh - 48px); position: sticky; top: 48px; }
+  nav ol { list-style: none; margin: 0; padding: 0; }
+  nav li button { display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; border-radius: 0; font-weight: 400; }
+  nav li button.current { background: var(--edit-bg); }
+  nav .nid { font-family: ui-monospace, Menlo, monospace; font-size: 13px; flex: none; }
+  nav .ntitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+  .badge { flex: none; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 9px; background: var(--line); color: var(--muted); }
+  .badge.saved { background: var(--accept-bg); color: var(--accept); }
+  .badge.skipped { background: var(--no-bg); color: var(--no); }
+  .badge.later { background: var(--later-bg); color: var(--later); }
+  main { padding: 20px 28px 120px; max-width: 1000px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  .fixtitle { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .what { font-size: 16px; margin: 8px 0; }
+  .meta { color: var(--muted); font-size: 13px; }
+  a { color: var(--edit); }
+  pre.body { white-space: pre-wrap; font: 13px/1.4 ui-monospace, Menlo, monospace; background: var(--bg); padding: 10px; border-radius: 6px; max-height: 360px; overflow: auto; }
+  .link { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+  .link.keep { border-color: var(--accept); }
+  .link.reject { border-color: var(--no); opacity: .75; }
+  .linkhead { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .linkhead .ltitle { font-weight: 600; flex: 1; min-width: 200px; }
+  .conf { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 9px; background: var(--edit-bg); color: var(--edit); }
+  .switch { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .switch button { border: 0; border-radius: 0; padding: 4px 12px; background: var(--card); }
+  .switch button.on.k { background: var(--accept); color: #fff; }
+  .switch button.on.r { background: var(--no); color: #fff; }
+  .diff { margin-top: 8px; font: 12.5px/1.45 ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .diff .file { background: var(--bg); padding: 4px 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .diff .row { display: grid; grid-template-columns: 56px 1fr; }
+  .diff .num { text-align: right; padding: 1px 8px; color: var(--muted); background: var(--bg); }
+  .diff .del { background: var(--del); color: var(--del-ink); padding: 1px 8px; white-space: pre-wrap; word-break: break-all; }
+  .diff .blame { grid-column: 2; padding: 0 8px 3px; color: var(--muted); font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 12px; }
+  .bulk { display: flex; gap: 8px; margin-bottom: 8px; }
+  label.field { display: block; font-weight: 600; margin: 12px 0 4px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 13px; }
+  input[type=text], textarea, select { width: 100%; font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  textarea { min-height: 64px; resize: vertical; }
+  .catrow { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .draftnote { padding: 8px 10px; border-radius: 6px; background: var(--edit-bg); color: var(--edit); font-size: 14px; }
+  .draftnote.warn { background: var(--later-bg); color: var(--later); }
+  .radios { display: flex; gap: 16px; flex-wrap: wrap; }
+  .radios label { font-weight: 400; }
+  button { font: inherit; font-weight: 600; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--edit); outline-offset: 1px; }
+  .actions { position: fixed; bottom: 0; left: 280px; right: 0; display: flex; gap: 10px; align-items: center; padding: 12px 28px; background: var(--card); border-top: 1px solid var(--line); }
+  .actions .accept { background: var(--accept); color: #fff; border-color: var(--accept); font-size: 16px; padding: 10px 22px; }
+  .actions .edit { background: var(--edit-bg); color: var(--edit); border-color: var(--edit); }
+  .actions .no { background: var(--no-bg); color: var(--no); border-color: var(--no); }
+  .actions .later { background: var(--later-bg); color: var(--later); border-color: var(--later); }
+  .actions .nav { margin-left: auto; display: flex; gap: 8px; }
+  kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; opacity: .8; margin-left: 4px; }
+  .error { color: var(--no); font-weight: 600; margin: 8px 0 0; }
+  .saved-note { color: var(--accept); font-weight: 600; }
+  #help { position: fixed; right: 20px; top: 60px; width: 420px; max-height: calc(100vh - 80px); overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 30px #0003; padding: 16px 18px; z-index: 3; }
+  #help h3 { margin: 12px 0 4px; font-size: 15px; }
+  #help p { margin: 0 0 6px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .ready { color: var(--accept); font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Exhibit: label escaped defects</h1>
+  <span class="count" id="count">Loading…</span>
+  <button type="button" id="helpButton">Help <kbd>?</kbd></button>
+  <button type="button" id="summaryButton">Summary</button>
+</header>
+<div class="layout">
+  <nav aria-label="Escaped defects"><ol id="list"></ol></nav>
+  <main id="main"></main>
+</div>
+<div class="actions" id="actions" hidden>
+  <button type="button" class="accept" id="accept">Accept <kbd>1</kbd></button>
+  <button type="button" class="edit" id="edit">Edit <kbd>2</kbd></button>
+  <button type="button" class="no" id="skip">Not a bug / skip <kbd>3</kbd></button>
+  <button type="button" class="later" id="later">Later <kbd>D</kbd></button>
+  <span class="nav">
+    <button type="button" id="back">← Back</button>
+    <button type="button" id="next">Next →</button>
+  </span>
+</div>
+<aside id="help" hidden>
+  <strong>How to label an escaped defect</strong>
+  <h3>Why</h3>
+  <p>Each label is the base of policy rules. <code>exhibit policy suggest</code> drafts a rule for a category only when two or more labeled defects share it, from two or more PRs. So the same kind of bug needs the same category name.</p>
+  <h3>What you decide</h3>
+  <p>Which earlier PR brought this bug, what went wrong in a few words, its category, and the evidence that would have caught it.</p>
+  <h3>What a link is</h3>
+  <p>SZZ guessed the PR that brought the bug: it ran <code>git blame</code> on the lines the fix changed. Keep a link when that PR really brought the bug. Reject it when SZZ guessed wrong, for example when the PR only moved or reformatted the line. You can reject every link. The bug is then still real, with no known introducing PR.</p>
+  <h3>What a category is for</h3>
+  <p>It groups bugs of the same kind, such as "Race condition". Pick one from the list when it fits. Make a new one only for a new kind of bug.</p>
+  <h3>When to skip</h3>
+  <p><b>Not a bug / skip (3)</b>: the fix PR changed behavior on purpose, or is not a bug fix at all. Nothing is written, and the next run of <code>exhibit label</code> shows it again.</p>
+  <p>A review finding that was left for a later ticket is a real bug, so label it, and set <b>Known at review</b> to yes. That makes it a deferral, which never counts as a policy miss.</p>
+  <p><b>Later (D)</b>: you are not sure yet. Nothing is written, and you can come back to it.</p>
+  <h3>Keys</h3>
+  <p><kbd>1</kbd> Accept, <kbd>2</kbd> Edit, <kbd>3</kbd> Not a bug / skip, <kbd>D</kbd> Later, <kbd>←</kbd> <kbd>→</kbd> Back and Next, <kbd>K</kbd> keep every link, <kbd>R</kbd> reject every link, <kbd>?</kbd> this help. In a text field, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> accepts and <kbd>Esc</kbd> leaves the field.</p>
+  <p>Each answer is saved to <code>.exhibit/labels.jsonl</code> at once. Back and a new answer replace it.</p>
+  <button type="button" id="helpClose">Close</button>
+</aside>
+<script>
+'use strict';
+const API = location.pathname.replace(/\/?$/, '/') + 'api/';
+const NEW = '\u0000new';
+let state = null;
+let current = null;
+let showSummary = false;
+let poll = null;
+// What the person typed or switched on each defect, kept while they move between defects.
+const forms = new Map();
+// The defects this page told the server it showed, for the count of shown defects.
+const told = new Set();
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value === undefined || value === null || value === false) continue;
+    if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value === true ? '' : value);
+  }
+  for (const child of children.flat()) if (child !== null && child !== undefined && child !== false) node.append(child);
+  return node;
+}
+
+// A link only for a web address, so a title or body cannot carry a script link.
+function webLink(href, text) {
+  return /^https?:\/\//.test(href || '') ? el('a', { href, target: '_blank', rel: 'noopener', text }) : document.createTextNode(text);
+}
+
+const item = () => state.items.find((candidate) => candidate.id === current);
+const index = () => state.items.findIndex((candidate) => candidate.id === current);
+const unsaved = () => state.items.filter((candidate) => candidate.state !== 'saved');
+
+async function load() {
+  const response = await fetch(API + 'state');
+  state = await response.json();
+  if (current === null) {
+    const wanted = decodeURIComponent(location.hash.slice(1));
+    const start = state.items.find((candidate) => candidate.id === wanted) || state.items.find((candidate) => candidate.state === 'open') || unsaved()[0];
+    current = start ? start.id : null;
+    showSummary = !start;
+  }
+  render();
+}
+
+// The form for one defect: what the person typed, or else the saved answer, or else the draft.
+function formFor(entry) {
+  if (forms.has(entry.id)) return forms.get(entry.id);
+  const answer = entry.answer;
+  const draft = entry.draft;
+  const source = answer || draft || {};
+  const decided = {};
+  if (answer) for (const link of entry.links) decided[link.pr] = answer.rejected_prs.includes(link.pr) ? 'r' : 'k';
+  const known = answer && answer.known_at_review !== undefined ? answer.known_at_review : entry.review ? entry.review.known_at_review : null;
+  const form = { code: source.code || '', category: source.category || '', caught: answer ? answer.would_have_caught : '', links: decided, known, replaced: Boolean(answer && answer.draft === 'replaced') };
+  forms.set(entry.id, form);
+  return form;
+}
+
+function render() {
+  const left = unsaved().length;
+  document.getElementById('count').textContent = `${left} of ${state.items.length} left`;
+  renderList();
+  const main = document.getElementById('main');
+  main.replaceChildren();
+  const entry = item();
+  document.getElementById('actions').hidden = showSummary || !entry;
+  if (showSummary || !entry) {
+    main.append(summaryView());
+    return;
+  }
+  if (location.hash.slice(1) !== entry.id) history.replaceState(null, '', '#' + entry.id);
+  if (!told.has(entry.id)) {
+    told.add(entry.id);
+    post('seen', { id: entry.id }).catch(() => told.delete(entry.id));
+  }
+  main.append(fixView(entry), linksView(entry), labelView(entry));
+  if (!entry.ready && poll === null) poll = setTimeout(() => { poll = null; load(); }, 1000);
+}
+
+function renderList() {
+  const list = document.getElementById('list');
+  list.replaceChildren(...state.items.map((entry) => {
+    const word = entry.state === 'saved' ? (entry.labeled_by === 'claude_draft_confirmed' ? 'accepted' : entry.labeled_by === 'claude_draft_edited' ? 'edited' : 'saved') : entry.state === 'skipped' ? 'skipped' : entry.state;
+    return el('li', {}, el('button', { type: 'button', class: entry.id === current && !showSummary ? 'current' : '', onclick: () => go(entry.id) },
+      el('span', { class: 'nid', text: entry.id }), el('span', { class: 'ntitle', text: entry.fix.title }), el('span', { class: `badge ${entry.state}`, text: word })));
+  }));
+}
+
+function fixView(entry) {
+  const { fix } = entry;
+  const status = entry.state === 'saved' ? el('p', { class: 'saved-note', text: 'Saved in labels.jsonl. A new answer replaces it.' })
+    : entry.state === 'skipped' ? el('p', { class: 'meta', text: 'Skipped: nothing is written for it.' })
+    : entry.state === 'later' ? el('p', { class: 'meta', text: 'Left for later: nothing is written for it yet.' }) : null;
+  return el('section', {},
+    el('h2', { text: `${entry.id}, ${index() + 1} of ${state.items.length}` }),
+    el('p', { class: 'fixtitle' }, 'Fix PR ', webLink(fix.url, `#${fix.number}`), `: ${fix.title}`),
+    el('p', { class: 'meta', text: `Merged on ${String(fix.merged_at).slice(0, 10)}.` }),
+    el('p', { class: 'what' }, el('b', { text: 'The bug: ' }), fix.what),
+    status,
+    fix.body ? el('details', {}, el('summary', { text: 'The whole fix PR body' }), el('pre', { class: 'body', text: fix.body })) : null);
+}
+
+function linksView(entry) {
+  const form = formFor(entry);
+  const set = (pr, choice) => { form.links[pr] = choice; render(); };
+  const section = el('section', {},
+    el('h2', { text: 'Links: which earlier PR brought this bug?' }),
+    el('p', { class: 'meta', text: 'SZZ guessed these PRs. Keep a link when that PR really brought the bug, and reject it when SZZ guessed wrong.' }),
+    entry.links.length > 1 ? el('div', { class: 'bulk' },
+      el('button', { type: 'button', onclick: () => bulk('k') }, 'Keep all ', el('kbd', { text: 'K' })),
+      el('button', { type: 'button', onclick: () => bulk('r') }, 'Reject all ', el('kbd', { text: 'R' }))) : null);
+  for (const link of entry.links) {
+    const choice = form.links[link.pr];
+    const title = link.title === null ? `PR #${link.pr}` : `PR #${link.pr}: ${link.title}`;
+    const card = el('div', { class: `link ${choice === 'k' ? 'keep' : choice === 'r' ? 'reject' : ''}` },
+      el('div', { class: 'linkhead' },
+        el('span', { class: 'ltitle' }, webLink(link.url, title)),
+        el('span', { class: 'conf', text: `confidence ${Math.round(link.confidence * 100)}%` }),
+        el('span', { class: 'switch', role: 'group', 'aria-label': `PR ${link.pr}` },
+          el('button', { type: 'button', class: `k ${choice === 'k' ? 'on' : ''}`, 'aria-pressed': String(choice === 'k'), onclick: () => set(link.pr, 'k'), text: 'Keep' }),
+          el('button', { type: 'button', class: `r ${choice === 'r' ? 'on' : ''}`, 'aria-pressed': String(choice === 'r'), onclick: () => set(link.pr, 'r'), text: 'Reject' }))),
+      link.found_by === 'revert'
+        ? el('p', { class: 'meta', text: `Found from a revert: fix PR ${entry.fix_pr} reverts PR ${link.pr}, so there are no blamed lines. A revert is not always a bug, for example a rollback for a launch date.` })
+        : diffView(link));
+    section.append(card);
+  }
+  if (entry.unlinked > 0) section.append(el('p', { class: 'meta', text: `${entry.unlinked} more changed lines came from commits that are in no merged PR.` }));
+  return section;
+}
+
+// The blamed lines of one link as a small diff: the lines the fix changed, by file.
+function diffView(link) {
+  const box = el('div', { class: 'diff' });
+  let path = null;
+  for (const line of link.lines) {
+    if (line.path !== path) {
+      path = line.path;
+      box.append(el('div', { class: 'file', text: path }));
+    }
+    const text = line.text.replace(/\s+$/, '');
+    box.append(el('div', { class: 'row' },
+      el('span', { class: 'num', text: String(line.line) }),
+      el('span', { class: 'del', text: `- ${text === '' ? '(a blank line)' : text}` }),
+      el('span', { class: 'blame', text: `blame: ${line.commit.slice(0, 7)} by ${line.author || 'an unknown author'} on ${String(line.date).slice(0, 10)}: ${line.summary}` })));
+  }
+  if (link.more > 0) box.append(el('div', { class: 'file', text: `and ${link.more} more lines. .exhibit/history.jsonl has them all.` }));
+  return box;
+}
+
+function labelView(entry) {
+  const form = formFor(entry);
+  const { limits } = state;
+  const section = el('section', {}, el('h2', { text: 'The label' }));
+  if (!entry.ready) {
+    section.append(el('p', { class: 'draftnote', text: 'Claude is drafting a label for this defect. It shows here in a moment.' }));
+    return section;
+  }
+  if (entry.draft && !form.replaced) {
+    section.append(el('p', { class: 'draftnote' }, `Claude's draft (${entry.draft.model}), not saved yet. Edit any field, or `,
+      el('a', { href: '#', onclick: (event) => { event.preventDefault(); Object.assign(form, { replaced: true, code: '', category: '' }); render(); }, text: 'throw the draft away and write your own' }), '.'));
+  } else if (entry.draft && form.replaced) {
+    section.append(el('p', { class: 'draftnote', text: 'You threw Claude\'s draft away, so this label is your own.' }));
+  } else if (entry.draftStopped) {
+    section.append(el('p', { class: 'draftnote warn', text: `Claude could not draft ${entry.id}: ${entry.draftError}. ${entry.draftStopped} Drafting is stopped for the rest of this run, so label by hand.` }));
+  } else if (entry.draftError) {
+    section.append(el('p', { class: 'draftnote warn', text: `Claude could not draft ${entry.id}: ${entry.draftError}. Label it by hand.` }));
+  } else if (!state.drafting) {
+    section.append(el('p', { class: 'meta', text: 'No Claude draft: run exhibit label --review --claude for drafts.' }));
+  }
+
+  const code = el('input', { type: 'text', id: 'code', maxlength: limits.code, value: form.code, oninput: (event) => { form.code = event.target.value; } });
+  section.append(el('label', { class: 'field', for: 'code' }, 'What went wrong ', el('span', { class: 'hint', text: 'in a few words, one line' })), code);
+
+  const known = state.categories.includes(form.category);
+  const isNew = form.category !== '' && !known;
+  const select = el('select', { id: 'category', onchange: (event) => { form.category = event.target.value === NEW ? (form.newCategory || '') : event.target.value; form.pickedNew = event.target.value === NEW; render(); } },
+    el('option', { value: '', text: 'Pick a category…', selected: form.category === '' && !form.pickedNew }),
+    ...state.categories.map((name) => el('option', { value: name, text: name, selected: name === form.category })),
+    el('option', { value: NEW, text: 'New category…', selected: isNew || form.pickedNew }));
+  const typed = el('input', { type: 'text', id: 'newCategory', maxlength: limits.category, placeholder: 'The new category', value: isNew ? form.category : '', hidden: !(isNew || form.pickedNew),
+    oninput: (event) => { form.category = event.target.value; form.newCategory = event.target.value; } });
+  section.append(el('label', { class: 'field', for: 'category' }, 'Category ', el('span', { class: 'hint', text: 'the same kind of bug gets the same name' })), el('div', { class: 'catrow' }, select, typed));
+  if (isNew && state.categories.length > 0) section.append(el('p', { class: 'hint', text: `This is a new category. If the bug is the same kind as one in the list, pick that one, so the two can make a rule.` }));
+
+  const caught = el('textarea', { id: 'caught', maxlength: limits.would_have_caught, oninput: (event) => { form.caught = event.target.value; } });
+  caught.value = form.caught;
+  section.append(el('label', { class: 'field', for: 'caught' }, 'Would have caught it ', el('span', { class: 'hint', text: 'the evidence that would have caught this bug. Claude never drafts this.' })), caught);
+
+  const review = entry.review || { known_at_review: null };
+  const why = review.known_at_review === true ? `Exhibit proposes yes, because ${review.where} says: "${review.sentence}", and SZZ blamed PR ${review.pr}.` : 'Exhibit found no sign of it, so it proposes unknown.';
+  const radio = (value, text) => el('label', {}, el('input', { type: 'radio', name: 'known', checked: form.known === value, onchange: () => { form.known = value; } }), ` ${text}`);
+  section.append(el('label', { class: 'field' }, 'Known at review ', el('span', { class: 'hint', text: 'did review see this bug and leave it for a later ticket?' })),
+    el('p', { class: 'meta', text: why }),
+    el('div', { class: 'radios' }, radio(true, 'Yes, a deferral'), radio(false, 'No'), radio(null, 'Unknown')));
+  section.append(el('p', { class: 'error', id: 'error', hidden: true }));
+  return section;
+}
+
+function summaryView() {
+  const { summary } = state;
+  const { run } = summary;
+  const section = el('section', {}, el('h2', { text: 'Summary' }));
+  section.append(el('p', { text: `This run: ${run.labeled} labeled, ${run.skipped} skipped or left for later, ${run.open} of ${state.items.length} still with no label.` }));
+  if (summary.draftsText) for (const text of summary.draftsText) section.append(el('p', { class: 'meta', text }));
+  const ready = summary.categories.filter((row) => row.rule === 'ready');
+  section.append(el('p', { text: ready.length === 0 ? 'No category has two labeled defects from two PRs yet, so none can become a rule.' : `${ready.length} ${ready.length === 1 ? 'category has' : 'categories have'} two or more labeled defects from two or more PRs, so ${ready.length === 1 ? 'it' : 'they'} can become a rule with exhibit policy suggest.` }));
+  section.append(el('table', {},
+    el('thead', {}, el('tr', {}, el('th', { text: 'Category' }), el('th', { text: 'Defects' }), el('th', { text: 'With a kept link' }), el('th', { text: 'From PRs' }), el('th', { text: 'Rule' }))),
+    el('tbody', {}, summary.categories.map((row) => el('tr', {},
+      el('td', { text: row.category }), el('td', { text: `${row.defects.length}: ${row.defects.join(', ')}` }), el('td', { text: String(row.counted.length) }),
+      el('td', { text: row.prs.join(', ') }), el('td', { class: row.rule === 'ready' ? 'ready' : '', text: row.rule === 'ready' ? 'can become a rule' : row.rule }))))));
+  const left = unsaved();
+  if (left.length > 0) section.append(el('p', {}, `${left.length} still ${left.length === 1 ? 'has' : 'have'} no label: `, ...left.map((entry, i) => [i > 0 ? ', ' : '', el('a', { href: '#' + entry.id, onclick: (event) => { event.preventDefault(); go(entry.id); }, text: entry.id })])));
+  const done = el('button', { type: 'button', class: 'accept', onclick: finish, text: 'Finish: stop the page and print the summary in the terminal' });
+  section.append(el('p', {}, done), el('p', { class: 'meta', id: 'finished', hidden: true, text: 'The page is stopped. Every label is in .exhibit/labels.jsonl. You can close this tab.' }));
+  return section;
+}
+
+function go(id) {
+  current = id;
+  showSummary = false;
+  render();
+  window.scrollTo(0, 0);
+}
+
+function move(step) {
+  const next = state.items[index() + step];
+  if (next) go(next.id);
+  else if (step > 0) { showSummary = true; render(); }
+}
+
+// After an answer: the next defect with no label, after this one, or the summary when none is left.
+function advance() {
+  const at = index();
+  const after = state.items.slice(at + 1).concat(state.items.slice(0, at)).find((candidate) => candidate.state === 'open' || candidate.state === 'later');
+  if (after) go(after.id);
+  else { showSummary = true; render(); }
+}
+
+function bulk(choice) {
+  const entry = item();
+  if (!entry) return;
+  const form = formFor(entry);
+  for (const link of entry.links) form.links[link.pr] = choice;
+  render();
+}
+
+function showError(text) {
+  const box = document.getElementById('error');
+  if (!box) return;
+  box.textContent = text;
+  box.hidden = false;
+}
+
+async function post(path, body) {
+  const response = await fetch(API + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const reply = await response.json();
+  if (!response.ok) throw new Error(reply.error);
+  return reply;
+}
+
+async function act(action) {
+  const entry = item();
+  if (!entry) return;
+  const body = { id: entry.id, action };
+  if (action === 'save') {
+    const form = formFor(entry);
+    const open = entry.links.filter((link) => form.links[link.pr] === undefined);
+    if (!entry.ready) return showError('Claude is still drafting this defect. Wait a moment.');
+    if (open.length > 0) return showError(`Keep or reject each link first: PR ${open.map((link) => link.pr).join(', PR ')}.`);
+    if (form.code.trim() === '') return showError('Type what went wrong.');
+    if (form.category.trim() === '') return showError('Pick a category, or type a new one.');
+    if (form.caught.trim() === '') return showError('Type the evidence that would have caught it.');
+    Object.assign(body, {
+      code: form.code, category: form.category, would_have_caught: form.caught,
+      rejected_prs: entry.links.filter((link) => form.links[link.pr] === 'r').map((link) => link.pr),
+      known_at_review: form.known, ...(form.replaced ? { draft: 'replaced' } : {})
+    });
+  }
+  try {
+    state = await post('answer', body);
+  } catch (error) {
+    return showError(error.message);
+  }
+  forms.delete(entry.id);
+  advance();
+}
+
+async function finish() {
+  try {
+    await post('finish', {});
+  } catch (error) {
+    return;
+  }
+  for (const button of document.querySelectorAll('button')) button.disabled = true;
+  document.getElementById('finished').hidden = false;
+}
+
+function edit() {
+  const field = document.getElementById('code');
+  if (field) { field.focus(); field.select(); }
+}
+
+function toggleHelp(show) {
+  const help = document.getElementById('help');
+  help.hidden = show === undefined ? !help.hidden : !show;
+}
+
+document.getElementById('accept').addEventListener('click', () => act('save'));
+document.getElementById('edit').addEventListener('click', edit);
+document.getElementById('skip').addEventListener('click', () => act('skip'));
+document.getElementById('later').addEventListener('click', () => act('later'));
+document.getElementById('back').addEventListener('click', () => move(-1));
+document.getElementById('next').addEventListener('click', () => move(1));
+document.getElementById('helpButton').addEventListener('click', () => toggleHelp());
+document.getElementById('helpClose').addEventListener('click', () => toggleHelp(false));
+document.getElementById('summaryButton').addEventListener('click', () => { showSummary = true; render(); });
+
+document.addEventListener('keydown', (event) => {
+  const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && document.activeElement.type !== 'radio';
+  if (typing) {
+    if (event.key === 'Escape') document.activeElement.blur();
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); act('save'); }
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  // Arrow keys on a radio button pick the next radio, as a browser does.
+  if (document.activeElement.type === 'radio' && event.key.startsWith('Arrow')) return;
+  if (event.key === '?') return toggleHelp();
+  if (event.key === 'Escape') return toggleHelp(false);
+  if (showSummary || !item()) return;
+  const keys = { 1: () => act('save'), 2: edit, 3: () => act('skip'), d: () => act('later'), D: () => act('later'), ArrowLeft: () => move(-1), ArrowRight: () => move(1), k: () => bulk('k'), K: () => bulk('k'), r: () => bulk('r'), R: () => bulk('r') };
+  if (keys[event.key]) { event.preventDefault(); keys[event.key](); }
+});
+
+load().catch((error) => { document.getElementById('main').textContent = `The page could not load: ${error.message}`; });
+</script>
+</body>
+</html>

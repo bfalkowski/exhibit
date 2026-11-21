@@ -91,13 +91,7 @@ export function checkLabelLine(line) {
  * its draft is not counted.
  */
 export async function labelDefects({ cwd, ask, draft, issues, now = () => new Date() }) {
-  const history = await readHistory(cwd);
-  // endsWithBreak: the file ends in a line break.
-  const { labels, endsWithBreak } = await readLabels(cwd);
-  const done = new Set(labels.map((label) => label.id));
-  const categories = [...new Set(labels.map((label) => label.category))];
-  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence, found_by: foundBy }) => ({ pr, confidence, ...(foundBy ? { found_by: foundBy } : {}) })), fix }));
-  const open = defects.filter((defect) => !done.has(defect.id));
+  const { history, labels, endsWithBreak, categories, open } = await readLabeling(cwd);
 
   let shown = 0;
   let labeled = 0;
@@ -109,34 +103,16 @@ export async function labelDefects({ cwd, ask, draft, issues, now = () => new Da
   let stopped = false;
   for (const defect of open) {
     shown += 1;
-    const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const { drafted, draftError, draftStopped } = await askForDraft(stopped ? undefined : draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
-    if (draftStopped !== null) stopped = true;
-    const closed = closingIssues(defect.fix.body);
-    const review = proposeKnownAtReview({ fix: defect.fix, blamed: defect.introducing_prs, issues: issues === undefined || closed.length === 0 ? [] : await issues(closed, defect.fix) });
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped, review });
+    const prepared = await prepareDefect(defect, { history, draft: stopped ? undefined : draft, issues, categories });
+    if (prepared.draftStopped !== null) stopped = true;
+    const { text, drafted, draftError, draftStopped, review } = prepared;
+    const reply = await ask(publicDefect(defect), { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped, review });
     if (reply === QUIT) break;
     if (reply === SKIP) {
       skipped += 1;
       continue;
     }
-    const rejected = reply.rejected_prs ?? [];
-    const unknown = rejected.find((pr) => !defect.introducing_prs.includes(pr));
-    if (unknown !== undefined) throw new ToolError(`PR ${unknown} is not a link of ${defect.id}, so it cannot be rejected. Its links are PRs ${defect.introducing_prs.join(', ')}.`);
-    const line = {
-      id: defect.id,
-      fix_pr: defect.fix_pr,
-      introducing_prs: defect.introducing_prs.filter((pr) => !rejected.includes(pr)),
-      rejected_prs: defect.introducing_prs.filter((pr) => rejected.includes(pr)),
-      code: reply.code,
-      category: reply.category,
-      would_have_caught: reply.would_have_caught,
-      labeled_by: labeledBy(drafted, reply),
-      ...(drafted === null ? {} : { claude_draft: drafted }),
-      szz_link_rejected: rejected.length > 0,
-      known_at_review: reply.known_at_review === undefined ? review.known_at_review : reply.known_at_review,
-      labeled_at: now().toISOString()
-    };
+    const line = labelLine(defect, reply, { drafted, review, now });
     const problems = checkLabelLine(line);
     if (problems.length > 0) {
       throw new ToolError(`the label for ${defect.id} does not fit the labels schema, so it was not written:\n  ${problems.join('\n  ')}\n` +
@@ -151,6 +127,69 @@ export async function labelDefects({ cwd, ask, draft, issues, now = () => new Da
   const summary = { shown, labeled, skipped, open: open.length - labeled };
   if (draft === undefined) return summary;
   return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
+}
+
+/**
+ * Reads the history and the labels file, for labelDefects and for the review page
+ * (src/label-review.js). Returns { history, labels, endsWithBreak, categories, open }.
+ * `categories` are the categories in the labels file, in the order they first come. `open` are
+ * the escaped defects with no line in the file yet, newest fix first. Each has `id`, `fix_pr`,
+ * `introducing_prs`, `links` and `fix`, its history line. It throws a ToolError when a file is
+ * missing or does not fit its schema, as labelDefects does.
+ */
+export async function readLabeling(cwd) {
+  const history = await readHistory(cwd);
+  // endsWithBreak: the file ends in a line break.
+  const { labels, endsWithBreak } = await readLabels(cwd);
+  const done = new Set(labels.map((label) => label.id));
+  const categories = [...new Set(labels.map((label) => label.category))];
+  const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence, found_by: foundBy }) => ({ pr, confidence, ...(foundBy ? { found_by: foundBy } : {}) })), fix }));
+  return { history, labels, endsWithBreak, categories, open: defects.filter((defect) => !done.has(defect.id)) };
+}
+
+// The defect as the answer source sees it: without its history line.
+export function publicDefect(defect) {
+  return { id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links };
+}
+
+/**
+ * Gets what the person needs before they label one defect: its `text` with the SZZ evidence,
+ * Claude's draft when there is a drafter, and Exhibit's proposal for known_at_review. Returns
+ * { text, drafted, draftError, draftStopped, review }, as labelDefects passes them to `ask`.
+ */
+export async function prepareDefect(defect, { history, draft, issues, categories }) {
+  const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
+  const { drafted, draftError, draftStopped } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
+  const closed = closingIssues(defect.fix.body);
+  const review = proposeKnownAtReview({ fix: defect.fix, blamed: defect.introducing_prs, issues: issues === undefined || closed.length === 0 ? [] : await issues(closed, defect.fix) });
+  return { text, drafted, draftError, draftStopped, review };
+}
+
+/**
+ * The labels line for one defect from the person's `reply`: { code, category, would_have_caught,
+ * rejected_prs, known_at_review, draft }, as labelDefects describes it. `drafted` is Claude's draft
+ * or null, and `review` is Exhibit's proposal for known_at_review. It throws a ToolError when
+ * `rejected_prs` names a PR that is not a link of the defect. The caller checks the line against
+ * the schema with checkLabelLine before it writes it.
+ */
+export function labelLine(defect, reply, { drafted, review, now = () => new Date() }) {
+  const rejected = reply.rejected_prs ?? [];
+  const unknown = rejected.find((pr) => !defect.introducing_prs.includes(pr));
+  if (unknown !== undefined) throw new ToolError(`PR ${unknown} is not a link of ${defect.id}, so it cannot be rejected. Its links are PRs ${defect.introducing_prs.join(', ')}.`);
+  return {
+    id: defect.id,
+    fix_pr: defect.fix_pr,
+    introducing_prs: defect.introducing_prs.filter((pr) => !rejected.includes(pr)),
+    rejected_prs: defect.introducing_prs.filter((pr) => rejected.includes(pr)),
+    code: reply.code,
+    category: reply.category,
+    would_have_caught: reply.would_have_caught,
+    labeled_by: labeledBy(drafted, reply),
+    ...(drafted === null ? {} : { claude_draft: drafted }),
+    szz_link_rejected: rejected.length > 0,
+    known_at_review: reply.known_at_review === undefined ? review.known_at_review : reply.known_at_review,
+    labeled_at: now().toISOString()
+  };
 }
 
 // Returns { drafted, draftError, draftStopped }. All three are null when there is no drafter.
