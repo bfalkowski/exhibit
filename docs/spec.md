@@ -339,12 +339,13 @@ How `exhibit label` works:
 - With `--claude`, the end of the run also says how often the person kept Claude's draft unchanged, once for this run and once for the whole file (section 9.11). With `--json`, the summary line has the same numbers in `drafts`, with `run` and `file`. Each holds `shown`, `kept`, `edited`, `replaced` and `kept_share`, which is null when there are no drafts, and otherwise holds `kept`, `n`, `rate`, `low`, `high` and `weak`.
 - It exits 2 with a message that says to run `exhibit history` first when there is no `.exhibit/history.jsonl`, or when the history has no SZZ links. It exits 2 too when a history line fails the history schema, or a labels line is not JSON or fails the labels schema. It then names the line, and writes nothing.
 - A line for a defect that is no longer in the history, for example after a run of `exhibit history` with a smaller `--limit`, stays in the file.
-- `exhibit history` never changes this file. So when it runs again and SZZ links the fix to the same PRs, a rejected link stays rejected: the line keeps its `rejected_prs`, and `exhibit label` does not ask about the defect again.
+- `exhibit history` never changes this file. It reads it only to count the labels in the report's funnel (section 8.5). So when it runs again and SZZ links the fix to the same PRs, a rejected link stays rejected: the line keeps its `rejected_prs`, and `exhibit label` does not ask about the defect again.
 
 ### 8.5 Report
 
 `exhibit history` and `exhibit backtest` each write a report as a markdown file and a self-contained HTML file. The first screen of the history report shows:
 - The number of PRs read and the number of fix PRs.
+- The funnel of the history: how many defects are left at each step, up to the links that a person kept (below).
 - The escaped defects found, each with its SZZ evidence.
 - How sure Exhibit is, in plain words. With weak history, the report says so instead of guessing.
 
@@ -363,10 +364,18 @@ The first screen of the backtest report shows the funnel (section 9.9): how many
 The history report has these parts, in this order:
 
 1. **The counts.** The number of merged PRs read, the number of fix PRs, and how many of the fix PRs SZZ linked to an introducing PR. Each fix PR with at least one link is an escaped defect. When SZZ skipped a fix PR (section 9.2), the count says so. With no fix PRs, the report says so in one sentence and has no list of defects. Outside a clone, SZZ did not run, and the report says it cannot show escaped defects.
-2. **How sure Exhibit is.** Whether the history is weak, and why, in plain words, then the rule below.
-3. **The escaped defects**, newest fix first. For a revert, the report says that SZZ ran no git blame, and each introducing PR shows "evidence: revert" and the revert's number in place of lines. For each one: the fix PR and its title, the commit that SZZ blamed, and each introducing PR with its confidence as a percent and as a count of the fix's counted lines. Under each introducing PR are its lines (path, line number and text) and what `git blame` said about each one: the commit, the author, the date and the commit summary, and the first path and line when they differ. The lines that came from no merged PR are listed too. The report shows at most 5 lines for each link, then says how many more there are. `history.jsonl` has them all.
-4. **The fix PRs with no escaped defect found**, and why: a revert that names no PR in this repo that Exhibit found, a revert of a revert, SZZ skipped the PR, dropped every line (the `no_link_reason`), found its lines only in commits that are in no merged PR, or found no deleted or changed line to blame.
-5. **The fix PRs whose bug was found before release**: the fixes whose `classification.escaped` is `false` (section 9.1), each with its Jira issue. They are fix PRs, but not escaped defects, even when SZZ linked them, so `exhibit label` does not list them either. This part is there only when there is at least one.
+2. **Defects left at each step.** One funnel, so a reader sees where defects drop out before they reach a rule. One end-to-end count would hide a defect that was found and then lost.
+   1. Merged PRs read.
+   2. Fix PRs.
+   3. Fix PRs with an SZZ link: the escaped defects. A fix whose bug was found before release is not one (part 6).
+   4. Defects labeled: the escaped defects with a line in `.exhibit/labels.jsonl` (section 8.4). A line for a defect that is no longer in the history is not counted. Each defect counts once, by its first line, as in `exhibit label`. A second line for the same fix PR, for example from a merge of two label files, is not counted again.
+   5. Defects with at least one link that a person kept: the labeled defects whose `introducing_prs` is not empty. A defect whose links the person all rejected counts as labeled, but not as kept.
+
+   `exhibit history` reads `.exhibit/labels.jsonl` only to count it, and never changes it. With no labels file, steps 4 and 5 say "not labeled yet" in place of a number. When the file cannot be read, or a line is not JSON or fails the labels schema, steps 4 and 5 say "the labels could not be read", a sentence under the funnel names the problem, `exhibit history` gives a warning on stderr, and the run still succeeds. Outside a clone, SZZ did not run, so steps 3 to 5 say "SZZ did not run". `--json` gives the same counts in its `funnel` field, for example `{ "merged_prs": 14, "fix_prs": 7, "szz_linked": 4, "labeled": 2, "kept": 1, "labels": "read" }`. A step with no number is null there, and `labels` is `none`, `read` or `unreadable`. The backtest steps (a rule's `source`, and what the policy would have flagged) are in the backtest report, not here.
+3. **How sure Exhibit is.** Whether the history is weak, and why, in plain words, then the rule below.
+4. **The escaped defects**, newest fix first. For a revert, the report says that SZZ ran no git blame, and each introducing PR shows "evidence: revert" and the revert's number in place of lines. For each one: the fix PR and its title, the commit that SZZ blamed, and each introducing PR with its confidence as a percent and as a count of the fix's counted lines. Under each introducing PR are its lines (path, line number and text) and what `git blame` said about each one: the commit, the author, the date and the commit summary, and the first path and line when they differ. The lines that came from no merged PR are listed too. The report shows at most 5 lines for each link, then says how many more there are. `history.jsonl` has them all.
+5. **The fix PRs with no escaped defect found**, and why: a revert that names no PR in this repo that Exhibit found, a revert of a revert, SZZ skipped the PR, dropped every line (the `no_link_reason`), found its lines only in commits that are in no merged PR, or found no deleted or changed line to blame.
+6. **The fix PRs whose bug was found before release**: the fixes whose `classification.escaped` is `false` (section 9.1), each with its Jira issue. They are fix PRs, but not escaped defects, even when SZZ linked them, so `exhibit label` does not list them either. This part is there only when there is at least one.
 
 **Weak history.** The history is weak when one of these is true:
 

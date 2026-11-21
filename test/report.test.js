@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildReport, defectText, escapedDefects, WEAK_HISTORY } from '../src/report.js';
+import { buildReport, defectText, escapedDefects, funnel, WEAK_HISTORY } from '../src/report.js';
 import { DEFAULT_FIX_SIGNALS } from '../src/fix-signals.js';
 import { SHOP_HISTORY, SHOP_REPO, shopHistoryText } from './fixtures/report/shop-history.js';
 
@@ -248,4 +248,73 @@ test('a revert link shows "revert" as its evidence, in place of blame lines, in 
   assert.deepEqual(factsIn(markdownText(markdown)).defects, [15, 14, 12, 7, 6]);
   // A revert link is strong: it holds the whole fix.
   assert.match(markdown, /SZZ linked 5 of them/);
+});
+
+// A labels line for the fix PR `fixPr`, that keeps the links in `kept` and rejects the rest.
+function labelLine(fixPr, { kept = [], rejected = [] }) {
+  return { id: `D-${String(fixPr).padStart(3, '0')}`, fix_pr: fixPr, introducing_prs: kept, rejected_prs: rejected, code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: rejected.length > 0, labeled_at: '2026-11-21T00:00:00.000Z' };
+}
+
+// The steps of the funnel, as "name: count", in the order the report shows them.
+const funnelSteps = (text) => text.slice(text.indexOf('Defects left at each step')).split('\n').filter((row) => /^\s*(- )?[A-Z].*: /.test(row)).slice(0, 5).map((row) => row.replace(/^\s*- /, '').trim());
+
+test('the funnel counts a defect whose links were all rejected as labeled, but not as kept', () => {
+  // The shop history has 4 escaped defects: fix PRs 14, 12, 7 and 6. Fix PR 7 links PRs 2 and 3.
+  const labels = { state: 'read', lines: [labelLine(12, { kept: [1, 11] }), labelLine(7, { rejected: [2, 3] })] };
+  assert.deepEqual(funnel(shopLines(), { szzRan: true, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 2, kept: 1, labels: 'read' });
+  const { markdown } = report(shopLines(), { labels });
+  assert.deepEqual(funnelSteps(markdownText(markdown)), [
+    'Merged PRs read: 14',
+    'Fix PRs: 7',
+    'Fix PRs with an SZZ link, the escaped defects: 4',
+    'Defects labeled with exhibit label: 2',
+    'Defects with at least one link that a person kept: 1'
+  ]);
+});
+
+test('a label for a defect that is no longer in the history is not counted', () => {
+  const labels = { state: 'read', lines: [labelLine(12, { kept: [1] }), labelLine(99, { kept: [1] })] };
+  assert.deepEqual(funnel(shopLines(), { szzRan: true, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 1, kept: 1, labels: 'read' });
+});
+
+test('with no labels file, the last two steps of the funnel say "not labeled yet"', () => {
+  assert.deepEqual(funnel(shopLines(), { szzRan: true, labels: { state: 'none' } }), { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: null, kept: null, labels: 'none' });
+  const { markdown } = report(shopLines(), { labels: { state: 'none' } });
+  assert.deepEqual(funnelSteps(markdownText(markdown)).slice(3), ['Defects labeled with exhibit label: not labeled yet', 'Defects with at least one link that a person kept: not labeled yet']);
+});
+
+test('labels that could not be read make the funnel say so, and name the problem', () => {
+  const labels = { state: 'unreadable', problem: '.exhibit/labels.jsonl line 2 is not JSON' };
+  assert.equal(funnel(shopLines(), { szzRan: true, labels }).labels, 'unreadable');
+  const text = markdownText(report(shopLines(), { labels }).markdown);
+  assert.deepEqual(funnelSteps(text).slice(3), ['Defects labeled with exhibit label: the labels could not be read', 'Defects with at least one link that a person kept: the labels could not be read']);
+  assert.match(text, /Exhibit could not read the labels, so it does not count them: \.exhibit\/labels\.jsonl line 2 is not JSON/);
+});
+
+test('outside a clone, the funnel stops at the fix PRs, because SZZ did not run', () => {
+  const labels = { state: 'read', lines: [labelLine(12, { kept: [1] })] };
+  assert.deepEqual(funnel(shopLines(), { szzRan: false, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: null, labeled: null, kept: null, labels: 'read' });
+  assert.deepEqual(funnelSteps(markdownText(report(shopLines(), { szzRan: false, labels }).markdown)).slice(2), [
+    'Fix PRs with an SZZ link, the escaped defects: SZZ did not run',
+    'Defects labeled with exhibit label: SZZ did not run',
+    'Defects with at least one link that a person kept: SZZ did not run'
+  ]);
+});
+
+test('report.md and report.html show the same funnel, on the first screen', () => {
+  for (const labels of [{ state: 'read', lines: [labelLine(7, { rejected: [2, 3] })] }, { state: 'none' }]) {
+    const { markdown, html } = report(shopLines(), { labels });
+    const steps = funnelSteps(markdownText(markdown));
+    assert.equal(steps.length, 5);
+    assert.deepEqual(funnelSteps(htmlText(html)), steps);
+    // The funnel comes after the counts and before how sure Exhibit is.
+    assert.ok(markdown.indexOf('Exhibit read 14') < markdown.indexOf('Defects left at each step') && markdown.indexOf('Defects left at each step') < markdown.indexOf('## How sure Exhibit is'));
+  }
+});
+
+test('two label lines for one fix PR count it once, by its first line, so the funnel never goes up', () => {
+  // A second line can come from a merge of two label files, or a hand edit. The first line wins,
+  // as in exhibit label. Here the first line rejects every link, and the second keeps one.
+  const labels = { state: 'read', lines: [labelLine(7, { rejected: [2, 3] }), labelLine(7, { kept: [2], rejected: [3] })] };
+  assert.deepEqual(funnel(shopLines(), { szzRan: true, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 1, kept: 0, labels: 'read' });
 });
