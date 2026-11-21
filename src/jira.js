@@ -23,6 +23,19 @@ export const JIRA_TRACKER = {
   }
 };
 
+// Connects the Jira tracker for exhibit history and exhibit check (spec 9.1). It returns
+// { tracker, note }. tracker is null when the fix signals do not hold tracker:jira, and null with
+// a note when JIRA_API_TOKEN is not set: then the signal matches no PR, and every other signal
+// still works. The caller shows the note in one line. Otherwise note is null.
+export function connectTracker(settings, { env, fetch }) {
+  if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return { tracker: null, note: null };
+  const token = env[JIRA_TRACKER.tokenEnv];
+  if (!token) {
+    return { tracker: null, note: `${JIRA_TRACKER.tokenEnv} is not set, so the tracker:jira fix signal matched no PR. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.` };
+  }
+  return { tracker: JIRA_TRACKER.connect({ settings: settings.jira, token, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch }), note: null };
+}
+
 // A reply from Jira that is not OK. `status` is its HTTP status. As for GitHubReplyError, a
 // refused token (401), a missing permission (403) or a rate limit (429) stops the run, because
 // every later request would fail too. Any other status, such as a 503, is a problem with one
