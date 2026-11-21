@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
@@ -8,7 +9,7 @@ import { MUTATION_DIR } from '../mutation.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
-import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
+import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe, stopAllGroups } from '../probe.js';
 import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
 
@@ -90,12 +91,14 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 
   // The head worktree for probes is made only when a probe asks for it, and removed at the end.
   const headWorktree = worktreeOnDemand(cwd, head);
+  const stopOnSignal = onStopSignal(() => headWorktree.remove());
   let exhibit;
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
     exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
   } finally {
+    stopOnSignal.off();
     await headWorktree.remove();
   }
   const problems = checkExhibit(exhibit);
@@ -115,6 +118,27 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     if (shadow) stdout.write('Shadow mode: nothing waits on this verdict, so the exit code is 0.\n');
   }
   return code;
+}
+
+// While probes run, a Ctrl-C (SIGINT) or a SIGTERM stops Exhibit in a clean way (spec 9.6). A
+// probe runs in a process group of its own, so the signal does not reach it, and Node would exit
+// at once without running any finally block. So the handler kills every probe's group, runs
+// `cleanUp`, which removes the head worktree, and then exits with the usual code for the signal:
+// 128 plus the signal's number, so 130 for SIGINT and 143 for SIGTERM. A second signal while it
+// cleans up changes nothing. `off()` removes the handlers.
+function onStopSignal(cleanUp) {
+  let stopping = false;
+  const handler = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    stopAllGroups();
+    cleanUp()
+      .catch(() => {})
+      .finally(() => process.exit(128 + constants.signals[signal]));
+  };
+  const signals = ['SIGINT', 'SIGTERM'];
+  for (const signal of signals) process.on(signal, handler);
+  return { off: () => signals.forEach((signal) => process.off(signal, handler)) };
 }
 
 // The collector for probe requirements. Each probe runs in the head worktree, made clean again

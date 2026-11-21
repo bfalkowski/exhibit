@@ -70,11 +70,27 @@ function failure(outcome, missing, timeoutSeconds) {
   return null;
 }
 
+// The kill function of each process group that runInGroup started and that may still run. A probe
+// runs in a group of its own, so a Ctrl-C in the terminal does not reach it. stopAllGroups uses
+// this set to stop the groups when Exhibit itself is stopped.
+const liveGroups = new Set();
+let stopping = false;
+
+// Kills every process group that runInGroup started and that may still run, for a signal handler
+// that stops Exhibit (spec 9.6). After it, runInGroup starts no new command, and a call that waits
+// for a command never returns, so no probe goes on to read a worktree that is being removed. Call
+// it only when Exhibit is about to exit.
+export function stopAllGroups() {
+  stopping = true;
+  for (const killGroup of liveGroups) killGroup();
+}
+
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
 // Then it kills the whole group. Gives back { code, signal, timedOut }. With `args`, `command` is
 // a program that runs with those arguments, and no shell. `env` is the env of the command, and the
 // env of Exhibit when it is left out. The output goes to `logFile`, or nowhere when it is null.
 export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
+  if (stopping) return new Promise(() => {});
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
     const output = log === null ? 'ignore' : log.fd;
@@ -89,6 +105,7 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
         if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error;
       }
     };
+    if (child.pid !== undefined) liveGroups.add(killGroup);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -99,9 +116,11 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
         child.once('error', reject);
         child.once('exit', (code, signal) => resolve({ code, signal }));
       });
+      if (stopping) await new Promise(() => {});
       return { code, signal, timedOut };
     } finally {
       clearTimeout(timer);
+      liveGroups.delete(killGroup);
       if (child.pid !== undefined) killGroup();
     }
   } finally {
