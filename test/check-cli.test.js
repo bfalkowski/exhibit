@@ -110,6 +110,15 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   writeFileSync(join(fixture.repo, 'src', 'main.js'), 'import { run } from "node:test";\nrun();\n');
   git('add', 'src/main.js');
   git('commit', '-q', '-m', 'move and rewrite app');
+  // A file outside the source paths that moves into src with no change.
+  git('checkout', '-q', '-b', 'with-lib', 'start');
+  mkdirSync(join(fixture.repo, 'lib'), { recursive: true });
+  writeFileSync(join(fixture.repo, 'lib', 'util.js'), 'export const util = 1;\n');
+  git('add', 'lib/util.js');
+  git('commit', '-q', '-m', 'add lib');
+  git('checkout', '-q', '-b', 'into-src');
+  git('mv', 'lib/util.js', 'src/util.js');
+  git('commit', '-q', '-m', 'move util into src');
   git('checkout', '-q', 'main');
 
   exhibitCheck(fixture, ['--base', 'start', '--head', 'new-src']);
@@ -132,6 +141,10 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   // A file that moves and changes more than half of its content counts as a new file (spec 9.1).
   exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-and-rewritten']);
   assert.equal(readEvidence(fixture.repo).classification.feature, true);
+
+  // A file that moves into a source path from outside it, with no change, is a rename, not a new file.
+  exhibitCheck(fixture, ['--base', 'with-lib', '--head', 'into-src']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, false);
 });
 
 test('check exits 1 for a change to evidence.yml', (t) => {
