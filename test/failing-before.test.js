@@ -87,8 +87,8 @@ test('double is checked once', () => {
 
 // A repo with the bug on main (tag start), and one branch for each case. A branch whose name
 // starts with fix/ is a fix by the default fix signals.
-// `command` is the policy's test command.
-function buildRepo(t, command = NODE_TESTS) {
+// `command` is the policy's test command. `more(dir)` gives more files for the start commit.
+function buildRepo(t, command = NODE_TESTS, more = () => ({})) {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-failing-before-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, 'home');
@@ -118,7 +118,8 @@ function buildRepo(t, command = NODE_TESTS) {
     'package.json': '{ "type": "module" }\n',
     'README.md': 'Math.\n',
     'src/math.js': BUGGY,
-    'test/math.test.js': MATH_TEST
+    'test/math.test.js': MATH_TEST,
+    ...more(dir)
   }, 'start');
   git('tag', 'start');
   branch('fix/new-test', { 'src/math.js': FIXED, 'test/double.test.js': `${header}import { double } from '../src/math.js';\ntest('double doubles', () => assert.equal(double(2), 4));\n` });
@@ -320,6 +321,74 @@ test('when nothing loads on the base with the PR\'s tests, only the PR\'s tests 
   ]);
   assert.deepEqual(requirement.details.did_not_load_on_base, ['new.test.js']);
   assert.deepEqual(requirement.details.passed_on_base, []);
+});
+
+// A test that the PR did not change can fail by chance on the base with the PR's tests, for
+// example a slow test on a busy machine. Here a test in a file the PR did not change passes on its
+// first two runs, the plain base run and the head, and fails on every run after that.
+const LATER_FAILS = (counter) => `${header}import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+test('the load stays low', () => {
+  const runs = existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0;
+  writeFileSync(${JSON.stringify(counter)}, String(runs + 1));
+  assert.ok(runs < 2, 'run ' + (runs + 1));
+});
+`;
+
+test('a test the PR did not change that fails only on the base with the PR\'s tests does not count when its name gives its file', async (t) => {
+  const fixture = buildRepo(t, NODE_TESTS, (dir) => ({ 'test/load.test.js': LATER_FAILS(join(dir, 'runs.txt')) }));
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/weak-test');
+  assert.deepEqual(requirement.details.test_files, ['test/double.test.js']);
+  assert.deepEqual(evidence.flaky_tests, []);
+  if (requirement.details.passed_on_base.some((name) => name.startsWith('test/double.test.js > '))) {
+    assert.equal(requirement.status, 'missing');
+    assert.deepEqual(requirement.details.tests, []);
+    assert.equal(evidence.verdict, 'needs_person');
+  } else {
+    // Node 20 gives no file in a test's name, so Exhibit cannot tell that the test is in a file
+    // the PR did not change. Only its changed result shows a changed test there (spec 9.4).
+    assert.deepEqual(requirement.details.tests.map((item) => item.name), ['test > the load stays low']);
+  }
+  assertNoWorktreeLeft(fixture);
+});
+
+// The same case with test results made by hand, as canary 4 on Building58 saw it: the PR's own
+// test fails on the base and counts, and a test in a file it did not change failed there by chance.
+test('a test in a file the PR did not change counts only when the plain base run does not have it', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const run = async (overlay) => {
+    const runTests = async () => ({
+      base: new Map([['test/a.test.js > a', 'passed'], ['test/desk.test.js > d', 'passed']]),
+      head: new Map([['test/a.test.js > a', 'passed'], ['test/desk.test.js > d', 'passed'], ['test/desk.test.js > e', 'passed']])
+    });
+    const exhibit = await buildExhibit({
+      policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['test/a.test.js', 'src/a.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+      signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+    }, { runTests, runBaseWithPrTests: async () => overlay, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+    return exhibit.requirements[0];
+  };
+  const chance = await run(new Map([['test/a.test.js > a', 'passed'], ['test/desk.test.js > d', 'failed']]));
+  assert.equal(chance.status, 'missing');
+  assert.deepEqual(chance.details.tests, []);
+  assert.deepEqual(chance.details.passed_on_base, ['test/a.test.js > a']);
+  const both = await run(new Map([['test/a.test.js > a', 'failed'], ['test/desk.test.js > d', 'failed']]));
+  assert.deepEqual(both.details.tests, [{ name: 'test/a.test.js > a', on_base: 'failed' }]);
+  // A test that only the run with the PR's tests and the head have is new, so it is the PR's,
+  // for example a test in a file that a changed helper adds tests to.
+  const added = await run(new Map([['test/a.test.js > a', 'passed'], ['test/desk.test.js > d', 'passed'], ['test/desk.test.js > e', 'failed']]));
+  assert.deepEqual(added.details.tests, [{ name: 'test/desk.test.js > e', on_base: 'failed' }]);
+});
+
+// Node 20 gives no file in a test's name. Then a changed result is the only sign of a test that
+// the PR changed in a file it already had, so that rule stays for such names.
+test('a test whose name gives no file still counts when its result changed', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const runTests = async () => ({ base: new Map([['test > a', 'passed'], ['test > b', 'passed']]), head: new Map([['test > a', 'passed'], ['test > b', 'passed']]) });
+  const runBaseWithPrTests = async () => new Map([['test > a', 'failed'], ['test > b', 'passed']]);
+  const exhibit = await buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['test/a.test.js', 'src/a.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+  assert.deepEqual(exhibit.requirements[0].details.tests, [{ name: 'test > a', on_base: 'failed' }]);
 });
 
 test('a change that is neither fix nor feature skips failing-before with the reason, and can still meet the policy', async (t) => {
