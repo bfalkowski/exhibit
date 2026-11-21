@@ -646,8 +646,9 @@ export function createGitHubForge({ repo, ...client }) {
           return found.id === (await thisRepo()).id;
         });
       } catch (error) {
-        // Only a 5xx for the named repo gets here: the inner catch answers every 4xx. An error on
-        // this repo's own reply is thrown, as for any other request.
+        // A 5xx gets here, from the named repo or from this repo's own reply. Both give false for
+        // this fix. The inner catch answers every 4xx for the named repo, and a 4xx on this repo's
+        // own reply is thrown.
         if (canNotRead(error) && error.status >= 500) return false;
         throw error;
       }
