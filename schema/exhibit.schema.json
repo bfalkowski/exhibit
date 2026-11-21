@@ -35,6 +35,7 @@
         "fix": { "type": "boolean" },
         "fix_signal": { "type": ["string", "null"] },
         "feature": { "type": "boolean" },
+        "feature_signal": { "type": ["string", "null"], "pattern": "^(label:feature|added:.+)$", "description": "Why the change is a feature: label:feature, or added: and the first added path that a source glob matches. null when the change is no feature. exhibit check always writes it. It is not required, so an exhibit stored before the field still fits." },
         "signals_from": { "enum": ["pr", "branch"], "description": "pr: the forge gave the title, labels and branch. branch: only the local branch name was known." },
         "merge_without_reading": { "enum": ["allowed", "never"] },
         "used_default": { "type": "boolean" },
