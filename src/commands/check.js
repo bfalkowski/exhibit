@@ -191,7 +191,7 @@ function waitForever() {
 // The collector for probe requirements. Each probe runs in the head worktree, made clean again
 // before each probe, so no probe sees the files of the one before it. Each keeps its files in its
 // own folder under .exhibit/probes, named after the probe. Each gets the run's env, as the test
-// command does.
+// command does, but with a fresh folder of its own as TMPDIR, TMP, TEMP and HOME (runProbe).
 export function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
   const used = new Set();
   return async (requirement, context) => {

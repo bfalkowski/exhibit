@@ -190,6 +190,70 @@ test('a hidden probe keeps no output and no artifacts', async (t) => {
   assert.match(result.how_to_fix, /hidden check/);
 });
 
+// Spec 9.6: each probe gets a fresh folder of its own as TMPDIR, TMP, TEMP and HOME, and Exhibit
+// removes it after the probe. So a hidden probe's file there cannot reach a later probe that is
+// not hidden, through its artifact or through its output.log.
+test('a later probe does not see the files a hidden probe wrote to $TMPDIR or $HOME', async (t) => {
+  const where = setup(t);
+  const env = { PATH: process.env.PATH, TMPDIR: join(where.dir, 'shared-tmp'), HOME: join(where.dir, 'shared-home') };
+  mkdirSync(env.TMPDIR);
+  mkdirSync(env.HOME);
+  const hidden = await runProbe(
+    probe({ name: 'h', run: 'echo secret-from-hidden > "$TMPDIR/shared.txt" && echo secret-from-hidden > "$HOME/shared.txt"', hidden: true }),
+    { ...where, outDir: join(where.dir, 'out', 'probes', 'h'), outPath: '.exhibit/probes/h', timeoutSeconds: 10, env }
+  );
+  assert.equal(hidden.status, 'met');
+  const visible = await runProbe(
+    probe({ run: 'cat "$TMPDIR/shared.txt" "$HOME/shared.txt"; cat "$TMPDIR/shared.txt" "$HOME/shared.txt" > out.txt; true', artifacts: ['out.txt'] }),
+    { ...where, timeoutSeconds: 10, env }
+  );
+  assert.equal(visible.status, 'met');
+  assert.doesNotMatch(readFileSync(join(where.outDir, 'artifacts', 'out.txt'), 'utf8'), /secret-from-hidden/);
+  assert.doesNotMatch(readFileSync(join(where.outDir, 'output.log'), 'utf8'), /secret-from-hidden/);
+  // The run's own TMPDIR and HOME stay empty: the probe wrote to its own folder.
+  assert.deepEqual(readdirSync(env.TMPDIR), []);
+  assert.deepEqual(readdirSync(env.HOME), []);
+});
+
+test('a probe gets one fresh folder as TMPDIR, TMP, TEMP and HOME, and Exhibit removes it after the probe', async (t) => {
+  const where = setup(t);
+  const env = { PATH: process.env.PATH, TMPDIR: '/run-tmp', HOME: '/run-home', MARK: 'kept' };
+  const run = 'echo "$TMPDIR" > dirs.txt; echo "$TMP" >> dirs.txt; echo "$TEMP" >> dirs.txt; echo "$HOME" >> dirs.txt; echo "$MARK" >> dirs.txt; ls -A "$HOME" >> dirs.txt; touch "$HOME/left-behind"';
+  const result = await runProbe(probe({ run, artifacts: ['dirs.txt'] }), { ...where, timeoutSeconds: 10, env });
+  assert.equal(result.status, 'met');
+  const [tmp, tmpAlias, temp, home, mark, ...listed] = readFileSync(join(where.worktree, 'dirs.txt'), 'utf8').trim().split('\n');
+  assert.equal(tmpAlias, tmp);
+  assert.equal(temp, tmp);
+  assert.equal(home, tmp);
+  assert.equal(mark, 'kept');
+  // The folder was empty when the probe started.
+  assert.deepEqual(listed, []);
+  assert.notEqual(tmp, '/run-tmp');
+  assert.equal(existsSync(tmp), false);
+  // The caller's env is not changed.
+  assert.deepEqual(env, { PATH: process.env.PATH, TMPDIR: '/run-tmp', HOME: '/run-home', MARK: 'kept' });
+});
+
+test('Exhibit removes the probe folder after a probe that fails or times out', async (t) => {
+  const where = setup(t);
+  for (const [run, timeoutSeconds] of [['echo "$HOME" > home.txt; exit 3', 10], ['echo "$HOME" > home.txt; sleep 30', 1]]) {
+    const result = await runProbe(probe({ run }), { ...where, timeoutSeconds, env: { PATH: process.env.PATH } });
+    assert.equal(result.status, 'failed');
+    const home = readFileSync(join(where.worktree, 'home.txt'), 'utf8').trim();
+    assert.notEqual(home, '');
+    assert.equal(existsSync(home), false);
+  }
+});
+
+test('Exhibit removes the probe folder when the probe left a folder in it that it may not write to', async (t) => {
+  const where = setup(t);
+  // Go leaves its module cache like this: folders with no write right.
+  const run = 'echo "$HOME" > home.txt; mkdir -p "$HOME/cache/mod" && touch "$HOME/cache/mod/f" && chmod 500 "$HOME/cache/mod" "$HOME/cache"';
+  const result = await runProbe(probe({ run }), { ...where, timeoutSeconds: 10, env: { PATH: process.env.PATH } });
+  assert.equal(result.status, 'met');
+  assert.equal(existsSync(readFileSync(join(where.worktree, 'home.txt'), 'utf8').trim()), false);
+});
+
 // True when no process has this pid, within 2 seconds. A killed process can take a moment to be
 // reaped by its new parent.
 async function gone(pid) {
