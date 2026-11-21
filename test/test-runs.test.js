@@ -161,6 +161,41 @@ test('a test command that is not found gives error, and verdict error', async (t
   assertNoWorktreeLeft(fixture);
 });
 
+test('a test that never ends hits the time limit: Exhibit stops it and its children, gives error, and removes the worktrees', async (t) => {
+  const fixture = buildRepo(t);
+  // node --test runs each test file in a child process. The hanging test writes the pid of that
+  // child, so the test can see that Exhibit stopped the children too, not only the shell.
+  const pidFile = join(dirname(fixture.repo), 'hang.pid');
+  const HANG_TEST = `import { test } from 'node:test';
+import { writeFileSync } from 'node:fs';
+test('never ends', () => new Promise(() => {
+  writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+  setInterval(() => {}, 1000);
+}));
+`;
+  fixture.git('checkout', '-q', '-b', 'hang', 'start');
+  writeFileSync(join(fixture.repo, 'test', 'hang.test.js'), HANG_TEST);
+  fixture.git('add', 'test/hang.test.js');
+  fixture.git('commit', '-q', '-m', 'hang');
+  fixture.git('checkout', '-q', 'main');
+  fixture.setBasePolicy(policy().replace('settings:\n', 'settings:\n  test_timeout_seconds: 5\n'));
+
+  const started = Date.now();
+  const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'hang');
+  assert.ok(Date.now() - started < 60_000, 'exhibit check stopped soon after the time limit');
+  assert.equal(requirement.status, 'error');
+  assert.match(requirement.details.message, /ran past the time limit of 5 seconds on the head/);
+  assert.match(gap.how_to_fix, /ran past the time limit of 5 seconds \(settings\.test_timeout_seconds\) on the head/);
+  assert.match(gap.how_to_fix, /raise settings\.test_timeout_seconds in evidence\.yml/);
+  assert.equal(evidence.verdict, 'error');
+  assert.equal(code, 2);
+  assertNoWorktreeLeft(fixture);
+
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, `the test process ${pid} still runs`);
+});
+
 test('a policy with no test command gives missing, so a person must check the tests', async (t) => {
   const fixture = buildRepo(t);
   fixture.setBasePolicy('version: 3\ndefault:\n  risk: low\n  needs: [tests-before-after]\n');
