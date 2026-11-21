@@ -775,3 +775,23 @@ test('comments: with the file, an indented Python comment that the fix turns bac
   const result = countedLines(diff({ path: 'a.py', hunks: [{ at: 2, deleted: ['    # return total'], added: ['    return total'] }] }), files({ 'a.py': before }, { 'a.py': after }));
   assert.deepEqual(counted(result), [['a.py', [2]]]);
 });
+
+test('comments: a later code row with "/*" only in quotes or after "//" does not stop the look for the block end', () => {
+  for (const code of ['x = 1; // see /*', "s = '/*';", 's = "a/*b";', 's = `/*`;', "s = '\\'/*';"]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', code, ' */'] }] }));
+    const comments = dropped(result).filter(([, line]) => line !== 6);
+    assert.deepEqual(comments, [['a.js', 5, 'comment'], ['a.js', 7, 'comment']], code);
+  }
+});
+
+test('comments: a later code row with a real "/*" after a string still stops the look for the block end', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', "s = '//'; /* a", ' * b */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
+});
+
+test('comments: a known wrong guess: a quote or "//" in a regex literal hides a later "/*" on the row', () => {
+  for (const code of ["r = /'/; /* a", 'r = /\\/\\//; /* a']) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', code, ' * b */'] }] }));
+    assert.deepEqual(counted(result), [['a.js', [6]]], code);
+  }
+});
