@@ -18,6 +18,10 @@ export function buildBacktestReport(result, { repo, fromText = null }) {
     blocks.push(paragraph('Without the rules that leak:'));
     blocks.push(countsTable(result.counts_without_leaks));
   }
+  if (result.counts_before_rerun) {
+    blocks.push(paragraph('Before the rerun, from the exhibits and the PR bodies only:'));
+    blocks.push(countsTable(result.counts_before_rerun));
+  }
   blocks.push(paragraph(
     'Each share has its count and its 95% interval. A defect counts once for each of its kept introducing PRs in the test set, under each kind that the PR matches. ' +
     'Caught means the policy would have given that PR needs_person. Strong means a requirement that is missing, not unknown, comes from a rule whose source names a defect of the same category. ' +
@@ -28,7 +32,8 @@ export function buildBacktestReport(result, { repo, fromText = null }) {
     blocks.push(paragraph(`${plural(result.deferrals.length, 'deferral')} left out: ${result.deferrals.join(', ')}. Review saw each one and left it for a later ticket, so it is never a policy miss, and its introducing PR is not a clean PR either.`));
   }
   blocks.push(...replayBlocks(result));
-  blocks.push(...basisBlocks(result.prs));
+  if (result.rerun) blocks.push(...rerunBlocks(result));
+  blocks.push(...basisBlocks(result.prs, result.rerun !== undefined));
   return renderReport(`Backtest of the policy on ${repo}`, blocks);
 }
 
@@ -115,17 +120,55 @@ function verdictText({ verdict, missing, strong }) {
   return `needs_person, caught. Missing: ${missing.join(', ')}. ${strong ? 'A strong catch.' : 'Not a strong catch.'}`;
 }
 
-function basisBlocks(prs) {
+// The rerun (spec 9.9): how many PRs ran, and each PR that gave an error, that the budget did
+// not reach, or whose commits are not in the clone. Those PRs keep the status from the exhibit or
+// the body, and are listed here apart, so a reader does not take them for a result.
+function rerunBlocks(result) {
+  const { rerun } = result;
+  const prs = result.prs.filter((pr) => pr.rerun);
+  const withStatus = (status) => prs.filter((pr) => pr.rerun.status === status);
+  const blocks = [heading(2, 'The rerun')];
+  blocks.push(paragraph(
+    `Exhibit ran the cheap requirements (tests-before-after, failing-before and probes) again on the base_sha and head_sha of each PR, with the collectors of exhibit check, in ${rerun.seconds} seconds, with a budget of ${rerun.budget_minutes} minutes. ` +
+    'Mutation ran only after that, one PR at a time, while the budget still held a whole mutation run. ' +
+    `A rerun that gave met, missing or failed gives the status. An error or a skip tells nothing, so the exhibit or the body still gives it. The logs of each PR are in ${rerun.logs}/<number>.`
+  ));
+  blocks.push(list([
+    item(`Ran: ${withStatus('ran').length}`),
+    item(`Gave an error: ${withStatus('error').length}`),
+    item(`Not reached in the budget: ${withStatus('not_reached').length}`),
+    item(`A commit not in the clone: ${withStatus('no_commits').length}`),
+    item(`Nothing to run, because the exhibit gave every requirement or the policy asks for none: ${withStatus('nothing_to_run').length}`)
+  ]));
+  const errors = withStatus('error');
+  if (errors.length > 0) {
+    blocks.push(paragraph('PRs whose rerun gave an error:'));
+    blocks.push(list(errors.map((pr) => item(`PR ${pr.number}: ${pr.rerun.errors.join('; ')}`))));
+  }
+  const named = (status, text) => {
+    const these = withStatus(status);
+    if (these.length > 0) blocks.push(paragraph(`${text}: ${these.map((pr) => pr.number).join(', ')}.`));
+  };
+  named('not_reached', 'PRs the budget did not reach. Give a larger --budget to run them');
+  named('no_commits', 'PRs whose base or head commit is not in the clone, so they did not run. Fetch them, for example with git fetch origin pull/N/head, and run again. They are not counted as missed for this');
+  const noMutation = prs.filter((pr) => pr.rerun.mutation === 'not_reached').map((pr) => pr.number);
+  if (noMutation.length > 0) blocks.push(paragraph(`PRs whose mutation requirement did not run, because the budget could not hold one more mutation run: ${noMutation.join(', ')}.`));
+  return blocks;
+}
+
+function basisBlocks(prs, reran) {
   const count = (basis) => prs.filter((pr) => pr.basis === basis).length;
   return [
     heading(2, 'Where the evidence came from'),
     list([
       item(`From the PR's exhibit: ${count('exhibit')}`),
+      ...(reran ? [item(`From the rerun: ${count('rerun')}`)] : []),
       item(`From the evidence section of the PR body: ${count('body')}`),
-      item(`No exhibit and no evidence section, so every requirement is unknown: ${count('none')}`)
+      item(`No exhibit${reran ? ', no rerun' : ''} and no evidence section, so every requirement is unknown: ${count('none')}`)
     ]),
     paragraph(
-      'A body only claims. Exhibit runs nothing here, so a requirement that the body shows counts as met only in that sense. ' +
+      (reran ? 'A rerun result comes from a real run. ' : '') +
+      `A body only claims. Exhibit runs nothing ${reran ? 'for a body' : 'here'}, so a requirement that the body shows counts as met only in that sense. ` +
       'An evidence section starts at a heading whose words start with "evidence". tests-before-after needs a test command in it, such as npm test or the policy\'s test_command. ' +
       'failing-before needs a line that says a test failed before. mutation needs a line that names mutation with a percent of at least min, and with no percent it is unknown. ' +
       'A probe needs its run command in it. With an evidence section, a requirement it does not show is missing. With no exhibit and no evidence section, it is unknown.'
