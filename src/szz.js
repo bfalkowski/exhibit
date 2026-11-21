@@ -915,6 +915,8 @@ const uncomment = (text) => text.trim().replace(/^(\/\/+|\/\*+|\*+|#+)/, '').rep
 // And a "//" in JSX text, with a closing tag after it on the line, such as
 // "<p>Price // 10 USD</p>", is text. Other text that only looks like a comment, such as a "#"
 // in a docstring or a "//" in a template literal that spans lines, is still read as a comment.
+// A division that reads as a regex, such as "x++ / 2", can make a "//" in a later string read
+// as a comment, when a later string or regex on the line has a "/" in it.
 // The whitespace right before a comment that comes off goes too, so it cannot stop a match.
 // Other whitespace at the end of the line stays: it can be text in a string that goes on to
 // the next line.

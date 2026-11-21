@@ -235,7 +235,8 @@ test('whitespace: a quote mark in a regex opens no string, so the whitespace in 
 test('whitespace: a division that reads as a regex can drop a change in a later string that has a "/" in it', () => {
   // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
   // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round.
-  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';"]) {
+  // A later regex, such as /'/, does the same.
+  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + s.replace(/'/, '') + 'c d';"]) {
     const after = before.replace("'c d'", "'cd'");
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
     assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']], before);
@@ -598,14 +599,24 @@ test('comments: a division that reads as a regex can drop a line when a later st
   // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
   // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round, and the
   // "//" in 'c // d' reads as a comment.
-  for (const before of ["  y = x++ / 2 + 'a / b' + 'c // d';", "  y = obj.of / 2 + 'a / b' + 'c // d';"]) {
+  // A later regex, such as /'/, does the same.
+  const lines = [
+    "  y = x++ / 2 + 'a / b' + 'c // d';",
+    "  y = x-- / 2 + 'a / b' + 'c // d';",
+    "  y = obj.of / 2 + 'a / b' + 'c // d';",
+    "  y = x++ / 2 + s.replace(/'/, '') + 'c // d';"
+  ];
+  for (const before of lines) {
     const after = before.replace("'c // d'", "'c // e'");
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
     assert.deepEqual(dropped(result), [['a.js', 3, 'comment']], before);
   }
   // A plain division reads right, so the change counts.
-  const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: ["  y = a / 2 + 'a / b' + 'c // d';"], added: ["  y = a / 2 + 'a / b' + 'c // e';"] }] }));
-  assert.deepEqual(counted(plain), [['a.js', [3]]]);
+  for (const before of ["  y = a / 2 + 'a / b' + 'c // d';", "  y = a / 2 + s.replace(/'/, '') + 'c // d';"]) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(plain), [['a.js', [3]]], before);
+  }
 });
 
 test('comments: a trailing comment pairs only with a line in the same hunk', () => {
