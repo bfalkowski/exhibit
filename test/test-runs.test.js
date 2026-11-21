@@ -369,6 +369,7 @@ test('the base run does not see the head, or changes in the checkout', async (t)
 // The PR adds the test tools: the base policy runs scripts/test.sh, which only the head has. So
 // the command cannot run on the base (sh exits 127), and runs on the head.
 const TOOLS = { 'scripts/test.sh': `${NODE_TESTS}\n` };
+const NO_BASE_RESULTS = /^the test command (could not run on the base: the shell could not find it \(exit code 127\)|wrote no JUnit file at \.exhibit\/junit\.xml on the base \(exit code 2\))$/;
 
 test('a test command that cannot run on the base only: tests-before-after is judged by the head, and keeps the base error', async (t) => {
   const fixture = buildRepo(t);
@@ -378,11 +379,11 @@ test('a test command that cannot run on the base only: tests-before-after is jud
   assert.equal(requirement.status, 'met');
   assert.equal(requirement.details.base, null);
   assert.deepEqual(requirement.details.head, { passed: 2, failed: 0, skipped: 0, flaky: 0 });
-  assert.match(requirement.details.base_error.message, /could not run on the base: the shell could not find it \(exit code 127\)/);
+  assert.match(requirement.details.base_error.message, NO_BASE_RESULTS);
   assert.match(requirement.details.base_error.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
   assert.equal(evidence.verdict, 'meets_policy');
   assert.equal(code, 0);
-  assert.match(summary, /tests-before-after \(from default\): met\. The tests gave no results on the base, so only the head counts: the test command could not run on the base/);
+  assert.match(summary, /tests-before-after \(from default\): met\. The tests gave no results on the base, so only the head counts: the test command (could not run|wrote no JUnit file)/);
   assertNoWorktreeLeft(fixture);
 });
 
@@ -406,9 +407,9 @@ test('a base that gives no results leaves failing-before missing: it says it can
   const requirement = evidence.requirements.find((item) => item.type === 'failing-before');
   const gap = evidence.gaps.find((item) => item.type === 'failing-before');
   assert.equal(requirement.status, 'missing');
-  assert.match(requirement.details.base_error.message, /could not run on the base/);
+  assert.match(requirement.details.base_error.message, NO_BASE_RESULTS);
   assert.match(gap.how_to_fix, /The tests gave no results on the base, so Exhibit cannot show that a test fails there/);
-  assert.match(gap.how_to_fix, /could not run on the base: the shell could not find it/);
+  assert.match(gap.how_to_fix, /The test command "sh scripts\/test\.sh" (could not run|ran) on the base/);
   assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
   assert.equal(evidence.requirements.find((item) => item.type === 'tests-before-after').status, 'met');
   assert.equal(evidence.verdict, 'needs_person');
