@@ -185,6 +185,10 @@ test('the gap of a test command that fails names the log with its output', async
   assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/head-first\.log\./);
   assert.match(requirement.details.base_error.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
   assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), 'utf8'), 'why it broke\n');
+  // The summary does not say that only the head counts, since the head gave no results either.
+  const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+  assert.match(summary, /tests-before-after \(from default\): error\. The tests gave no results on the base either: the test command wrote no JUnit file at \.exhibit\/junit\.xml on the base \(exit code 3\)\./);
+  assert.doesNotMatch(summary, /only the head counts/);
 });
 
 test('the gap of a second run that fails names the log of that run', async (t) => {
@@ -428,5 +432,21 @@ test('the base and head runs give the base error, not a throw, when only the bas
   assert.equal(runs.baseError.name, 'TestRunError');
   assert.match(runs.baseError.message, /on the base/);
   assert.equal(statusOf(runs.head, 'add sums two numbers'), 'passed');
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a base run past the time limit is a base with no results: tests-before-after is judged by the head', async (t) => {
+  const fixture = buildRepo(t);
+  // Only the head has scripts/test.sh, so the command hangs on the base and runs the tests on the head.
+  fixture.setBasePolicy(policy('if [ ! -f scripts/test.sh ]; then sleep 600; fi; sh scripts/test.sh').replace('settings:\n', 'settings:\n  test_timeout_seconds: 1\n'));
+  fixture.branch('tools', TOOLS);
+  const started = Date.now();
+  const { code, evidence, requirement } = await runCheck(fixture.repo, 'tools');
+  assert.ok(Date.now() - started < 60_000, 'exhibit check stopped the base soon after the time limit');
+  assert.equal(requirement.status, 'met');
+  assert.equal(requirement.details.base, null);
+  assert.match(requirement.details.base_error.message, /ran past the time limit of 1 seconds on the base/);
+  assert.equal(evidence.verdict, 'meets_policy');
+  assert.equal(code, 0);
   assertNoWorktreeLeft(fixture);
 });

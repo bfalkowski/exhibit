@@ -274,9 +274,12 @@ export async function testsBeforeAfter(requirement, context) {
   return { status: 'met', details, flaky_tests: flaky };
 }
 
-// A line for summary.md that says the base gave no results, so only the head counts.
-export function describeBaseError(details) {
+// A line for summary.md that says the base gave no results, so only the head counts. When the
+// head gave no results too (status `error`), the gap gives the head's error, so this line only
+// says that the base failed as well.
+export function describeBaseError(details, status) {
   if (!details.base_error) return '';
+  if (status === 'error') return ` The tests gave no results on the base either: ${details.base_error.message}.`;
   return ` The tests gave no results on the base, so only the head counts: ${details.base_error.message}.`;
 }
 

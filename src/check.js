@@ -226,7 +226,7 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
 // no test results.
 function otherDetails(item) {
   if (item.type === 'mutation') return describeMutation(item.details);
-  if (item.type === 'tests-before-after') return describeBaseError(item.details);
+  if (item.type === 'tests-before-after') return describeBaseError(item.details, item.status);
   if (item.type !== 'failing-before') return '';
   if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
   return describeTests(item.details);
