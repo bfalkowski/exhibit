@@ -265,3 +265,21 @@ test('--enforce without --comment is allowed, and posts nothing', (t) => {
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, `Wrote .exhibit/out/prs/12/${HEAD_1}.json.\n`);
 });
+
+// When the check wrote no exhibit, a failure to post the error comment still says that there was
+// no exhibit, so a person does not look for a stored one.
+test('with no evidence.json, a 403 when posting the error comment gives exit 2 and a plain message', (t) => {
+  const fixture = buildFixture(t);
+  mkdirSync(join(fixture.repo, '.exhibit'));
+  writeFileSync(join(fixture.repo, '.exhibit', 'summary.md'), '# Exhibit check: Exhibit failed\n');
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const replies = fileURLToPath(new URL('./fixtures/github/pr-comment-forbidden.json', import.meta.url));
+  const env = gitEnv(fixture.home, { ...IDENTITY, GITHUB_TOKEN: 'test-token', EXHIBIT_TEST_FIXTURE: replies });
+
+  const run = spawnSync(process.execPath, ['--import', preload, ...publishArgs('.exhibit/evidence.json', ['--comment', '--pr', '12', '--repo', 'acme/widgets'])], { cwd: fixture.repo, encoding: 'utf8', env });
+
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.stdout, '');
+  assert.equal(run.stderr, 'exhibit: exhibit check wrote no .exhibit/evidence.json, and the comment on PR 12 that says so was not posted: GitHub answered 403 (Resource not accessible by integration) for /repos/acme/widgets/issues/12/comments. The token may lack access, or the rate limit is used up: check the token, or wait and try again. A fine-grained GITHUB_TOKEN needs the permission "Pull requests: write" for this request.\n');
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+});

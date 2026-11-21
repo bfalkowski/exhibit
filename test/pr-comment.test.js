@@ -264,7 +264,9 @@ test('--pr and --repo must match the exhibit when there is one', async (t) => {
   write(forPr7(NEEDS_PERSON));
   await assert.rejects(run(github, ['--comment', '--pr', '8', '--repo', 'acme/widgets']), { message: 'evidence.json is the exhibit for PR 7 in acme/widgets, not for PR 8 in acme/widgets, so nothing was stored.' });
   await assert.rejects(run(github, ['--pr', '7', '--repo', 'acme/gadgets']), { message: 'evidence.json is the exhibit for PR 7 in acme/widgets, not for PR 7 in acme/gadgets, so nothing was stored.' });
-  await assert.rejects(run(github, ['--pr', 'seven']), { message: /^--pr must be a PR number, such as 12, not "seven"\./ });
+  for (const bad of ['seven', '04', '0']) {
+    await assert.rejects(run(github, ['--pr', bad]), { message: new RegExp(`^--pr must be a PR number, such as 12, not "${bad}"\\.`) });
+  }
   await assert.rejects(run(github, ['--repo', 'widgets']), { message: /^--repo must look like owner\/name, not "widgets"\./ });
   const same = await run(github, ['--comment', '--pr', '7', '--repo', 'Acme/Widgets']);
   assert.equal(same.code, 0);
