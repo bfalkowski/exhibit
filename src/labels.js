@@ -1,6 +1,5 @@
 // Labels for escaped defects (spec 8.4). A person gives each escaped defect a code, a category
 // and the evidence that would have caught it. Each label is one line of .exhibit/labels.jsonl.
-import { readFileSync } from 'node:fs';
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DraftError } from './claude.js';
@@ -8,6 +7,7 @@ import { closingIssues, proposeKnownAtReview } from './deferral.js';
 import { draftAgreement } from './draft-agreement.js';
 import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
+import { labelsSchema as schema } from './labels-schema.js';
 import { defectText, escapedDefects } from './report.js';
 import { ToolError } from './tool-error.js';
 import { writeTogether } from './write-together.js';
@@ -15,23 +15,12 @@ import { writeTogether } from './write-together.js';
 export const HISTORY = '.exhibit/history.jsonl';
 export const LABELS = '.exhibit/labels.jsonl';
 
-const schema = JSON.parse(readFileSync(new URL('../schema/labels-line.schema.json', import.meta.url), 'utf8'));
-
 // The replies that an answer source gives to skip a defect or to quit. The keyboard in
 // src/commands/label.js gives them, and labelDefects reads them, so both use these names.
 export const SKIP = 'skip';
 export const QUIT = 'quit';
 
-// The most characters that each typed answer can have. They come from the schema's patterns,
-// such as ^\S[^\r\n]{0,199}$ for code, so the keyboard can ask again before the schema check.
-export const ANSWER_LIMITS = Object.fromEntries(['code', 'category', 'would_have_caught'].map((field) => [field, longest(schema.properties[field].pattern)]));
-
-// A pattern that ends in {0,n}$ allows one first character and then at most n more: n + 1 in all.
-function longest(pattern) {
-  const match = /\{0,(\d+)\}\$$/.exec(pattern);
-  if (match === null) throw new Error(`the labels schema pattern ${pattern} has no length limit`);
-  return Number(match[1]) + 1;
-}
+export { ANSWER_LIMITS } from './labels-schema.js';
 
 // The id of the escaped defect that fix PR `fixPr` fixed, such as D-004 for PR 4. A PR number
 // never changes, so the id stays the same when exhibit history runs again, and policy rules can

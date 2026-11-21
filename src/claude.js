@@ -3,6 +3,7 @@
 // who confirms it, edits it, or throws it away. A draft is never a label by itself.
 import Anthropic from '@anthropic-ai/sdk';
 import { checkSchema } from './json-schema.js';
+import { ANSWER_LIMITS, labelsSchema } from './labels-schema.js';
 
 // The model that drafts, when EXHIBIT_CLAUDE_MODEL does not name another one.
 export const DEFAULT_MODEL = 'claude-opus-5-5';
@@ -27,26 +28,28 @@ const STOPS_DRAFTING = {
   404: 'Check that EXHIBIT_CLAUDE_MODEL names a model.'
 };
 
-// The same rules as `code` and `category` in schema/labels-line.schema.json.
+// The rules of `code` and `category`, read from schema/labels-line.schema.json, so the limits
+// have one copy.
 const DRAFT_SCHEMA = {
   type: 'object',
   required: ['code', 'category'],
   additionalProperties: false,
   properties: {
-    code: { type: 'string', pattern: '^\\S[^\\r\\n]{0,199}$' },
-    category: { type: 'string', pattern: '^\\S[^\\r\\n]{0,59}$' }
+    code: { type: 'string', pattern: labelsSchema.properties.code.pattern },
+    category: { type: 'string', pattern: labelsSchema.properties.category.pattern }
   }
 };
 
 // The schema Claude's answer must follow. Structured outputs do not take `pattern`, so the
-// lengths are said in the descriptions and checked with DRAFT_SCHEMA afterwards.
+// lengths are said in the descriptions, from the same patterns, and checked with DRAFT_SCHEMA
+// afterwards.
 const OUTPUT_SCHEMA = {
   type: 'object',
   required: ['code', 'category'],
   additionalProperties: false,
   properties: {
-    code: { type: 'string', description: 'What went wrong, in a few plain words. One line, at most 200 characters.' },
-    category: { type: 'string', description: 'The kind of bug. Reuse a category used so far when one fits. One line, at most 60 characters.' }
+    code: { type: 'string', description: `What went wrong, in a few plain words. One line, at most ${ANSWER_LIMITS.code} characters.` },
+    category: { type: 'string', description: `The kind of bug. Reuse a category used so far when one fits. Use words, not only digits. One line, at most ${ANSWER_LIMITS.category} characters.` }
   }
 };
 
@@ -92,6 +95,10 @@ export function createDrafter({ apiKey, model = DEFAULT_MODEL, fetch = globalThi
     }
     const problems = checkSchema(DRAFT_SCHEMA, parsed);
     if (problems.length > 0) throw new DraftError(`Claude's draft does not fit the labels schema: ${problems[0]}`);
+    // exhibit label reads a category answer of only digits as a pick from the list (spec 8.4). So
+    // a saved category "5" would show as "1. 5", and typing 5 would not pick it. The question
+    // trims each answer, so "5 " counts as only digits too.
+    if (/^\d+$/.test(parsed.category.trim())) throw new DraftError(`Claude's draft category "${parsed.category}" is only digits, and a category cannot be only digits`);
     return { code: parsed.code, category: parsed.category, model };
   };
 }
