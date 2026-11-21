@@ -125,9 +125,8 @@ const REVERTS_COMMIT = /^[ \t]*this reverts commit ([0-9a-f]{7,40})\b/gim;
 // a reverted PR in the PR's own repo, or a reverted commit. A line that names another repo's PR,
 // as in copied release notes, does not count. The PR's own repo is `pr.repo`, and the names in
 // `pr.oldNames` that lead to it, as withOldNames finds them. When `pr.repo` is unknown, any repo
-// counts. A
-// revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's button
-// and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
+// counts. A revert of a revert puts the reverted work back (a re-land), so it is no fix. GitHub's
+// button and older git write 'Revert "Revert "', and newer git writes 'Reapply "'.
 export function isRevert(pr) {
   const title = (pr.title ?? '').trim().toLowerCase();
   if (title.startsWith('revert "revert "') || title.startsWith('reapply "')) return false;
