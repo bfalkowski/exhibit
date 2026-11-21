@@ -17,7 +17,9 @@ export const JIRA_TRACKER = {
   tokenEnv: 'JIRA_API_TOKEN',
   emailEnv: 'JIRA_EMAIL',
 
-  // Makes the tracker for `settings` (settings.jira of evidence.yml). See createJiraTracker.
+  // Makes the tracker for `settings` (settings.jira of evidence.yml). See createJiraTracker. With
+  // no token, the tracker cannot ask Jira, but it can still read the answers that a history file
+  // saved (spec 8.3).
   connect(options) {
     return createJiraTracker(options);
   }
@@ -26,7 +28,9 @@ export const JIRA_TRACKER = {
 // Connects the Jira tracker for exhibit history and exhibit check (spec 9.1). It returns
 // { tracker, note }. tracker is null when the fix signals do not hold tracker:jira, and null with
 // a note when JIRA_API_TOKEN is not set: then the signal matches no PR, and every other signal
-// still works. The caller shows the note in one line. Otherwise note is null.
+// still works. The caller shows the note in one line. Otherwise note is null. exhibit history
+// does not use the null: with no token it makes its own tracker that cannot ask Jira, so the
+// answers saved in the old history file still count (spec 8.3).
 export function connectTracker(settings, { env, fetch }) {
   if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return { tracker: null, note: null };
   const token = env[JIRA_TRACKER.tokenEnv];
@@ -46,6 +50,7 @@ export class JiraReplyError extends ToolError {
     this.status = status;
   }
 
+  // A status of null means no request went: there is no token.
   get stopsRun() {
     return [401, 403, 429].includes(this.status);
   }
@@ -59,11 +64,19 @@ export class JiraReplyError extends ToolError {
 // out to users). `token` and `email` come from the env (see JIRA_TRACKER). `fetch` is a parameter,
 // so tests can replay recorded replies.
 // The methods return small tracker-neutral shapes:
-// - ticket(key): { key, bug, createdAt, escaped }, or null when Jira does not know the key.
-//   bug says whether the issue type is in issue_types. createdAt is an ISO time in UTC.
+// - ticket(key): { key, bug, createdAt, escaped, type, found }, or null when Jira does not know
+//   the key. bug says whether the issue type is in issue_types. createdAt is an ISO time in UTC.
 //   escaped is false when found_field holds a value and none of its values is in
 //   escaped_values, true when one is, and null when Jira has no value or no found_field is set.
+//   type is the issue type's name, and found holds the texts in found_field ([] with none).
+// - record(key, answer): the answer as a history line saves it in `ticket` (spec 8.3). It holds
+//   what Jira said, not what it means, so a later run judges it under its own settings.
+// - saved(record): the answer that a saved record gives under these settings, null for an issue
+//   Jira did not know, or undefined when the record cannot answer: it is from another tracker, or
+//   it was saved with another found_field. This sends no request.
 // - counts(): { requests, not_found }.
+// canAsk is false when there is no token: then ticket(key) throws a ToolError whose stopsRun is
+// false, as for a 5xx, and saved(record) still works.
 // Each key is asked for once per tracker, so once per run: a second call gets the first answer.
 export function createJiraTracker({ settings, token, email, fetch }) {
   const site = settings.site.replace(/\/+$/, '');
@@ -71,7 +84,7 @@ export function createJiraTracker({ settings, token, email, fetch }) {
   const foundField = settings.found_field ?? null;
   const escapedValues = (settings.escaped_values ?? []).map((value) => value.toLowerCase());
   const fields = ['issuetype', 'created', ...(foundField ? [foundField] : [])].join(',');
-  const authorization = email ? `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}` : `Bearer ${token}`;
+  const authorization = !token ? null : email ? `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}` : `Bearer ${token}`;
   const counts = { requests: 0, not_found: 0 };
   const asked = new Map();
 
@@ -95,32 +108,50 @@ export function createJiraTracker({ settings, token, email, fetch }) {
     if (typeof type !== 'string' || Number.isNaN(created)) {
       throw new ToolError(`Jira sent a reply with no issue type or created date for ${path}. Check settings.jira.site in evidence.yml.`);
     }
-    return {
-      key,
-      bug: bugTypes.includes(type.toLowerCase()),
-      createdAt: new Date(created).toISOString(),
-      escaped: foundField ? escapedFrom(issue.fields[foundField], escapedValues) : null
-    };
+    return judge({ key, type, createdAt: new Date(created).toISOString(), found: foundField ? foundTexts(issue.fields[foundField]) : [] });
   }
+
+  // The answer for what Jira said, under these settings.
+  const judge = ({ key, type, createdAt, found }) => ({
+    key,
+    bug: bugTypes.includes(type.toLowerCase()),
+    createdAt,
+    escaped: foundField && found.length > 0 ? found.some((one) => escapedValues.includes(one.toLowerCase())) : null,
+    type,
+    found
+  });
+  const prefix = `${JIRA_TRACKER.name}:`;
 
   return {
     name: JIRA_TRACKER.name,
     displayName: JIRA_TRACKER.displayName,
+    canAsk: authorization !== null,
     counts: () => ({ ...counts }),
 
     async ticket(key) {
+      if (authorization === null) throw new JiraReplyError(`${JIRA_TRACKER.tokenEnv} is not set.`, null);
       if (!asked.has(key)) asked.set(key, ask(key));
       return asked.get(key);
+    },
+
+    record(key, answer) {
+      if (answer === null) return { issue: `${prefix}${key}`, type: null };
+      return { issue: `${prefix}${key}`, type: answer.type, created_at: answer.createdAt, found_field: foundField, found: answer.found };
+    },
+
+    saved(record) {
+      if (!record?.issue?.startsWith(prefix)) return undefined;
+      if (record.type === null) return null;
+      if (record.found_field !== foundField) return undefined;
+      return judge({ key: record.issue.slice(prefix.length), type: record.type, createdAt: record.created_at, found: record.found });
     }
   };
 }
 
-// Says whether a "where found" field value means the bug got out to users. A field can be text,
-// a select option ({ value }), an object with a name, or a list of them. No value gives null.
-function escapedFrom(value, escapedValues) {
-  const values = [value].flat().map((one) => (typeof one === 'string' ? one : one?.value ?? one?.name)).filter((one) => typeof one === 'string');
-  if (values.length === 0) return null;
-  return values.some((one) => escapedValues.includes(one.toLowerCase()));
+// The texts in a "where found" field value. A field can be text, a select option ({ value }), an
+// object with a name, or a list of them. No value gives [].
+function foundTexts(value) {
+  return [value].flat().map((one) => (typeof one === 'string' ? one : one?.value ?? one?.name)).filter((one) => typeof one === 'string');
 }
 
 // Jira's error replies hold errorMessages, a list of texts. The message never holds the token,

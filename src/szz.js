@@ -433,11 +433,14 @@ async function bugReportDate(fix, forge) {
 }
 
 // Returns the created time of the tracker issue that marked `fix` as a fix, such as jira:PAY-482
-// in its fix_signal, or null. The fix signals asked the tracker for the issue already, and the
-// tracker keeps each answer, so this sends no new request.
+// in its fix_signal, or null. The line's saved `ticket` holds it (spec 8.3). Else the fix signals
+// asked the tracker for the issue already, and the tracker keeps each answer, so this sends no
+// new request. A tracker with no token gives null.
 async function trackerReportDate(fix, tracker) {
   const signal = fix.classification?.fix_signal ?? '';
   if (!tracker || !signal.startsWith(`${tracker.name}:`)) return null;
+  if (fix.ticket?.issue === signal && fix.ticket.created_at) return fix.ticket.created_at;
+  if (!tracker.canAsk) return null;
   const issue = await tracker.ticket(signal.slice(tracker.name.length + 1));
   return issue?.createdAt ?? null;
 }
