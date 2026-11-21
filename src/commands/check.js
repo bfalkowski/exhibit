@@ -156,7 +156,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 }
 
 // While the collectors run, a Ctrl-C (SIGINT), a SIGTERM or a closing terminal (SIGHUP) stops
-// Exhibit in a clean way (spec 9.6). A probe, a test run, settings.mutation_setup and Stryker each
+// Exhibit in a clean way (spec 9.6). A probe, a test run, settings.mutation_setup, Stryker and mutmut each
 // run in a process group of their own, so the signal does not reach them. src/probe.js kills those
 // groups on its own, but it then ends Exhibit by the signal at once, and no finally block runs. So
 // this handler kills every group that runInGroup started (stopAllGroups), and runs `cleanUp`,

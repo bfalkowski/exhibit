@@ -9,6 +9,7 @@ import { matchesGlob } from './classify.js';
 import { lostErrorPaths } from './error-paths.js';
 import { isTestPath } from './failing-before.js';
 import { clopperPearson } from './interval.js';
+import { DEFAULT_MUTATION_PYTHON, MUTMUT_VERSION, PYTHON_FILE, pythonProjects, runMutmutProcess } from './mutmut.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runInGroup } from './probe.js';
 import { ToolError } from './tool-error.js';
 import { worktreeOnDemand } from './worktree.js';
@@ -25,7 +26,8 @@ const LISTED = 20;
 const STRYKER_FILE = /\.(js|mjs|cjs|jsx|ts|mts|cts|tsx)$/;
 // Code in a language that no adapter covers yet. A change to such a file cannot be checked, so the
 // requirement is skipped, never met. Other files, such as docs and config, hold no code to mutate.
-const NO_ADAPTER = /\.(py|go|rb|java|kt|scala|rs|cs|php|swift|c|cc|cpp|h|hpp)$/;
+// The mutmut adapter mutates Python (src/mutmut.js).
+const NO_ADAPTER = /\.(go|rb|java|kt|scala|rs|cs|php|swift|c|cc|cpp|h|hpp)$/;
 const STRYKER_BIN = join(dirname(require.resolve('@stryker-mutator/core/package.json')), 'bin', 'stryker.js');
 const TAP_RUNNER = fileURLToPath(import.meta.resolve('@stryker-mutator/tap-runner'));
 const REPORTER = fileURLToPath(new URL('./stryker-reporter.js', import.meta.url));
@@ -45,11 +47,11 @@ const COUNTED = { Killed: 'killed', Timeout: 'timeout', Survived: 'survived', No
 // A change that takes a call out of a `try` with a `catch` makes no mutant for the lost error path,
 // so Exhibit looks for such calls apart from Stryker (src/error-paths.js). When it finds one, a
 // requirement that would be met is missing: a person must read the call.
-export function mutationCollector({ runStryker = runStrykerProcess } = {}) {
+export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = runMutmutProcess } = {}) {
   const runs = new WeakMap();
   const lost = new WeakMap();
   return async (requirement, context) => {
-    if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker }));
+    if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker, runMutmut }));
     if (!lost.has(context)) lost.set(context, lostInChange(context));
     const runResult = await runs.get(context);
     const judged = judge(runResult, requirement.params.min, context.equivalentMutants ?? []);
@@ -99,37 +101,40 @@ export function withLostErrorPaths(result, lost) {
 }
 
 // Does the run for one check, and gives back either `{ fixed }`, a result that does not depend on
-// `min`, or what judge needs: `{ mutants, complete, budgetSeconds, mutated, testFiles, testSelection }`.
+// `min`, or what judge needs: `{ mutants, complete, budgetSeconds, mutated }`, with
+// `testFiles`, `testSelection` and `output` when Stryker ran, and `mutmut` when mutmut ran.
 //
 // 1. The changed lines are the lines of the head that `git diff` shows as added, from the merge
 //    base of base and head. A test file is never mutated: one that isTestPath names, or that
 //    settings.mutation_test_files matches.
 // 2. A changed code file in a language that no adapter covers makes the requirement skipped.
-//    With no changed JavaScript or TypeScript line, it is met: there is nothing to mutate.
+//    With no changed line of JavaScript, TypeScript or Python, it is met: there is nothing to
+//    mutate.
 // 3. In a clean worktree of the head, it runs settings.mutation_setup, such as `npm ci`.
-// 4. It picks the test files that reach a changed file (testsThatReach), and runs Stryker with
-//    only those, and with per-test coverage, so each mutant runs only the test files that ran its
-//    line. When no test file reaches the changed files, it gives Stryker every test file.
-// 5. Stryker tests the mutants in a random order that the head SHA fixes, and stops when
+// 4. Stryker mutates the JavaScript and TypeScript files (strykerRun), in a random order that the
+//    head SHA fixes, and mutmut the Python files (mutmutRun). Each run stops when
 //    settings.mutation_budget_seconds runs out.
-async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
+// 5. The mutants of both count together.
+async function mutationRun({ cwd, base, head, settings, env }, { runStryker, runMutmut }) {
   const testGlobs = settings.mutation_test_files ?? [];
   const isTest = testFileMatcher(settings);
   const mutated = [];
   const noAdapter = [];
   for (const [path, ranges] of await changedLines(cwd, base, head)) {
     if (isTest(path)) continue;
-    if (STRYKER_FILE.test(path)) mutated.push({ path, lines: ranges });
+    if (STRYKER_FILE.test(path) || PYTHON_FILE.test(path)) mutated.push({ path, lines: ranges });
     else if (NO_ADAPTER.test(path)) noAdapter.push(path);
   }
   if (noAdapter.length > 0) {
-    return fixed('skipped', { reason: `Exhibit has a mutation adapter only for JavaScript and TypeScript, and this change has code in ${noAdapter.join(', ')}.`, no_adapter: noAdapter },
-      `Exhibit cannot mutate ${noAdapter.join(', ')}: it has a mutation adapter only for JavaScript and TypeScript (Stryker). The mutmut adapter for Python comes later. Until then a person must judge how strong the tests are.`);
+    return fixed('skipped', { reason: `Exhibit has mutation adapters only for JavaScript, TypeScript and Python, and this change has code in ${noAdapter.join(', ')}.`, no_adapter: noAdapter },
+      `Exhibit cannot mutate ${noAdapter.join(', ')}: it has mutation adapters only for JavaScript and TypeScript (Stryker) and Python (mutmut). A person must judge how strong the tests are.`);
   }
   if (mutated.length === 0) {
-    return fixed('met', { reason: 'The change has no added or changed lines of JavaScript or TypeScript outside the tests, so there is nothing to mutate.', ...counts([]), mutated: [] });
+    return fixed('met', { reason: 'The change has no added or changed lines of JavaScript, TypeScript or Python outside the tests, so there is nothing to mutate.', ...counts([]), mutated: [] });
   }
-  if (testGlobs.length === 0) {
+  const forStryker = mutated.filter((file) => STRYKER_FILE.test(file.path));
+  const forMutmut = mutated.filter((file) => PYTHON_FILE.test(file.path));
+  if (forStryker.length > 0 && testGlobs.length === 0) {
     return fixed('missing', { reason: 'The policy has no settings.mutation_test_files.', mutated },
       'The policy needs mutation evidence, but evidence.yml does not say where the tests are. Set settings.mutation_test_files to globs of the test files, such as ["test/**/*.test.js"], and settings.mutation_setup to the command that installs what they need, such as "npm ci".');
   }
@@ -147,58 +152,125 @@ async function mutationRun({ cwd, base, head, settings, env }, { runStryker }) {
       if (setup.timedOut || setup.code !== 0) {
         const why = setup.timedOut ? `ran past the time limit of ${timeoutSeconds} seconds (settings.probe_timeout_seconds)` : setup.code === null ? `was stopped by the signal ${setup.signal}` : `exited with code ${setup.code}`;
         return fixed('error', { reason: `settings.mutation_setup ${why}.`, setup_log: `${MUTATION_DIR}/setup.log`, mutated },
-          `Exhibit ran settings.mutation_setup ("${settings.mutation_setup}") in the head worktree, and it ${why}, so Stryker could not run. Read ${MUTATION_DIR}/setup.log, fix the command or the change, and run exhibit check again.`);
+          `Exhibit ran settings.mutation_setup ("${settings.mutation_setup}") in the head worktree, and it ${why}, so the mutation tools could not run. Read ${MUTATION_DIR}/setup.log, fix the command or the change, and run exhibit check again.`);
       }
     }
-    const allTests = (await gitLines(root, ['ls-files', '-z'])).filter((path) => testGlobs.some((glob) => matchesGlob(path, glob))).sort();
-    if (allTests.length === 0) {
-      return fixed('missing', { reason: 'No file in the head matches settings.mutation_test_files.', mutated },
-        `No file in the head commit matches settings.mutation_test_files (${testGlobs.join(', ')}), so no test can kill a mutant. Fix the globs in evidence.yml, or add tests.`);
-    }
-    const reaching = await testsThatReach(root, allTests, mutated.map((file) => file.path));
-    const testFiles = reaching.length > 0 ? reaching : allTests;
-    const mutate = mutated.flatMap(({ path, lines }) => lines.map(([from, to]) => `${path}:${from}-${to}`));
-    const strykerRun = (log) => runStryker({ root, mutate, testFiles, budgetSeconds, seed: head, logFile: join(outDir, log), env });
-    const firstOutput = `${MUTATION_DIR}/output.log`;
-    let outcome = await strykerRun('output.log');
-    let output = firstOutput;
-    // Stryker starts with its coverage run, which runs every test file once and records which
-    // lines each one reaches. It stops when a test fails there. A test can fail there now and
-    // then, for example under load, so Exhibit runs Stryker a second time, as it runs the test
-    // command once more (spec 9.3). A test that fails only in the first run's coverage run is
-    // flaky.
-    const failedFirst = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
-    if (failedFirst.length > 0) {
-      outcome = await strykerRun('output-again.log');
-      output = `${MUTATION_DIR}/output-again.log`;
-    }
-    if (!outcome.complete && !outcome.timedOut) {
-      const why = outcome.code === null ? `was stopped by the signal ${outcome.signal}` : `exited with code ${outcome.code}`;
-      const details = { reason: `Stryker ${why} before it finished.`, output, mutated, test_files: testFiles, ...(failedFirst.length > 0 ? { first_output: firstOutput, failed_in_first_run: failedFirst } : {}) };
-      if (failedFirst.length > 0) {
-        const failedAgain = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
-        const what = failedAgain.length > 0
-          ? `Exhibit ran Stryker twice, and both times a test failed in Stryker's coverage run, the run that records which lines each test reaches. In the first run: ${nameFailures(failedFirst)}. In the second run: ${nameFailures(failedAgain)}. Stryker stops on any failed test in its coverage run, so fix the test on the head, or the code it tests.`
-          : `In Exhibit's first run of Stryker, a test failed in Stryker's coverage run, the run that records which lines each test reaches: ${nameFailures(failedFirst)}. Exhibit ran Stryker a second time, and it ${why} again, for another reason.`;
-        return fixed('error', details,
-          `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. ${what} Read ${firstOutput} and ${output}, and run exhibit check again.`);
-      }
-      return fixed('error', details,
-        `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. A failing test on the head stops it, and so does a broken setup. Read ${output}, fix the cause, and run exhibit check again.`);
-    }
-    return {
-      mutants: await describeMutants(root, outcome.mutants),
-      complete: outcome.complete,
-      budgetSeconds,
-      mutated,
-      testFiles,
-      testSelection: reaching.length > 0 ? 'reach' : 'all',
-      output,
-      ...(failedFirst.length > 0 ? { firstOutput, failedInFirstRun: failedFirst } : {})
-    };
+    const parts = [];
+    const shared = { root, settings, budgetSeconds, outDir, env, mutated };
+    if (forStryker.length > 0) parts.push(await strykerRun({ ...shared, files: forStryker, seed: head, runStryker }));
+    if (forMutmut.length > 0 && !parts.some((part) => part.fixed)) parts.push(await mutmutRun({ ...shared, files: forMutmut, runMutmut }));
+    const stopped = parts.find((part) => part.fixed);
+    if (stopped) return stopped;
+    return Object.assign({ budgetSeconds, mutated }, ...parts, {
+      mutants: parts.flatMap((part) => part.mutants),
+      complete: parts.every((part) => part.complete)
+    });
   } finally {
     await worktree.remove();
   }
+}
+
+// The Stryker part of a run, on the JavaScript and TypeScript `files`. Gives back `{ fixed }`, or
+// `{ mutants, complete, testFiles, testSelection, output }`.
+//
+// It picks the test files that reach a changed file (testsThatReach), and runs Stryker with only
+// those, and with per-test coverage, so each mutant runs only the test files that ran its line.
+// When no test file reaches the changed files, it gives Stryker every test file.
+async function strykerRun({ root, settings, budgetSeconds, outDir, env, mutated, files, seed, runStryker }) {
+  const testGlobs = settings.mutation_test_files;
+  // Only the JavaScript and TypeScript files that the globs match are Stryker's test files. The
+  // globs can also match a Python file, such as a conftest.py, to keep it out of mutation, and
+  // node cannot run that.
+  const allTests = (await gitLines(root, ['ls-files', '-z'])).filter((path) => STRYKER_FILE.test(path) && testGlobs.some((glob) => matchesGlob(path, glob))).sort();
+  if (allTests.length === 0) {
+    return fixed('missing', { reason: 'No JavaScript or TypeScript file in the head matches settings.mutation_test_files.', mutated },
+      `No JavaScript or TypeScript file in the head commit matches settings.mutation_test_files (${testGlobs.join(', ')}), so no test can kill a mutant in the changed JavaScript or TypeScript. Stryker needs JavaScript or TypeScript test files: files that the globs match in another language, such as Python, only stay out of mutation. Fix the globs in evidence.yml, or add tests.`);
+  }
+  const reaching = await testsThatReach(root, allTests, files.map((file) => file.path));
+  const testFiles = reaching.length > 0 ? reaching : allTests;
+  const mutate = files.flatMap(({ path, lines }) => lines.map(([from, to]) => `${path}:${from}-${to}`));
+  const run = (log) => runStryker({ root, mutate, testFiles, budgetSeconds, seed, logFile: join(outDir, log), env });
+  const firstOutput = `${MUTATION_DIR}/output.log`;
+  let outcome = await run('output.log');
+  let output = firstOutput;
+  // Stryker starts with its coverage run, which runs every test file once and records which
+  // lines each one reaches. It stops when a test fails there. A test can fail there now and
+  // then, for example under load, so Exhibit runs Stryker a second time, as it runs the test
+  // command once more (spec 9.3). A test that fails only in the first run's coverage run is
+  // flaky.
+  const failedFirst = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
+  if (failedFirst.length > 0) {
+    outcome = await run('output-again.log');
+    output = `${MUTATION_DIR}/output-again.log`;
+  }
+  if (!outcome.complete && !outcome.timedOut) {
+    const why = outcome.code === null ? `was stopped by the signal ${outcome.signal}` : `exited with code ${outcome.code}`;
+    const details = { reason: `Stryker ${why} before it finished.`, output, mutated, test_files: testFiles, ...(failedFirst.length > 0 ? { first_output: firstOutput, failed_in_first_run: failedFirst } : {}) };
+    if (failedFirst.length > 0) {
+      const failedAgain = stoppedByTests(outcome) ? outcome.failedInFirstRun : [];
+      const what = failedAgain.length > 0
+        ? `Exhibit ran Stryker twice, and both times a test failed in Stryker's coverage run, the run that records which lines each test reaches. In the first run: ${nameFailures(failedFirst)}. In the second run: ${nameFailures(failedAgain)}. Stryker stops on any failed test in its coverage run, so fix the test on the head, or the code it tests.`
+        : `In Exhibit's first run of Stryker, a test failed in Stryker's coverage run, the run that records which lines each test reaches: ${nameFailures(failedFirst)}. Exhibit ran Stryker a second time, and it ${why} again, for another reason.`;
+      return fixed('error', details,
+        `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. ${what} Read ${firstOutput} and ${output}, and run exhibit check again.`);
+    }
+    return fixed('error', details,
+      `Stryker ${why} before it had tested every mutant, so Exhibit has no catch rate. A failing test on the head stops it, and so does a broken setup. Read ${output}, fix the cause, and run exhibit check again.`);
+  }
+  return {
+    mutants: await describeMutants(root, outcome.mutants),
+    complete: outcome.complete,
+    testFiles,
+    testSelection: reaching.length > 0 ? 'reach' : 'all',
+    output,
+    ...(failedFirst.length > 0 ? { firstOutput, failedInFirstRun: failedFirst } : {})
+  };
+}
+
+// The mutmut part of a run, on the Python `files`. Gives back `{ fixed }`, or
+// `{ mutants, complete, mutmut }`, where `mutmut` lists each Python project with its log and
+// whether its run is complete.
+//
+// mutmut runs once in each Python project (pythonProjects), with the project's Python
+// (settings.mutation_python). It finds the tests itself, from the project's pytest and mutmut
+// config, and runs each mutant only against the tests that ran its function. Each project's run
+// has the whole budget.
+async function mutmutRun({ root, settings, budgetSeconds, outDir, env, mutated, files, runMutmut }) {
+  const python = settings.mutation_python ?? DEFAULT_MUTATION_PYTHON;
+  const mutants = [];
+  const runs = [];
+  for (const [project, projectFiles] of await pythonProjects(root, files)) {
+    const log = project === '' ? 'mutmut.log' : `mutmut-${project.replaceAll('/', '-')}.log`;
+    const output = `${MUTATION_DIR}/${log}`;
+    const where = project === '' ? 'the root of the repo' : project;
+    const outcome = await runMutmut({ root, project, files: projectFiles, python, budgetSeconds, logFile: join(outDir, log), env });
+    const details = { output, mutated, project: project === '' ? '.' : project };
+    if (outcome.error) {
+      return fixed('error', { ...details, reason: outcome.error },
+        `${outcome.error} Install it in settings.mutation_setup, or set settings.mutation_python to a command that starts the project's Python with it, such as "uv run --with mutmut==${MUTMUT_VERSION} python". Then run exhibit check again.`);
+    }
+    if (outcome.leftOut) {
+      const leftOut = outcome.leftOut.map((path) => (project === '' ? path : `${project}/${path}`));
+      return fixed('missing', { ...details, reason: `mutmut would not mutate ${leftOut.join(', ')}.`, left_out: leftOut, source_paths: outcome.sourcePaths },
+        `The change has Python code in ${leftOut.join(', ')}, but mutmut's config in ${where} leaves those files out: its source_paths are ${outcome.sourcePaths.join(', ')}, and do_not_mutate or only_mutate can leave files out too. Change [tool.mutmut] in pyproject.toml, or [mutmut] in setup.cfg, so that mutmut mutates them. When a file is not code under test, such as a conftest.py, setup.py or noxfile.py, add it to settings.mutation_test_files in evidence.yml instead: Exhibit never mutates a file that those globs match. Then run exhibit check again.`);
+    }
+    if (!outcome.complete && !outcome.timedOut) {
+      const why = outcome.code === null ? `was stopped by the signal ${outcome.signal}` : `exited with code ${outcome.code}`;
+      return fixed('error', { ...details, reason: `mutmut ${why} before it finished.` },
+        `mutmut ${why} in ${where} before it had tested every mutant, so Exhibit has no catch rate. A failing test on the head stops it, and so does a Python without the project's packages, or a settings.mutation_python ("${python}") that does not start Python. Read ${output}, fix the cause, and run exhibit check again.`);
+    }
+    // Each mutant gets the text of its line, as a Stryker mutant does, so a mark of an equivalent
+    // mutant can find it again (spec 9.5).
+    const texts = new Map();
+    for (const mutant of outcome.mutants) {
+      const file = project === '' ? mutant.file : `${project}/${mutant.file}`;
+      if (!texts.has(file)) texts.set(file, await readFile(join(root, file), 'utf8').then((text) => text.split('\n'), () => []));
+      const lineText = oneLine(texts.get(file)[mutant.line - 1] ?? '');
+      mutants.push({ ...mutant, file, line_text: lineText, original: oneLine(mutant.original), replacement: oneLine(mutant.replacement) });
+    }
+    runs.push({ project: details.project, output, complete: outcome.complete });
+  }
+  return { mutants, complete: runs.every((run) => run.complete), mutmut: runs };
 }
 
 // True when Stryker stopped because a test failed in its coverage run.
@@ -235,8 +307,10 @@ function fixed(status, details, howToFix) {
 // only when the lower bound of the 95% interval reaches min. It is failed when the upper bound is
 // below min too, and missing when the interval holds min: the sample is too small to tell.
 //
-// Stryker tests the mutants in a random order (src/mutant-order.js), so a partial sample is a
-// random sample of the mutants on the changed lines, as the interval needs.
+// Stryker tests the mutants in a random order (src/mutant-order.js), so its partial sample is a
+// random sample of the mutants on the changed lines, as the interval needs. mutmut tests the
+// mutants with the fastest tests first, so its partial sample is not random: the interval holds
+// only as well as those mutants stand for the rest.
 export function judge(runResult, min, marks = []) {
   if (runResult.fixed) return runResult.fixed;
   const { complete, budgetSeconds } = runResult;
@@ -253,6 +327,7 @@ export function judge(runResult, min, marks = []) {
     test_files: runResult.testFiles,
     test_selection: runResult.testSelection,
     output: runResult.output,
+    ...(runResult.mutmut ? { mutmut: runResult.mutmut } : {}),
     ...(runResult.failedInFirstRun ? { first_output: runResult.firstOutput, failed_in_first_run: runResult.failedInFirstRun } : {}),
     survivors: listed(mutants, 'Survived'),
     no_coverage_mutants: listed(mutants, 'NoCoverage'),
@@ -262,9 +337,9 @@ export function judge(runResult, min, marks = []) {
   const { n, killed, timeout } = tally;
   const partial = complete ? '' : ` The budget of ${budgetSeconds} seconds ran out after ${n} mutants, so they are a sample.`;
   if (n === 0) {
-    const none = equivalent.length > 0 ? 'No mutant on the changed lines counts: each one that survived is marked as equivalent in the policy.' : 'Stryker made no mutant on the changed lines.';
+    const none = equivalent.length > 0 ? 'No mutant on the changed lines counts: each one that survived is marked as equivalent in the policy.' : 'The mutation tools made no mutant on the changed lines.';
     if (complete) return { status: 'met', details: { ...details, reason: none } };
-    return { status: 'missing', details, how_to_fix: `The budget of ${budgetSeconds} seconds (settings.mutation_budget_seconds) ran out before Stryker had tested one mutant that counts, so Exhibit has no catch rate. Raise the budget, or make the tests that reach the changed files faster, and run exhibit check again.` };
+    return { status: 'missing', details, how_to_fix: `The budget of ${budgetSeconds} seconds (settings.mutation_budget_seconds) ran out before Stryker or mutmut had tested one mutant that counts, so Exhibit has no catch rate. Raise the budget, or make the tests that reach the changed files faster, and run exhibit check again.` };
   }
   const rate = (killed + timeout) / n;
   const { low, high } = clopperPearson(killed + timeout, n);
@@ -274,7 +349,7 @@ export function judge(runResult, min, marks = []) {
   if (complete || high < min) {
     return { status: 'failed', details, how_to_fix: `${shown} The policy's min is ${min}. ${survivorsHelp}` };
   }
-  return { status: 'missing', details, how_to_fix: `${shown} The policy's min is ${min}, and the interval holds it, so the sample is too small to tell. Raise settings.mutation_budget_seconds so that Stryker tests more mutants, or make the tests that reach the changed files faster. ${survivorsHelp}` };
+  return { status: 'missing', details, how_to_fix: `${shown} The policy's min is ${min}, and the interval holds it, so the sample is too small to tell. Raise settings.mutation_budget_seconds so that more mutants get tested, or make the tests that reach the changed files faster. ${survivorsHelp}` };
 }
 
 // The counts of a set of mutants, with the catch rate and its 95% interval, rounded to 4 places.
