@@ -39,7 +39,7 @@ export const COLLECTORS = Object.freeze({
 // from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
-// `settings`, and `testRuns()`, which runs the tests on the base and the head the first time it is
+// `settings` and `equivalentMutants`, and `testRuns()`, which runs the tests on the base and the head the first time it is
 // called and gives back the same per-test results after that. So a later collector, such as
 // failing-before, uses the same results and does not run the tests again. `runTests` makes those
 // results. `baseWithPrTests(paths)` runs the tests on the base with those paths as they are on the
@@ -73,6 +73,8 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     head: change.head,
     files,
     settings: change.policy?.settings ?? {},
+    // The mutants that a person marked as equivalent in the policy (spec 9.5).
+    equivalentMutants: change.policy?.equivalent_mutants ?? [],
     testRuns: () => (testRuns ??= runTests({ cwd: change.cwd, base: change.base, head: change.head, settings: change.policy?.settings ?? {}, env: change.env ?? process.env })),
     baseWithPrTests: (paths) => {
       const key = paths.join('\0');

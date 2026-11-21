@@ -62,7 +62,8 @@ function withDefaults(policy) {
   const result = {
     ...policy,
     settings: { ...settings, fix_signals: settings.fix_signals ?? [...DEFAULT_FIX_SIGNALS] },
-    kinds: policy.kinds ?? {}
+    kinds: policy.kinds ?? {},
+    equivalent_mutants: policy.equivalent_mutants ?? []
   };
   if (result.version === null) delete result.version;
   if (result.default === null) delete result.default;

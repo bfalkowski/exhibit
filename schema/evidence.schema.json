@@ -421,6 +421,55 @@
           }
         }
       }
+    },
+    "equivalent_mutants": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Surviving mutants that a person marked as equivalent: a change that cannot alter what the code does (spec 9.5). A mutant that survived, or that no test reached, and that matches a mark in all five of file, line_text, mutator, original and replacement, does not count in the catch rate. exhibit check reads the marks from the base commit, as it reads the rest of this file, so a change to them needs a person.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "line_text",
+          "mutator",
+          "original",
+          "replacement",
+          "reason"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The path of the mutated file in the repo, as evidence.json gives it."
+          },
+          "line_text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text of the line the mutant starts on, as evidence.json gives it: trimmed, with each run of white space as one space. It is in the key in place of the line number, so a mark still holds when lines above it move."
+          },
+          "mutator": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The mutator that made the mutant, such as EqualityOperator."
+          },
+          "original": {
+            "type": "string",
+            "description": "The code that the mutant replaced, as evidence.json gives it."
+          },
+          "replacement": {
+            "type": "string",
+            "description": "The code the mutant put in its place, as evidence.json gives it."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Why the mutant cannot change what the code does, in words a reviewer can check."
+          }
+        }
+      }
     }
   }
 }
