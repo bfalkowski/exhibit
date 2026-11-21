@@ -73,15 +73,12 @@ test('a change to evidence.yml gives needs_person, with a gap that says why', as
   assert.match(exhibit.gaps[0].how_to_fix, /evidence\.yml/);
 });
 
-test('the built-in collectors skip mutation, so mutation can never give meets_policy', async () => {
-  const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }, 'tests-before-after', 'failing-before'])), { ...options(undefined), collectors: undefined });
+test('with no test command in the policy, the built-in test collectors say missing', async () => {
+  const exhibit = await buildExhibit(input(policyWith(['tests-before-after', 'failing-before'])), { ...options(undefined), collectors: undefined });
   assert.equal(exhibit.verdict, 'needs_person');
-  // tests-before-after and failing-before are built. With no test command in the policy, their
-  // evidence is missing.
-  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['skipped', 'missing', 'missing']);
-  assert.match(exhibit.gaps[0].how_to_fix, /S6/);
+  assert.deepEqual(exhibit.requirements.map((item) => item.status), ['missing', 'missing']);
+  assert.match(exhibit.gaps[0].how_to_fix, /settings\.test_command/);
   assert.match(exhibit.gaps[1].how_to_fix, /settings\.test_command/);
-  assert.match(exhibit.gaps[2].how_to_fix, /settings\.test_command/);
 });
 
 test('the tests run once, however many collectors ask, and flaky tests from collectors are listed', async () => {
@@ -129,7 +126,8 @@ test('checks_by_author counts the requirements of each author', async () => {
 });
 
 test('the summary lists each gap with how to fix it, and says when only the branch was known', async () => {
-  const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }]), ['evidence.yml']), options(undefined));
+  const skipped = async () => ({ status: 'skipped', details: {}, how_to_fix: 'Judge the tests.' });
+  const exhibit = await buildExhibit(input(policyWith([{ mutation: { min: 0.7 } }]), ['evidence.yml']), options({ ...ALL_MET, mutation: skipped }));
   const summary = renderSummary(exhibit);
   assert.match(summary, /needs_person/);
   assert.match(summary, /exit code 1/);

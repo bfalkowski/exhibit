@@ -71,12 +71,15 @@ function failure(outcome, missing, timeoutSeconds) {
 }
 
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
-// Then it kills the whole group. Gives back { code, signal, timedOut }.
-async function runInGroup(command, { cwd, logFile, timeoutMs }) {
+// Then it kills the whole group. Gives back { code, signal, timedOut }. With `args`, `command` is
+// a program that runs with those arguments, and no shell. `env` is the env of the command, and the
+// env of Exhibit when it is left out. The output goes to `logFile`, or nowhere when it is null.
+export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
     const output = log === null ? 'ignore' : log.fd;
-    const child = spawn(command, { cwd, shell: '/bin/sh', detached: true, stdio: ['ignore', output, output] });
+    const options = { cwd, env, detached: true, stdio: ['ignore', output, output] };
+    const child = args === null ? spawn(command, { ...options, shell: '/bin/sh' }) : spawn(command, args, options);
     const killGroup = () => {
       try {
         process.kill(-child.pid, 'SIGKILL');

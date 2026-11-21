@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
 import { describeTests, failingBefore } from './failing-before.js';
+import { describeMutation, mutation } from './mutation.js';
 import { runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -10,17 +11,13 @@ const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
-// how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. Mutation comes
-// in slice S6. Until then it says `skipped`, so a requirement it cannot check never passes on its
-// own. The probe collector needs the head worktree, so the check command adds it (src/probe.js).
+// how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The mutation
+// collector runs Stryker in a worktree of the head of its own (src/mutation.js). The probe
+// collector shares the head worktree of the check command, so the command adds it (src/probe.js).
 export const COLLECTORS = Object.freeze({
   'tests-before-after': testsBeforeAfter,
   'failing-before': failingBefore,
-  mutation: async () => ({
-    status: 'skipped',
-    details: { reason: 'mutation comes in slice S6' },
-    how_to_fix: 'Exhibit cannot run mutation tests yet: they come in slice S6. Until then a policy that needs mutation never gives meets_policy, so a person must judge how strong the tests are.'
-  })
+  mutation
 });
 
 // Builds the exhibit, the content of evidence.json (spec 8.2), for one change.
@@ -224,9 +221,10 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
   return lines.join('\n') + '\n';
 }
 
-// More words for a requirement's line in summary.md: the tests that failing-before found, or why
-// a requirement was not needed.
+// More words for a requirement's line in summary.md: the tests that failing-before found, why
+// a requirement was not needed, or the catch rate and the surviving mutants.
 function otherDetails(item) {
+  if (item.type === 'mutation') return describeMutation(item.details);
   if (item.type !== 'failing-before') return '';
   if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
   return describeTests(item.details);
