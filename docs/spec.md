@@ -648,20 +648,25 @@ It reads `.exhibit/labels.jsonl` (section 8.4), `.exhibit/history.jsonl` (sectio
 
 **Which defects count.** A defect counts only when it has a link that a person kept: its `introducing_prs` is not empty. A defect whose every link the person rejected does not count, because nothing ties it to a PR.
 
-**The two-defect minimum.** It drafts a rule only for a category that two or more counted defects share. The category is the `category` text in the labels file, matched exactly. The counted defects must also have at least two different PRs among their kept introducing PRs. Two fixes of one bad PR show one mistake, not a pattern. A category with one counted defect gets no rule. The output lists it under "Waiting for a second defect", with its defect ID, so the person can see it.
+**The two-defect minimum.** It drafts a rule only for a category that two or more counted defects share. The category is the `category` text in the labels file, matched exactly. The counted defects must also have at least two different PRs among their kept introducing PRs. Two fixes of one bad PR show one mistake, not a pattern. A category with one counted defect gets no rule, and the output says `Waiting for a second defect: "Broken doc link" (D-023).` A category with two or more counted defects that all come from one PR gets no rule either, and the output says `Waiting for a second PR: "Cache key wrong" (D-030, D-031, all from PR 70).` So the person sees every category that is not drafted, and why.
 
 **The trigger.** Each drafted rule is a kind of change (section 6) and says what in a diff triggers it:
 
 - `match` holds the file paths from those defects' introducing PRs. For a link found by blame, these are the `path` of each line in the kept link (`szz.links` in the fix's history line), so the rule points at the files where the bug was. For a link found from a revert, which has no lines, they are the paths in the introducing PR's `files`. The paths are written as they are, sorted, with no copies and no wildcards. A person can widen them to a glob when they review the diff.
+- A path can be missing. The fix's history line can be gone, as after `exhibit history --limit 20`, because a labels line stays when its defect leaves the history (section 8.4). A later `exhibit history` run can give other SZZ links, so a kept PR may no longer be in `szz.links`. A revert can link a PR that is not in the history (section 9.2), so it has no `files`. And `files` is cut short for a PR with more than 3,000 files (section 8.3). In each case the defect still counts toward the minimum, because its kept PRs are in the labels file. It adds only the paths that are there, and the output names the defect, the PR and the reason, so the person can add the paths by hand. When a drafted rule would have no path at all, it is not drafted, because `match` needs at least one glob, and the output says so.
 - `source` holds the IDs of the counted defects, sorted, such as `[D-012, D-019]`. The backtest uses it for its leak check (section 9.9).
 - `match` and `source` come only from these files, never from Claude, so a person can check each path and each ID.
-- `needs` says what evidence the rule asks for. With `ANTHROPIC_API_KEY` set, Claude drafts it from the defects' `would_have_caught` text (section 9.11). Without the key, `needs` is empty, and the defects' `would_have_caught` text is written above the rule as YAML comments, for the person to turn into `needs`.
+- `needs` says what evidence the rule asks for. It starts with the `needs` of `default` in `evidence.yml`. A path that matches no kind uses `default` (section 9.1), and a PR's needs are the union of the kinds it matches (section 8.1). So once the rule matches a path, `default` no longer applies to it, and a rule drafted from two bugs must not ask for less than `default` did. With `ANTHROPIC_API_KEY` set, Claude drafts more items from the defects' `would_have_caught` text (section 9.11), and they are added after `default`'s items. An item that is the same as one already there is not added again. Without the key, no items are added, and the defects' `would_have_caught` text is written above the rule as YAML comments, for the person to turn into `needs`. When the policy has no `default` and no item is added, `needs` is empty, and the output warns that the rule asks for no evidence: a PR that touches only its paths would then get `meets_policy`, where before it got the `no-rule` gap (section 9.8).
 - `risk` is `medium` and `merge_without_reading` is `never`. A person changes them if they want.
-- The kind's name is the category in lowercase, with each run of characters that are not letters or digits made into one `-`. "Restart state lost" gives `restart-state-lost`.
+- The kind's name is the category in lowercase, with each run of characters that are not letters or digits made into one `-`, and with any `-` at the start or the end taken off. "Restart state lost" gives `restart-state-lost`, and "(UI) layout" gives `ui-layout`. A category with no letter or digit, such as "???", gives `category`. When the name is taken, by a kind in `evidence.yml` that is not the one the next point picks, or by a kind drafted earlier in the same run, the later one gets `-2`, `-3` and so on, as probe names do (section 9.6). "Restart state lost" and "restart-state lost" are two categories, so they give `restart-state-lost` and `restart-state-lost-2`.
 
-**When a rule is there already.** A category whose counted defects are all in the `source` of one kind already gets no draft. When the drafted kind's name is in `evidence.yml` already, the diff adds the new paths to that kind's `match` and the new IDs to its `source`, and keeps its `needs`, `risk` and `merge_without_reading`.
+**When a rule is there already.** A defect is already in a rule when its ID is in the `source` of any kind, or of `default`. Such defects still count toward the minimum, but only the other defects add paths and IDs.
 
-**The output.** It prints a unified diff to `evidence.yml` on stdout. It never writes the file, as section 7 says. A person reads the diff, applies it, and opens a PR, and that PR gets a `policy-change` gap and `needs_person` like any other change to the policy (section 9.8). With no category that has two counted defects, it prints no diff and says so.
+- A category whose counted defects are all in a rule already gets no draft, whether they are in one kind or spread over more than one.
+- When the defects of the category that are already in a rule are all in one kind, the diff adds the new paths to that kind's `match` and the new IDs to its `source`, whatever its name. It keeps the kind's `needs`, `risk` and `merge_without_reading`.
+- When they are spread over two or more kinds, or are only in `default`, it drafts a new kind for the new defects, and the output names the kinds that hold the others, so the person can decide whether to merge them.
+
+**The output.** It prints a unified diff to `evidence.yml` on stdout, and only the diff, so `exhibit policy suggest > p.diff && git apply p.diff` works. Every other line, such as the "Waiting" lines, the missing paths, the warnings and the "no rule" message, goes to stderr. It never writes the file, as section 7 says. A person reads the diff, applies it, and opens a PR, and that PR gets a `policy-change` gap and `needs_person` like any other change to the policy (section 9.8). With no rule to draft, it prints nothing on stdout, and says on stderr why.
 
 Example. The labels file has three defects, each with a kept link.
 
@@ -671,25 +676,27 @@ Example. The labels file has three defects, each with a kept link.
 | D-019 | Restart state lost | 55 | `relay/supervisor.js`, `relay/session-host.js` |
 | D-023 | Broken doc link | 61 | `docs/manual/setup.md` |
 
-D-012 and D-019 share a category and come from two different PRs, so one rule is drafted. D-023 is alone in its category, so it waits for a second defect. Without `ANTHROPIC_API_KEY`, the diff is:
+D-012 and D-019 share a category and come from two different PRs, so one rule is drafted. D-023 is alone in its category, so it waits for a second defect. The policy is the one in section 8.1, where no kind matches the two paths, so `needs` starts with `default`'s two items. Without `ANTHROPIC_API_KEY`, the diff on stdout is:
 
 ```diff
 --- a/evidence.yml
 +++ b/evidence.yml
-@@ -35,2 +35,10 @@
+@@ -35,2 +35,12 @@
      merge_without_reading: allowed
 +  restart-state-lost:
 +    # D-012 would have been caught by: a test that restarts the supervisor mid-run
 +    # D-019 would have been caught by: a restart probe that checks the session list
 +    match: ["relay/session-host.js", "relay/supervisor.js"]
 +    risk: medium
-+    needs: []
++    needs:
++      - tests-before-after
++      - mutation: { min: 0.70 }
 +    merge_without_reading: never
 +    source: [D-012, D-019]
  default:
 ```
 
-After the diff it prints: `Waiting for a second defect: "Broken doc link" (D-023).`
+On stderr it prints: `Waiting for a second defect: "Broken doc link" (D-023).`
 
 **Later, not version 1:**
 
