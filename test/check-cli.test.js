@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -555,6 +555,77 @@ test('the time limit comes from settings.probe_timeout_seconds, and old probe fi
   assert.deepEqual([evidence.requirements[0].status, evidence.requirements[0].details.timeout_seconds], ['failed', 1]);
   assert.match(evidence.gaps[0].how_to_fix, /timed out/);
   assert.equal(existsSync(join(fixture.repo, '.exhibit', 'probes', 'old')), false);
+});
+
+// Waits until `check()` is true, and fails after `ms` milliseconds.
+async function waitFor(check, ms, what) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) assert.fail(`waited ${ms} ms for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+const isRunning = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+};
+
+// A probe runs in a process group of its own, so a Ctrl-C in the terminal reaches Exhibit, not the
+// probe. Exhibit must stop the probe and remove the head worktree itself.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  test(`${signal} while a probe runs stops the probe, removes the head worktree, and ends by the signal`, async (t) => {
+    const fixture = buildRepo(t);
+    // The file is outside the worktree, so it is still there when the worktree is gone.
+    const pidFile = join(dirname(fixture.repo), 'sleep.pid');
+    withProbes(fixture, [{ name: 'sleeper', run: `sleep 47 & echo $! > ${pidFile}; wait` }]);
+    const child = spawn(process.execPath, [bin, 'check', '--base', 'start', '--head', 'notes'], { cwd: fixture.repo, env: gitEnv(fixture.home), stdio: 'ignore' });
+    const exited = new Promise((resolve) => child.once('exit', (status, signalName) => resolve({ status, signalName })));
+    t.after(() => child.kill('SIGKILL'));
+    await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '', 20000, 'the probe to start');
+    const sleepPid = Number(readFileSync(pidFile, 'utf8').trim());
+    t.after(() => {
+      if (isRunning(sleepPid)) process.kill(sleepPid, 'SIGKILL');
+    });
+    assert.equal(isRunning(sleepPid), true);
+
+    child.kill(signal);
+    const { status, signalName } = await exited;
+    // Exhibit ends by the signal, as src/probe.js makes it do, so a shell shows 128 plus its number.
+    assert.deepEqual({ status, signalName }, { status: null, signalName: signal });
+    await waitFor(() => !isRunning(sleepPid), 5000, 'the sleep process to stop');
+    const worktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
+    assert.equal(worktrees.match(/^worktree /gm).length, 1, worktrees);
+  });
+}
+
+// A stop can come after the last probe has ended, while the collectors still finish. The handler
+// is then still removing the head worktree, and the run must not write an exhibit (spec 9.6). A
+// real signal hits this case only by chance, so here a collector calls stopAllGroups, as the
+// handler does, and the run goes on. stopAllGroups sets state that lasts for the whole process,
+// so the run is in a process of its own, which exits after 1 second.
+test('after a stop, check writes no evidence.json or summary.md, even when the collectors finish', (t) => {
+  const fixture = buildRepo(t);
+  const checkModule = fileURLToPath(new URL('../src/commands/check.js', import.meta.url));
+  const probeModule = fileURLToPath(new URL('../src/probe.js', import.meta.url));
+  const script = `
+    import { check } from ${JSON.stringify(checkModule)};
+    import { stopAllGroups } from ${JSON.stringify(probeModule)};
+    const collectors = {
+      'tests-before-after': async () => { stopAllGroups(); return { status: 'met' }; },
+      mutation: async () => ({ status: 'met' })
+    };
+    check(['--base', 'start', '--head', 'fix/src'], { env: {}, cwd: ${JSON.stringify(fixture.repo)}, stdout: process.stdout, collectors });
+    setTimeout(() => process.exit(0), 1000);
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
+  assert.equal(out, '');
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'summary.md')), false);
 });
 
 test('a probe gets the env that check() gets, without NODE_TEST_CONTEXT, as the test command does', async (t) => {

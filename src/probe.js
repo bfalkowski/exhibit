@@ -71,17 +71,34 @@ function failure(outcome, missing, timeoutSeconds) {
   return null;
 }
 
-// The process groups that runInGroup has started and not yet killed. Each one is a function that
-// kills its group.
+// The process groups that runInGroup has started and not yet killed: probes, test runs,
+// settings.mutation_setup and Stryker. Each one is a function that kills its group.
 const liveGroups = new Set();
 const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+let stopping = false;
+
+// Kills every process group that runInGroup started and that may still run, for a signal handler
+// that stops Exhibit (spec 9.6). After it, runInGroup starts no new command, and a call that waits
+// for a command never returns, so no probe goes on to read a worktree that is being removed. Call
+// it only when Exhibit is about to exit.
+export function stopAllGroups() {
+  stopping = true;
+  for (const kill of liveGroups) kill();
+}
+
+// True after stopAllGroups, so the caller can stop too, and write nothing for a stopped run.
+export function stopped() {
+  return stopping;
+}
 
 // A group of its own does not get the SIGINT that Ctrl-C sends to Exhibit's group, or the SIGHUP
 // that a closing terminal sends. So Exhibit kills every live group itself when it gets SIGINT,
 // SIGTERM or SIGHUP. Then it sends the signal to itself again with no listener left, so it ends
-// by that signal, as it did before.
+// by that signal, as it did before. exhibit check adds a listener of its own while the collectors
+// run, which removes the head worktree and then exits (src/commands/check.js), so there the
+// signal sent again changes nothing.
 function onStopSignal(signal) {
-  for (const kill of liveGroups) kill();
+  stopAllGroups();
   liveGroups.clear();
   for (const name of STOP_SIGNALS) process.removeListener(name, onStopSignal);
   process.kill(process.pid, signal);
@@ -109,8 +126,11 @@ function unwatchGroup(kill) {
 // writes no JUnit file. Probes, test runs and mutation runs all start here, so all get the same
 // env.
 export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
+  if (stopping) return new Promise(() => {});
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
+    // The stop can come while the log file opens. Check again, so no command starts after it.
+    if (stopping) return await new Promise(() => {});
     const output = log === null ? 'ignore' : log.fd;
     const clean = { ...env };
     delete clean.NODE_TEST_CONTEXT;
@@ -136,6 +156,7 @@ export async function runInGroup(command, { cwd, logFile, timeoutMs, env = proce
         child.once('error', reject);
         child.once('exit', (code, signal) => resolve({ code, signal }));
       });
+      if (stopping) await new Promise(() => {});
       return { code, signal, timedOut };
     } finally {
       clearTimeout(timer);
