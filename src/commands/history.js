@@ -10,7 +10,7 @@ import { readLabelsToCount } from '../labels.js';
 import { checkHistoryLine } from '../history-schema.js';
 import { DEFAULT_POLICY, readPolicy } from '../policy.js';
 import { buildReport, funnel, HISTORY_REPORT } from '../report.js';
-import { addSzz, cloneRoot } from '../szz.js';
+import { addSzz, cloneRoot, REVERTS_A_REVERT } from '../szz.js';
 import { ToolError } from '../tool-error.js';
 import { writeTogether } from '../write-together.js';
 
@@ -95,8 +95,6 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, kinds, tracker, warn });
   const read = keepSzz(updated.lines, previous);
-  const changes = classificationChanges(read, previous);
-  if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
   const kindChanges = kindsChanges(read, previous);
   if (kindChanges.length > 0) stderr.write(`exhibit: note: ${kindChanges}\n`);
 
@@ -113,6 +111,11 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
     lines = read.map((line) => ({ ...line, szz: line.szz ?? null }));
     stderr.write(`exhibit: note: SZZ did not run, because this folder is not a clone of ${options.repo}, so every szz is null. Run history inside a clone to link fix PRs to the PRs that added their lines.\n`);
   }
+
+  // After SZZ, because SZZ makes a re-land no fix (spec 9.1), and the fix signals alone mark it
+  // as a revert on each run.
+  const changes = classificationChanges(lines, previous);
+  if (changes.length > 0) stderr.write(`exhibit: note: ${changes}\n`);
 
   const problems = lines.flatMap((line) => checkHistoryLine(line).map((problem) => `PR ${line.number} ${problem}`));
   if (problems.length > 0) {
@@ -222,8 +225,10 @@ function keepSzz(lines, previous) {
   });
 }
 
-// SZZ blames no commit for a revert (spec 9.2), so its blamed_commit is null.
-const fitsSignal = (szz, line) => (szz.blamed_commit === null) === (line.classification.fix_signal === REVERT_SIGNAL);
+// SZZ blames no commit for a revert (spec 9.2), so its blamed_commit is null. An szz that says
+// "reverts a revert" comes from a file written before SZZ made a re-land no fix, so SZZ runs
+// again and makes the line no fix.
+const fitsSignal = (szz, line) => (szz.blamed_commit === null) === (line.classification.fix_signal === REVERT_SIGNAL) && szz.no_link_reason !== REVERTS_A_REVERT;
 
 // Returns one text that lists the PRs whose classification differs from their line in the old
 // file, or '' when none does. The fix signals in evidence.yml classify every line on each run, so

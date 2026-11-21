@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
-import { addSzz, REVERT_NOT_FOUND, REVERTS_A_REVERT } from '../src/szz.js';
+import { addSzz, REVERT_NOT_FOUND } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
@@ -116,14 +116,16 @@ test('a revert that names more than one PR links each one, and splits the confid
   assert.deepEqual(checkHistoryLine(done), []);
 });
 
-test('a re-land with an edited title does not link the revert it takes back', async (t) => {
+test('a re-land with an edited title is no fix: it links nothing, and its szz is null', async (t) => {
   const { repo, lines } = fixtureWithReverts(t);
   const pr15 = lines.at(-2);
   // PR 17 clicks Revert on PR 15, then renames the title, so only the body says what it reverts.
-  const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts fixture/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17` };
+  const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts fixture/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17`, classification: { kinds: ['api'], fix: true, fix_signal: 'revert' } };
   const forge = createGitHubForge({ repo: REPO, token: 't', fetch: commitPullsFetch(repo, REPO) });
   const [done] = await addSzz([reland], { dir: repo.dir, forge, known: [...lines, reland] });
-  assert.deepEqual(done.szz, { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: REVERTS_A_REVERT });
+  // It puts PR 5 back, as a title 'Revert "Revert "' does, so it is no fix (spec 9.1). It keeps its kinds.
+  assert.deepEqual(done.classification, { kinds: ['api'], fix: false, fix_signal: null });
+  assert.equal(done.szz, null);
   assert.deepEqual(checkHistoryLine(done), []);
 
   await t.test('a revert that names a revert and a plain PR links only the plain PR', async () => {

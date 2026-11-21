@@ -108,7 +108,9 @@ async function askForge(forge, sha, defaultBranch) {
 
 // Returns `lines` with `szz` set on each one (spec 9.2). A fix PR gets its links. A fix that the
 // revert signal marked links the PRs it reverts, with no blame (revertLinks). A PR that is
-// not a fix gets null. A fix whose merge commit is not in the clone, where git fails, or where
+// not a fix gets null. A revert that reverts only reverts is a re-land, such as "Reland: add
+// cache" after a click on Revert: it puts work back, so it is no fix (spec 9.1). It comes back as
+// no fix, with szz null, as a title 'Revert "Revert "' would. A fix whose merge commit is not in the clone, where git fails, or where
 // the forge fails for one of its requests, gets null and a warning. A shallow clone gives one
 // warning first, because blame there can give old lines to the shallow boundary commit.
 // `dir` must be the top folder of a clone of the forge's repo, as cloneRoot returns it.
@@ -139,7 +141,8 @@ export async function addSzz(lines, { dir, forge, tracker = null, warn = () => {
       const szz = revert
         ? await revertLinks(dir, line, { findPr, forge, knownPrs })
         : await szzForFix(dir, line, findPr, (await bugReportDate(line, forge)) ?? (await trackerReportDate(line, tracker)));
-      out.push({ ...line, szz });
+      if (szz.no_link_reason === REVERTS_A_REVERT) out.push({ ...line, classification: { ...line.classification, fix: false, fix_signal: null }, szz: null });
+      else out.push({ ...line, szz });
     } catch (error) {
       if (!(error instanceof GitError) && !failsOneRequest(error)) throw error;
       warn(`PR ${line.number}: SZZ skipped, because ${error.message}`);
@@ -239,8 +242,9 @@ async function szzForFix(dir, fix, findPr, reportedAt) {
 // The no_link_reason of a revert for which SZZ found no PR in this repo: the body named none,
 // named only PRs in other repos, or named work that neither the history nor the forge knows.
 export const REVERT_NOT_FOUND = 'reverted change not found';
-// The no_link_reason of a revert whose every found PR is itself a revert. It puts work back (a
-// re-land), so the PR it takes back did not bring a bug.
+// What revertLinks says of a revert whose every found PR is itself a revert. It puts work back (a
+// re-land), so the PR it takes back did not bring a bug. addSzz then makes the line no fix. A
+// history file from before that rule can still hold it on a fix line.
 export const REVERTS_A_REVERT = 'reverts a revert';
 
 // A revert names the work it reverts, so SZZ blames no line: it links each reverted PR straight

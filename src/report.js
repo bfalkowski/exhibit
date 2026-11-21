@@ -1,4 +1,4 @@
-import { REVERT_NOT_FOUND, REVERTS_A_REVERT } from './szz.js';
+import { REVERT_NOT_FOUND } from './szz.js';
 
 // Builds the history report (spec 8.5): report.md and a self-contained report.html, from the
 // history lines. Both files come from one list of blocks, so they always hold the same facts.
@@ -188,7 +188,6 @@ function whyNoLink(fix) {
   const { szz } = fix;
   if (szz === null) return 'SZZ skipped it. The warning from exhibit history says why.';
   if (szz.no_link_reason === REVERT_NOT_FOUND) return 'It is a revert, but Exhibit found no PR in this repo that it names.';
-  if (szz.no_link_reason === REVERTS_A_REVERT) return 'It reverts a revert, so it puts a change back, and the PR it takes back brought no bug.';
   if (szz.no_link_reason) return `SZZ dropped every line it changed: ${szz.no_link_reason}.`;
   if (szz.unlinked_lines.length > 0) return `SZZ found its ${szz.unlinked_lines.length} ${szz.unlinked_lines.length === 1 ? 'line' : 'lines'} only in commits that are in no merged PR.`;
   return 'SZZ found no line that it deleted or changed, so there was nothing to blame.';
