@@ -1049,7 +1049,8 @@ function markComments(texts, path, starts = []) {
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);
     }
-    const end = blockEnd(rest);
+    // With the file, the first "*/" ends the block, as in JavaScript. Only the guess skips a glob.
+    const end = starts[i] === undefined ? blockEnd(rest) : rest.indexOf('*/');
     inBlock = end === -1;
     if (inBlock) return true;
     const after = rest.slice(end + 2).trim();
