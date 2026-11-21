@@ -133,6 +133,26 @@ test('a re-land with an edited title is no fix: it links nothing, and its szz is
     const [line] = await addSzz([both], { dir: repo.dir, forge, known: [...lines, both] });
     assert.deepEqual(line.szz.links, [revertLink(2)]);
   });
+
+  await t.test('a revert of a re-land is a fix, and links the re-land, and a revert of that is a re-land', async () => {
+    // PR 18 clicks Revert on the re-land PR 17: the change broke again, so PR 17 brought the bug back.
+    const revertOfReland = { ...reland, number: 18, title: 'Revert "Reland: add the shop entry point"', body: 'Reverts fixture/shop#17', url: `https://github.com/${REPO}/pull/18` };
+    // PR 19 clicks Revert on PR 18, and a person renames the title: it puts the change back once more.
+    const again = { ...reland, number: 19, title: 'Reland again: add the shop entry point', body: 'Reverts fixture/shop#18', url: `https://github.com/${REPO}/pull/19` };
+    const known = [...lines, reland, revertOfReland, again];
+    const [fix, relandAgain] = await addSzz([revertOfReland, again], { dir: repo.dir, forge, known });
+    assert.deepEqual(fix.classification, { kinds: ['api'], fix: true, fix_signal: 'revert' });
+    assert.deepEqual(fix.szz.links, [revertLink(17)]);
+    assert.deepEqual([relandAgain.classification.fix, relandAgain.szz], [false, null]);
+  });
+
+  await t.test('a revert of a re-land that names it by its merge commit links it too', async () => {
+    // The re-land is on main as PR 5's squash commit would be, so the history maps that commit to PR 17.
+    const relandOnMain = { ...reland, merge_sha: 'f'.repeat(40) };
+    const revertOfReland = { ...reland, number: 18, title: 'Take back the re-land', body: `This reverts commit ${'f'.repeat(40)}.`, url: `https://github.com/${REPO}/pull/18` };
+    const [fix] = await addSzz([revertOfReland], { dir: repo.dir, forge, known: [...lines, relandOnMain, revertOfReland] });
+    assert.deepEqual([fix.classification.fix, fix.szz?.links], [true, [revertLink(17)]]);
+  });
 });
 
 test('a reverted PR that the history and the forge do not know gives no link, and says so', async (t) => {
