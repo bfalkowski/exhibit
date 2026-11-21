@@ -256,6 +256,23 @@ test('--policy reads the storage settings from that file', (t) => {
   assert.match(runPublish(fixture, fixture.repo, file, ['--policy', '../x.yml']).stderr, /--policy must be the path of a file in the repo/);
 });
 
+// The review of PR 220, finding 4: with a typo in --policy, publish used the default storage, so
+// it could push to exhibit-data when the real policy says storage: local.
+test('a --policy file that is not there exits 2 and stores nothing, and with no --policy a missing evidence.yml uses the defaults', (t) => {
+  const fixture = buildFixture(t);
+  mkdirSync(join(fixture.repo, '.github'));
+  writeFileSync(join(fixture.repo, '.github', 'evidence.yml'), 'settings:\n  storage: local\n');
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  const run = runPublish(fixture, fixture.repo, file, ['--policy', '.github/evidnce.yml']);
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: --policy names \.github\/evidnce\.yml, but there is no such file\. Check the path\.$/m);
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+  // With no --policy and no evidence.yml, the policy is empty, so the default storage holds.
+  const plain = runPublish(fixture, fixture.repo, file, []);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /on exhibit-data in commit/);
+});
+
 // The GitHub Action passes enforce to publish on its own, whether or not it posts a comment.
 test('--enforce without --comment is allowed, and posts nothing', (t) => {
   const fixture = buildFixture(t);
