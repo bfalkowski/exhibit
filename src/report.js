@@ -29,7 +29,12 @@ const NO_LABELS = { state: 'none' };
  */
 export function buildReport(lines, { repo, szzRan, fixSignals, labels = NO_LABELS }) {
   const blocks = reportBlocks(lines, { repo, szzRan, fixSignals, labels });
-  const title = `Escaped defects in ${repo}`;
+  return renderReport(`Escaped defects in ${repo}`, blocks);
+}
+
+// Returns { markdown, html } for a list of blocks, so every report holds the same facts in both
+// files. exhibit backtest builds its blocks in src/backtest-report.js and renders them here.
+export function renderReport(title, blocks) {
   return { markdown: toMarkdown(blocks), html: toHtml(title, blocks) };
 }
 
@@ -223,12 +228,14 @@ function joinWords(words) {
   return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 }
 
-// The blocks. Parts are plain strings, or { code } for code.
+// The blocks. Parts are plain strings, or { code } for code. A table has a header row and rows of
+// cells, and each cell is plain text.
 const toParts = (parts) => parts.flat();
-const heading = (level, ...parts) => ({ type: 'heading', level, parts: toParts(parts) });
-const paragraph = (...parts) => ({ type: 'paragraph', parts: toParts(parts) });
-const list = (items) => ({ type: 'list', items });
-const item = (parts, items = []) => ({ parts: toParts([parts]), items });
+export const heading = (level, ...parts) => ({ type: 'heading', level, parts: toParts(parts) });
+export const paragraph = (...parts) => ({ type: 'paragraph', parts: toParts(parts) });
+export const list = (items) => ({ type: 'list', items });
+export const item = (parts, items = []) => ({ parts: toParts([parts]), items });
+export const table = (header, rows) => ({ type: 'table', header, rows });
 
 function toMarkdown(blocks) {
   const inline = (parts) => parts.map((part) => (typeof part === 'string' ? markdownText(part) : markdownCode(part.code))).join('');
@@ -236,6 +243,10 @@ function toMarkdown(blocks) {
   return blocks.map((block) => {
     if (block.type === 'heading') return `${'#'.repeat(block.level)} ${inline(block.parts)}`;
     if (block.type === 'paragraph') return inline(block.parts);
+    if (block.type === 'table') {
+      const row = (cells) => `| ${cells.map((cell) => markdownText(cell).replaceAll('|', '\\|')).join(' | ')} |`;
+      return [row(block.header), `|${block.header.map(() => '---').join('|')}|`, ...block.rows.map(row)].join('\n');
+    }
     return listLines(block.items, 0).join('\n');
   }).join('\n\n') + '\n';
 }
@@ -268,6 +279,10 @@ function toHtml(title, blocks) {
   const body = blocks.map((block) => {
     if (block.type === 'heading') return `<h${block.level}>${inline(block.parts)}</h${block.level}>`;
     if (block.type === 'paragraph') return `<p>${inline(block.parts)}</p>`;
+    if (block.type === 'table') {
+      const row = (cells, tag) => `<tr>${cells.map((cell) => `<${tag}>${escapeHtml(cell)}</${tag}>`).join('')}</tr>`;
+      return `<table>\n<thead>${row(block.header, 'th')}</thead>\n<tbody>\n${block.rows.map((cells) => row(cells, 'td')).join('\n')}\n</tbody>\n</table>`;
+    }
     return listHtml(block.items);
   }).join('\n');
   // The policy stops the page from loading anything, so it works with no network.
@@ -300,5 +315,7 @@ h3 { font-size: 1.05em; margin: 20px 0 4px; }
 ul { padding-left: 22px; }
 li { margin: 4px 0; }
 li li { color: var(--muted); }
+table { border-collapse: collapse; margin: 8px 0; font-size: 0.92em; }
+th, td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
 code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 `;

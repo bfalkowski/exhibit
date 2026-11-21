@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { backtestCommand } from '../src/commands/backtest.js';
 import { check } from '../src/commands/check.js';
 import { history } from '../src/commands/history.js';
 import { label } from '../src/commands/label.js';
@@ -14,6 +15,8 @@ try {
     console.log(pkg.version);
   } else if (command === 'history') {
     await history(rest, { env: process.env, cwd: process.cwd(), fetch: globalThis.fetch, stdout: process.stdout, stderr: process.stderr });
+  } else if (command === 'backtest') {
+    await backtestCommand(rest, { cwd: process.cwd(), stdout: process.stdout, stderr: process.stderr });
   } else if (command === 'label') {
     await label(rest, { cwd: process.cwd(), env: process.env, fetch: globalThis.fetch, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
   } else if (command === 'check') {
@@ -21,7 +24,7 @@ try {
   } else if (command === 'publish') {
     process.exitCode = await publish(rest, { cwd: process.cwd(), env: process.env, fetch: globalThis.fetch, stdout: process.stdout });
   } else {
-    throw new ToolError(`unknown command ${command === undefined ? '(none)' : command}. The commands are history, label, check, publish and --version.`);
+    throw new ToolError(`unknown command ${command === undefined ? '(none)' : command}. The commands are history, label, backtest, check, publish and --version.`);
   }
 } catch (error) {
   // Any failure exits 2. Node's own exit code for a throw is 1, which for exhibit check means

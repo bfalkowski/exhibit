@@ -311,10 +311,10 @@ function parseOptions(argv, forgeModule) {
   return { repo: values.repo, since, limit, full: values.full === true, json: values.json === true, cache: values['no-cache'] !== true };
 }
 
-// Returns the Date for a --since value, or null when it is not a real date. new Date() rolls a
+// Returns the Date for a --since value, or a backtest --from value, or null when it is not a real date. new Date() rolls a
 // day that does not exist (2026-02-30) over into the next month. Whether a day exists does not
 // depend on the time or the offset, so the date part is checked by itself, for every input.
-function parseSince(text) {
+export function parseSince(text) {
   if (!DATE.test(text)) return null;
   const day = text.slice(0, 10);
   const midnight = new Date(`${day}T00:00:00Z`);
