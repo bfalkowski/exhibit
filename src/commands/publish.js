@@ -10,7 +10,7 @@ import { DEFAULT_POLICY, policyPath, readPolicy } from '../policy.js';
 import { DEFAULT_DATA_BRANCH, DEFAULT_LOCAL_PATH, exhibitPath, STORAGE_TARGETS, store } from '../storage.js';
 import { ToolError } from '../tool-error.js';
 
-const USAGE = 'Usage: exhibit publish --evidence FILE [--policy FILE] [--storage data-branch|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment] [--pr N] [--repo owner/name] [--enforce] [--json]';
+const USAGE = 'Usage: exhibit publish --evidence FILE [--policy FILE] [--storage data-branch|local] [--data-branch NAME] [--remote NAME] [--local-path DIR] [--comment] [--pr N] [--repo owner/name] [--head SHA] [--enforce] [--json]';
 
 // `exhibit publish --evidence FILE`
 // Stores one exhibit, the evidence.json that exhibit check wrote (spec 7 and 9.12). exhibit check
@@ -35,7 +35,8 @@ const USAGE = 'Usage: exhibit publish --evidence FILE [--policy FILE] [--storage
 // Then publish stores nothing. With --comment, --pr N and --repo owner/name, it posts the verdict
 // error and the reason from the summary.md beside the evidence file, in the same one comment, and
 // returns 0. It reads no policy then. Without them, it exits 2 and says where to read why. When there is an exhibit,
-// --pr and --repo must match it.
+// --pr, --repo and --head must match it, or it stores nothing. The Action passes them from the PR
+// event, so an exhibit for another PR or commit is not stored.
 export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   // GitHub is the only forge today, so the command picks its module first and asks it the rest.
   const forgeModule = GITHUB_FORGE;
@@ -58,12 +59,7 @@ export async function publish(argv, { cwd, env = {}, fetch, stdout }) {
   const problems = checkExhibit(exhibit);
   if (problems.length > 0) throw new ToolError(`${options.evidence} does not fit the evidence.json schema, so nothing was stored:\n  ${problems.join('\n  ')}`);
   if (exhibit.pr === null) throw new ToolError(`${options.evidence} has no PR number, so it has no place under prs/. Run exhibit check with --pr N --repo owner/name.`);
-  const otherPr = options.pr !== null && options.pr !== exhibit.pr;
-  const otherRepo = options.repo !== null && exhibit.repo !== null && options.repo.toLowerCase() !== exhibit.repo.toLowerCase();
-  if (otherPr || otherRepo) {
-    const given = `PR ${options.pr ?? exhibit.pr} in ${options.repo ?? exhibit.repo}`;
-    throw new ToolError(`${options.evidence} is the exhibit for PR ${exhibit.pr} in ${exhibit.repo}, not for ${given}, so nothing was stored.`);
-  }
+  refuseOtherEvent(exhibit, options);
   // Every check for --comment comes before the exhibit is stored, so a run that cannot post
   // changes nothing.
   let forge = null;
@@ -132,6 +128,23 @@ async function publishNoExhibit(forgeModule, options, { cwd, env, fetch, stdout 
   return 0;
 }
 
+// Throws when --pr, --repo or --head names another PR, repo or head than the exhibit does. In the
+// GitHub Action they come from the PR event, and the exhibit comes from the check job, which runs
+// the PR's code. That code can rewrite the file. This catches a file for another PR or commit. It
+// cannot catch a file for the right PR and head with a made-up verdict (spec 9.12).
+// An exhibit with no repo does not match a --repo.
+function refuseOtherEvent(exhibit, options) {
+  const otherPr = options.pr !== null && options.pr !== exhibit.pr;
+  const otherRepo = options.repo !== null && (exhibit.repo === null || options.repo.toLowerCase() !== exhibit.repo.toLowerCase());
+  const otherHead = options.head !== null && options.head !== exhibit.head;
+  if (!otherPr && !otherRepo && !otherHead) return;
+  const at = options.head === null ? '' : ` at ${exhibit.head}`;
+  const found = `PR ${exhibit.pr} in ${exhibit.repo ?? 'no named repo'}${at}`;
+  const given = `PR ${options.pr ?? exhibit.pr} in ${options.repo ?? exhibit.repo ?? 'no named repo'}${options.head === null ? '' : ` at ${options.head}`}`;
+  const why = options.head === null ? '' : ' Its head, PR and repo must be the ones of the PR event. A push to the PR while the check ran, or a step in the check job that rewrote the file, can cause this.';
+  throw new ToolError(`${options.evidence} is the exhibit for ${found}, not for ${given}, so nothing was stored.${why}`);
+}
+
 const COMMENT_DONE = { created: 'Posted the comment', updated: 'Updated the comment', unchanged: 'The comment already says this. Nothing changed' };
 
 // Posts or updates the PR comment, and returns { action, url }. A failure says that the exhibit
@@ -170,6 +183,7 @@ function parseOptions(argv, forgeModule) {
         comment: { type: 'boolean' },
         pr: { type: 'string' },
         repo: { type: 'string' },
+        head: { type: 'string' },
         enforce: { type: 'boolean' },
         json: { type: 'boolean' }
       },
@@ -187,6 +201,9 @@ function parseOptions(argv, forgeModule) {
   if (values['local-path'] === '') throw new ToolError('--local-path must not be empty.');
   if (values.pr !== undefined && !/^[1-9]\d*$/.test(values.pr)) throw new ToolError(`--pr must be a PR number, such as 12, not "${values.pr}".`);
   if (values.repo !== undefined && !forgeModule.isRepoName(values.repo)) throw new ToolError(`--repo must look like owner/name, not "${values.repo}".`);
+  // A full SHA, so a short one or a branch name cannot match by chance. git uses 40 hex digits,
+  // or 64 in a SHA-256 repo, as the exhibit schema does.
+  if (values.head !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(values.head)) throw new ToolError(`--head must be a full commit SHA of 40 or 64 hex digits, not "${values.head}". ${USAGE}`);
   return {
     evidence: values.evidence,
     policy: policyPath(values.policy ?? DEFAULT_POLICY),
@@ -197,6 +214,7 @@ function parseOptions(argv, forgeModule) {
     comment: values.comment === true,
     pr: values.pr === undefined ? null : Number(values.pr),
     repo: values.repo ?? null,
+    head: values.head === undefined ? null : values.head.toLowerCase(),
     enforce: values.enforce === true,
     json: values.json === true
   };

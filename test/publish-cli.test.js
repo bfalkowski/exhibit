@@ -283,3 +283,41 @@ test('with no evidence.json, a 403 when posting the error comment gives exit 2 a
   assert.equal(run.stderr, 'exhibit: exhibit check wrote no .exhibit/evidence.json, and the comment on PR 12 that says so was not posted: GitHub answered 403 (Resource not accessible by integration) for /repos/acme/widgets/issues/12/comments. The token may lack access, or the rate limit is used up: check the token, or wait and try again. A fine-grained GITHUB_TOKEN needs the permission "Pull requests: write" for this request.\n');
   assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
 });
+
+// In the GitHub Action, the check job runs the PR's code, and that code can rewrite
+// .exhibit/evidence.json before the upload. Publish cannot run the check again, but it can refuse
+// an exhibit that is not for the PR event: the Action passes the event's repo, PR and head.
+test('--pr, --repo and --head must match the exhibit, or publish exits 2 and stores nothing', (t) => {
+  const fixture = buildFixture(t);
+  const event = ['--pr', '12', '--repo', 'acme/widgets', '--head', HEAD_1];
+  const refused = (value, said) => {
+    const file = fixture.writeExhibit(fixture.dir, 'evidence.json', value);
+    const run = runPublish(fixture, fixture.repo, file, event);
+    assert.equal(run.status, 2, run.stderr);
+    assert.equal(run.stdout, '');
+    assert.equal(run.stderr, `exhibit: ${file} is the exhibit for ${said}, not for PR 12 in acme/widgets at ${HEAD_1}, so nothing was stored. Its head, PR and repo must be the ones of the PR event. A push to the PR while the check ran, or a step in the check job that rewrote the file, can cause this.\n`);
+    assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+  };
+  refused(exhibit(12, HEAD_2), `PR 12 in acme/widgets at ${HEAD_2}`);
+  refused(exhibit(13, HEAD_1), `PR 13 in acme/widgets at ${HEAD_1}`);
+  refused({ ...exhibit(12, HEAD_1), repo: 'acme/gadgets' }, `PR 12 in acme/gadgets at ${HEAD_1}`);
+  // An exhibit with no repo is not the event's exhibit when --repo names one.
+  refused({ ...exhibit(12, HEAD_1), repo: null }, `PR 12 in no named repo at ${HEAD_1}`);
+
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  // GitHub gives lowercase SHAs, but a SHA in capitals names the same commit.
+  const run = runPublish(fixture, fixture.repo, file, ['--pr', '12', '--repo', 'Acme/Widgets', '--head', HEAD_1.toUpperCase()]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(fixture.git(fixture.remote, 'show', `exhibit-data:prs/12/${HEAD_1}.json`), readFileSync(file, 'utf8'));
+});
+
+test('--head must be a full commit SHA', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  for (const bad of ['main', HEAD_1.slice(0, 12), '', `${HEAD_1}0`]) {
+    const run = runPublish(fixture, fixture.repo, file, ['--head', bad]);
+    assert.equal(run.status, 2, bad);
+    assert.match(run.stderr, new RegExp(`^exhibit: --head must be a full commit SHA of 40 or 64 hex digits, not "${bad}"\\.`));
+  }
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+});
