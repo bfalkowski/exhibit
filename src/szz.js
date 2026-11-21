@@ -1012,7 +1012,7 @@ function closesEarlierBlock(texts) {
 
 // Says whether a code row opens a block comment with "/*". As in blockStarts, a "/*" in quotes,
 // such as "s = '/*';", or after "//", such as "x = 1; // see /*", opens nothing.
-// A regex literal reads as text, as in blockStarts. So a quote or "//" in one, such as
+// A regex literal reads as code, as in blockStarts. So a quote or "//" in one, such as
 // "r = /'/; /* a", hides a real "/*" after it on the row: a rare wrong guess.
 // A row that starts with "*" opens no block here, so the code row " * rate /* a" is a rare wrong
 // guess: one row alone cannot tell it from the comment row " * Use /* to open.".
