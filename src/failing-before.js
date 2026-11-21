@@ -26,8 +26,11 @@ export function isTestPath(path) {
 //   case named after the file, as node:test writes it. The tests in that file then do not run.
 //   Many tools stop the whole command instead, such as `tsc && node --test`, or Go, where one test
 //   file that does not compile stops its package. When that run fails and gives no failing test
-//   (a NothingLoaded), every PR test file counts as not loaded. Then only a test in a PR test
-//   file, or one that the plain base run does not have, is the PR's.
+//   (a NothingLoaded), a PR test file counts as not loaded when the JUnit file has no result from
+//   it. A test that is there ran on the base, and counts as in any run. A test that is not there
+//   is the PR's only when its file is a PR test file, or the plain base run does not have it.
+//   Without a file in the names (Node 20), a PR test that is not there counts only when no PR
+//   test is there: else Exhibit cannot tell which file stopped, so a person must check.
 // - it passes on the head.
 // - it is not flaky in any of the three runs.
 //
@@ -67,10 +70,14 @@ export async function failingBefore(requirement, context) {
   }
 
   const nothingLoaded = overlay instanceof NothingLoaded ? overlay : null;
-  if (nothingLoaded) overlay = new Map();
+  if (nothingLoaded) overlay = nothingLoaded.tests;
   const flaky = new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky'), ...namesWith(overlay, 'flaky')]);
-  const didNotLoad = nothingLoaded ? testFiles : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
   const fileOf = (name) => testFiles.find((file) => name.startsWith(`${file} > `));
+  const didNotLoad = nothingLoaded
+    ? testFiles.filter((file) => ![...overlay.keys()].some((name) => fileOf(name) === file))
+    : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
+  // With nothing loaded, a test with no file counts as not loaded only when no PR test ran.
+  const prTestRan = nothingLoaded !== null && [...overlay.keys()].some((name) => fileOf(name) !== undefined || !runs.base.has(name));
 
   const tests = [];
   const passedOnBase = [];
@@ -78,12 +85,13 @@ export async function failingBefore(requirement, context) {
     if (status !== 'passed' || flaky.has(name)) continue;
     const file = fileOf(name);
     const onBase = overlay.get(name);
-    // With nothing loaded there is no result to compare with the plain base run.
-    const theirs = file !== undefined || !runs.base.has(name) || (!nothingLoaded && runs.base.get(name) !== onBase);
+    // With nothing loaded, a test that has no result there gives nothing to compare with the
+    // plain base run.
+    const theirs = file !== undefined || !runs.base.has(name) || (!(nothingLoaded && onBase === undefined) && runs.base.get(name) !== onBase);
     if (!theirs) continue;
     if (onBase === 'failed') {
       tests.push({ name, on_base: 'failed' });
-    } else if (onBase === undefined && didNotLoad.length > 0 && (file === undefined || didNotLoad.includes(file))) {
+    } else if (onBase === undefined && didNotLoad.length > 0 && (file === undefined ? !prTestRan : didNotLoad.includes(file))) {
       // Without a file in the test's name (Node 20's reporter gives none), Exhibit cannot tell
       // which file the test is in, so it names every PR test file that did not load.
       tests.push({ name, on_base: 'did_not_load', files: file === undefined ? didNotLoad : [file] });

@@ -36,10 +36,14 @@ export class TestRunError extends Error {
 // it wrote no JUnit file, or the file names no failing test. Only the PR's test files differ from
 // the plain base run, which gave results, so they broke the command. Most often a new test does
 // not compile or load on the base, for example when it uses a function or type that the base lacks
-// (spec 9.4). `message` says what the command did, and names the log of the first run.
+// (spec 9.4). `message` says what the command did, and names the log of the run. `tests` holds
+// the results that the JUnit file gave, like one side of runTestsOnBaseAndHead, with no failed
+// test. It is empty when the command wrote no JUnit file. A test there ran on the base, so only a
+// PR test file with no result there did not load.
 export class NothingLoaded {
-  constructor(message) {
+  constructor(message, tests = new Map()) {
     this.message = message;
+    this.tests = tests;
   }
 }
 
@@ -200,7 +204,7 @@ async function runOnce({ folder, roots, side, command, results, timeoutSeconds, 
     if (!old || RANK[item.status] > RANK[old]) tests.set(name, item.status);
   }
   if (exit.code !== 0 && ![...tests.values()].includes('failed')) {
-    if (mayNotLoad) return new NothingLoaded(`the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test. Read its output in ${log.shown}`);
+    if (mayNotLoad) return new NothingLoaded(`the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test. Read its output in ${log.shown}`, tests);
     throw new TestRunError('error', `the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test`,
       `The test command "${command}" failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test, so Exhibit cannot tell what broke. ${read} to see why it fails.`);
   }
