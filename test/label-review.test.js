@@ -103,7 +103,7 @@ test('skip and later write nothing, and the defect stays open for the next run',
   assert.equal(existsSync(labelsPath(cwd)), false);
   assert.deepEqual(session.state().items.map((item) => item.state), ['skipped', 'later', 'open']);
   // Two defects were answered, so two were shown. Open counts every defect with no line.
-  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 2, open: 3 });
+  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 2, open: 3, relinked: 0, new_links: 0 });
 });
 
 test('shown counts the defects the page showed, as the terminal flow counts them', async (t) => {
@@ -116,7 +116,7 @@ test('shown counts the defects the page showed, as the terminal flow counts them
   assert.equal(session.summary().run.shown, 1);
   // An answer counts its defect as shown, even when the page did not say it showed it.
   await session.answer('D-007', { action: 'later' });
-  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 1, open: 3 });
+  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 1, open: 3, relinked: 0, new_links: 0 });
   assert.throws(() => session.seen('D-999'), /no open defect D-999/);
 });
 

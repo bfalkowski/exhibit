@@ -10,6 +10,7 @@ import { checkHistoryLine } from './history-schema.js';
 import { checkSchema } from './json-schema.js';
 import { defectText, escapedDefects } from './report.js';
 import { ToolError } from './tool-error.js';
+import { writeTogether } from './write-together.js';
 
 export const HISTORY = '.exhibit/history.jsonl';
 export const LABELS = '.exhibit/labels.jsonl';
@@ -85,13 +86,23 @@ export function checkLabelLine(line) {
  * even when they type the draft's words again. Otherwise a reply with the draft's code and
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
  *
- * Returns { shown, labeled, skipped, open }: `open` counts the defects still without a label.
+ * `askLinks(defect, { text, label, position, count })` is optional: the answer source for a defect
+ * that has a line already, when SZZ now links it to a PR that the line neither keeps nor rejects
+ * (a new link). `defect.links` holds only the new links, `text` shows only their evidence, and
+ * `label` is the defect's first line. It returns { rejected_prs }, or SKIP, or QUIT. The new links
+ * that it keeps go to the end of `introducing_prs`, the rejected ones to the end of `rejected_prs`,
+ * in the same line, and the other fields stay. These defects come after the defects with no line.
+ * Without `askLinks`, they are only counted.
+ *
+ * Returns { shown, labeled, skipped, open, relinked, new_links }: `open` counts the defects still
+ * without a label, `relinked` the labeled defects whose new links the person answered, and
+ * `new_links` the labeled defects that still have a new link. `shown` counts both kinds.
  * With a drafter it also returns `drafts`: { run, file }, how often the person kept Claude's draft
  * in the lines this run wrote and in the whole file (spec 9.11). A skipped defect has no line, so
  * its draft is not counted.
  */
-export async function labelDefects({ cwd, ask, draft, issues, now = () => new Date() }) {
-  const { history, labels, endsWithBreak, categories, open } = await readLabeling(cwd);
+export async function labelDefects({ cwd, ask, askLinks, draft, issues, now = () => new Date() }) {
+  const { history, labels, endsWithBreak, categories, open, relink } = await readLabeling(cwd);
 
   let shown = 0;
   let labeled = 0;
@@ -101,13 +112,17 @@ export async function labelDefects({ cwd, ask, draft, issues, now = () => new Da
   const written = [];
   // stopped: a draft failed in a way that every later draft would fail too.
   let stopped = false;
+  let quit = false;
   for (const defect of open) {
     shown += 1;
     const prepared = await prepareDefect(defect, { history, draft: stopped ? undefined : draft, issues, categories });
     if (prepared.draftStopped !== null) stopped = true;
     const { text, drafted, draftError, draftStopped, review } = prepared;
     const reply = await ask(publicDefect(defect), { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped, review });
-    if (reply === QUIT) break;
+    if (reply === QUIT) {
+      quit = true;
+      break;
+    }
     if (reply === SKIP) {
       skipped += 1;
       continue;
@@ -124,27 +139,106 @@ export async function labelDefects({ cwd, ask, draft, issues, now = () => new Da
     labeled += 1;
     if (!categories.includes(line.category)) categories.push(line.category);
   }
-  const summary = { shown, labeled, skipped, open: open.length - labeled };
+  let relinked = 0;
+  for (const [index, defect] of relink.entries()) {
+    if (quit || askLinks === undefined) break;
+    shown += 1;
+    const reply = await askLinks(publicDefect(defect), { text: newLinksText(defect, history), label: defect.label, position: index + 1, count: relink.length });
+    if (reply === QUIT) break;
+    if (reply === SKIP) continue;
+    const line = withNewLinks(defect, reply.rejected_prs ?? []);
+    const problems = checkLabelLine(line);
+    if (problems.length > 0) throw new ToolError(`the new links of ${defect.id} do not fit the labels schema, so they were not written:\n  ${problems.join('\n  ')}`);
+    await replaceFirstLine(cwd, defect.label, line);
+    relinked += 1;
+  }
+  const summary = { shown, labeled, skipped, open: open.length - labeled, relinked, new_links: relink.length - relinked };
   if (draft === undefined) return summary;
   return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
 /**
  * Reads the history and the labels file, for labelDefects and for the review page
- * (src/label-review.js). Returns { history, labels, endsWithBreak, categories, open }.
+ * (src/label-review.js). Returns { history, labels, endsWithBreak, categories, open, relink }.
  * `categories` are the categories in the labels file, in the order they first come. `open` are
  * the escaped defects with no line in the file yet, newest fix first. Each has `id`, `fix_pr`,
- * `introducing_prs`, `links` and `fix`, its history line. It throws a ToolError when a file is
- * missing or does not fit its schema, as labelDefects does.
+ * `introducing_prs`, `links` and `fix`, its history line. `relink` are the escaped defects whose
+ * first line neither keeps nor rejects one of their SZZ links, newest fix first, in the same
+ * shape, but `links` and `introducing_prs` hold only those new links, and `label` is the first
+ * line. It throws a ToolError when a file is missing or does not fit its schema, as labelDefects
+ * does.
  */
 export async function readLabeling(cwd) {
   const history = await readHistory(cwd);
   // endsWithBreak: the file ends in a line break.
   const { labels, endsWithBreak } = await readLabels(cwd);
-  const done = new Set(labels.map((label) => label.id));
+  // Each defect counts by its first line, as in the report and the backtest.
+  const first = new Map();
+  for (const label of labels) if (!first.has(label.id)) first.set(label.id, label);
   const categories = [...new Set(labels.map((label) => label.category))];
   const defects = escapedDefects(history).map((fix) => ({ id: defectId(fix.number), fix_pr: fix.number, introducing_prs: fix.szz.links.map((link) => link.pr), links: fix.szz.links.map(({ pr, confidence, found_by: foundBy }) => ({ pr, confidence, ...(foundBy ? { found_by: foundBy } : {}) })), fix }));
-  return { history, labels, endsWithBreak, categories, open: defects.filter((defect) => !done.has(defect.id)) };
+  const relink = defects.flatMap((defect) => {
+    const label = first.get(defect.id);
+    if (label === undefined) return [];
+    const answered = new Set([...label.introducing_prs, ...(label.rejected_prs ?? [])]);
+    const links = defect.links.filter((link) => !answered.has(link.pr));
+    return links.length === 0 ? [] : [{ ...defect, introducing_prs: links.map((link) => link.pr), links, label }];
+  });
+  return { history, labels, endsWithBreak, categories, open: defects.filter((defect) => !first.has(defect.id)), relink };
+}
+
+// The defect's text with the evidence of its new links only, and the fix PR's web page.
+function newLinksText(defect, history) {
+  const kept = new Set(defect.introducing_prs);
+  const fix = { ...defect.fix, szz: { ...defect.fix.szz, links: defect.fix.szz.links.filter((link) => kept.has(link.pr)) } };
+  return `${defectText(fix, history)}The fix PR: ${defect.fix.url}\n`;
+}
+
+/**
+ * The first line of a labeled defect with its new links answered: `rejected` names the new links
+ * the person rejected, and the others are kept. The kept ones go to the end of `introducing_prs`,
+ * the rejected ones to the end of `rejected_prs`, and `szz_link_rejected` follows. The code, the
+ * category and the other fields stay as the person gave them. It throws a ToolError when
+ * `rejected` names a PR that is not a new link.
+ */
+export function withNewLinks(defect, rejected) {
+  const unknown = rejected.find((pr) => !defect.introducing_prs.includes(pr));
+  if (unknown !== undefined) throw new ToolError(`PR ${unknown} is not a new link of ${defect.id}, so it cannot be rejected. Its new links are PRs ${defect.introducing_prs.join(', ')}.`);
+  const rejectedPrs = [...(defect.label.rejected_prs ?? []), ...defect.introducing_prs.filter((pr) => rejected.includes(pr))];
+  return {
+    ...defect.label,
+    introducing_prs: [...defect.label.introducing_prs, ...defect.introducing_prs.filter((pr) => !rejected.includes(pr))],
+    rejected_prs: rejectedPrs,
+    szz_link_rejected: rejectedPrs.length > 0
+  };
+}
+
+// Puts `line` in place of the first line for its defect, `old`. It writes a new file and renames
+// it over the old one, so a crash leaves the old file or the new one. When that line is no longer
+// `old`, someone changed the file during the run, so it writes nothing.
+async function replaceFirstLine(cwd, old, line) {
+  let text;
+  try {
+    text = await readFile(join(cwd, LABELS), 'utf8');
+  } catch (error) {
+    throw new ToolError(`could not read ${LABELS}: ${error.message}`);
+  }
+  const rows = text.split('\n');
+  const index = rows.findIndex((row) => parsedId(row) === old.id);
+  if (index === -1 || JSON.stringify(JSON.parse(rows[index])) !== JSON.stringify(old)) {
+    throw new ToolError(`the line for ${old.id} in ${LABELS} changed during this run, so its new links were not written. Check the file, then run exhibit label again.`);
+  }
+  rows[index] = JSON.stringify(line);
+  await writeTogether(cwd, [[LABELS, rows.join('\n')]]);
+}
+
+// The id in one row of the labels file, or null for a blank row or a row that is not JSON.
+function parsedId(row) {
+  try {
+    return row.trim() === '' ? null : JSON.parse(row)?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // The defect as the answer source sees it: without its history line.
