@@ -274,7 +274,7 @@ for (const path of WORKFLOWS) {
 
   // Without this, a slow run for an older head can finish after the run for the newer head, and
   // its publish job then puts the older verdict in the one summary comment. A new push cancels the
-  // older run of the same PR, and the publish job's !cancelled() then skips it. The run's group
+  // older run of the same PR, and the publish job's !cancelled() keeps it from starting. The run's group
   // must not be the publish job's group, or the publish job waits for its own run.
   test(`${path}: a new push to a PR cancels the older run of that PR`, () => {
     assert.deepEqual(workflow.concurrency, { group: 'exhibit-pr-${{ github.event.pull_request.number }}', 'cancel-in-progress': true });
