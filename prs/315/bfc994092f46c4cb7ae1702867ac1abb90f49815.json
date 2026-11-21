@@ -1,0 +1,112 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "92b8614fd44348060557cf6f5980affefedd2f429ca506d026a337a4aa6d6909"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 315,
+  "base": "8d6596a49335349a9dc21d25865239249d231ef3",
+  "head": "bfc994092f46c4cb7ae1702867ac1abb90f49815",
+  "classification": {
+    "kinds": [
+      "docs",
+      "source",
+      "tooling"
+    ],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs examples"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "met",
+      "details": {
+        "exit_code": 0,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 44
+    },
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "source",
+        "tooling"
+      ],
+      "status": "failed",
+      "details": {
+        "base": {
+          "passed": 727,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 721,
+          "failed": 1,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": [
+          "test > a PR test that ran and passed on the base does not count when a step after the tests fails there"
+        ]
+      },
+      "author": "builder",
+      "duration_ms": 143098
+    },
+    {
+      "type": "failing-before",
+      "params": {
+        "when": [
+          "fix"
+        ]
+      },
+      "kinds": [
+        "source"
+      ],
+      "status": "skipped",
+      "details": {
+        "reason": "The policy asks for it only on a fix, and this change is not classified as one, so it is not needed. This does not stop meets_policy."
+      },
+      "author": "builder",
+      "duration_ms": 0
+    }
+  ],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "tests-before-after",
+      "status": "failed",
+      "how_to_fix": "1 test fails on the head, also when run again: test > a PR test that ran and passed on the base does not count when a step after the tests fails there. Fix the change so that it passes, and run exhibit check again."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 2,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-21T06:52:54.658Z"
+}
