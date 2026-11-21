@@ -209,9 +209,11 @@ function graphqlRateLimited(reply) {
 // A GraphQL reply with errors. Its status is the HTTP status that the first error's type stands
 // for, so `stopsRun` works as for a REST reply.
 const GRAPHQL_ERROR_STATUS = { NOT_FOUND: 404, FORBIDDEN: 403, RATE_LIMITED: 429 };
-// GitHub may report a query that took too long as a 200 reply with no data and an error such as
-// "Something went wrong while executing your query. This may be the result of a timeout, or it
-// could be a GitHub bug." Such an error counts as a timeout, as a 502 or a 504 does.
+// GitHub may report a query that took too long as a 200 reply with an error such as "Something
+// went wrong while executing your query. This may be the result of a timeout, or it could be a
+// GitHub bug." Such a reply most often has no data. A reply counts as a timeout, as a 502 or a
+// 504 does, when any error's message matches GRAPHQL_TIMED_OUT and the first error's type is not
+// one in GRAPHQL_ERROR_STATUS. The reply's data is not checked: graphql throws on any error.
 const GRAPHQL_TIMED_OUT = /may be the result of a timeout/i;
 
 function graphqlError(errors, permission) {
