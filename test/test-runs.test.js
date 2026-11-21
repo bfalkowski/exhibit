@@ -222,28 +222,34 @@ test('a test that never ends hits the time limit: Exhibit stops it and its child
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, `the test process ${pid} still runs`);
 });
 
-test('Ctrl-C on exhibit check stops the test command and its children too', async (t) => {
-  const fixture = buildRepo(t);
-  const pidFile = addHangBranch(fixture, 600);
-  // A terminal runs exhibit check in a process group of its own, and Ctrl-C sends SIGINT to that
-  // group. The test command runs in a group of its own too, so it does not get that SIGINT.
-  const bin = new URL('../bin/exhibit.js', import.meta.url).pathname;
-  const exhibit = spawn(process.execPath, [bin, 'check', '--base', 'start', '--head', 'hang'], { cwd: fixture.repo, env: gitEnv(fixture.home), detached: true, stdio: 'ignore' });
-  const exited = new Promise((done) => exhibit.once('exit', (code, signal) => done({ code, signal })));
-  t.after(() => {
-    if (exhibit.exitCode === null && exhibit.signalCode === null) process.kill(-exhibit.pid, 'SIGKILL');
-  });
-  await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '', 60_000, 'the hanging test to start');
-  const pid = Number(readFileSync(pidFile, 'utf8'));
-  t.after(() => {
-    if (alive(pid)) process.kill(pid, 'SIGKILL');
-  });
+// A terminal runs exhibit check in a process group of its own. Ctrl-C sends SIGINT to that
+// group, and closing the terminal sends SIGHUP. The test command runs in a group of its own, so
+// it does not get those signals, and Exhibit must stop it itself.
+for (const [why, signal] of [['Ctrl-C', 'SIGINT'], ['kill', 'SIGTERM'], ['closing the terminal', 'SIGHUP']]) {
+  test(`${why} (${signal}) on exhibit check stops the test command and its children too`, async (t) => {
+    const fixture = buildRepo(t);
+    const pidFile = addHangBranch(fixture, 600);
+    const bin = new URL('../bin/exhibit.js', import.meta.url).pathname;
+    // Exhibit ends by the signal before it removes its worktrees, so the temp folder is the
+    // fixture's folder, which the test removes.
+    const env = gitEnv(fixture.home, { TMPDIR: dirname(fixture.repo) });
+    const exhibit = spawn(process.execPath, [bin, 'check', '--base', 'start', '--head', 'hang'], { cwd: fixture.repo, env, detached: true, stdio: 'ignore' });
+    const exited = new Promise((done) => exhibit.once('exit', (code, signal) => done({ code, signal })));
+    t.after(() => {
+      if (exhibit.exitCode === null && exhibit.signalCode === null) process.kill(-exhibit.pid, 'SIGKILL');
+    });
+    await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '', 60_000, 'the hanging test to start');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    t.after(() => {
+      if (alive(pid)) process.kill(pid, 'SIGKILL');
+    });
 
-  process.kill(-exhibit.pid, 'SIGINT');
-  const { signal } = await exited;
-  assert.equal(signal, 'SIGINT', 'exhibit check still ends by the signal, as before');
-  await waitFor(() => !alive(pid), 5_000, `the test process ${pid} to stop`);
-});
+    process.kill(-exhibit.pid, signal);
+    const exit = await exited;
+    assert.equal(exit.signal, signal, 'exhibit check still ends by the signal, as before');
+    await waitFor(() => !alive(pid), 5_000, `the test process ${pid} to stop`);
+  });
+}
 
 test('a policy with no test command gives missing, so a person must check the tests', async (t) => {
   const fixture = buildRepo(t);

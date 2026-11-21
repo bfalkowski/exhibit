@@ -73,11 +73,12 @@ function failure(outcome, missing, timeoutSeconds) {
 // The process groups that runInGroup has started and not yet killed. Each one is a function that
 // kills its group.
 const liveGroups = new Set();
-const STOP_SIGNALS = ['SIGINT', 'SIGTERM'];
+const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
 
-// A group of its own does not get the SIGINT that Ctrl-C sends to Exhibit's group, so Exhibit
-// kills every live group itself when it gets SIGINT or SIGTERM. Then it sends the signal to
-// itself again with no listener left, so it ends by that signal, as it did before.
+// A group of its own does not get the SIGINT that Ctrl-C sends to Exhibit's group, or the SIGHUP
+// that a closing terminal sends. So Exhibit kills every live group itself when it gets SIGINT,
+// SIGTERM or SIGHUP. Then it sends the signal to itself again with no listener left, so it ends
+// by that signal, as it did before.
 function onStopSignal(signal) {
   for (const kill of liveGroups) kill();
   liveGroups.clear();
@@ -96,10 +97,11 @@ function unwatchGroup(kill) {
 }
 
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
-// Then it kills the whole group. When Exhibit gets SIGINT or SIGTERM, as from Ctrl-C, while the
-// group runs, it kills the group and then ends by that signal. Gives back { code, signal, timedOut }. With `args`, `command` is
-// a program that runs with those arguments, and no shell. `env` is the env of the command, and the
-// env of Exhibit when it is left out. The output goes to `logFile`, or nowhere when it is null.
+// Then it kills the whole group. When Exhibit gets SIGINT, SIGTERM or SIGHUP while the group
+// runs, as from Ctrl-C or a closing terminal, it kills the group and then ends by that signal.
+// Gives back { code, signal, timedOut }. With `args`, `command` is a program that runs with those
+// arguments, and no shell. `env` is the env of the command, and the env of Exhibit when it is
+// left out. The output goes to `logFile`, or nowhere when it is null.
 export async function runInGroup(command, { cwd, logFile, timeoutMs, env = process.env, args = null }) {
   const log = logFile === null ? null : await open(logFile, 'w');
   try {
