@@ -1,6 +1,7 @@
 // The backtest (spec 9.9): would the policy have caught the bugs that got through, and how often
 // would it have asked for evidence on PRs that were fine? It reads the history, the labels and the
-// policy, and works out what the policy would have said about each PR. It runs nothing.
+// policy, and works out what the policy would have said about each PR. It runs nothing itself:
+// with --rerun, src/rerun.js runs the cheap requirements first, and gives this code the results.
 import { bodyStatus, evidenceSection } from './body-evidence.js';
 import { classifyChange } from './classify.js';
 import { clopperPearson } from './interval.js';
@@ -19,18 +20,28 @@ export const DEFAULT_KIND = 'default';
  * - `exhibits`: a Map from PR number to the PR's exhibit at its head commit (spec 8.2), for the
  *   PRs that have one.
  * - `from`: a Date, or null. The test set is the PRs merged at or after it, or every PR with null.
+ * - `reruns`: a Map from PR number to what src/rerun.js gave for it, or null with no --rerun.
+ * - `leakNoCommits`: a Set of PR numbers whose defects make no leak, or null to use the PRs that
+ *   `reruns` marks `no_commits`. The command gives the set it found before the rerun
+ *   (prsWithoutCommits in src/rerun.js), so the leaks here are the ones that picked the rerun's
+ *   policies, and the table without them uses only requirements that the rerun ran.
  */
-export function backtest({ lines, labels, policy, exhibits = new Map(), from = null }) {
-  const testSet = lines.filter((line) => from === null || new Date(line.merged_at) >= from).sort(byNumber);
+export function backtest({ lines, labels, policy, exhibits = new Map(), from = null, reruns = null, leakNoCommits = null }) {
+  const testSet = testSetOf(lines, from);
+  // A PR whose base or head is not in the clone could not run again, so it is in no rate (spec 9.9).
+  const noCommits = new Set([...(reruns ?? new Map())].filter(([, result]) => result.status === 'no_commits').map(([number]) => number));
   const roles = prRoles(lines, labels);
   const counted = roles.defects.filter((defect) => defect.introducing_prs.some((pr) => testSet.some((line) => line.number === pr)));
-  const leaks = findLeaks(policy, counted);
+  // A leak is a defect that a rate counts, so a defect whose only introducing PRs in the test set
+  // have no commits in the clone makes no leak. `counted` keeps it, for its replayed line.
+  const noLeak = leakNoCommits ?? noCommits;
+  const leaks = findLeaks(policy, counted.filter((defect) => defect.introducing_prs.some((pr) => !noLeak.has(pr) && testSet.some((line) => line.number === pr))));
   const without = leaks.length === 0 ? null : withoutRules(policy, leaks.map((leak) => leak.rule));
   const categories = sourceCategories(roles.defects);
 
   const run = (rules) => {
-    const verdicts = new Map(lines.map((line) => [line.number, judge(line, rules, exhibits.get(line.number) ?? null)]));
-    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories) };
+    const verdicts = new Map(lines.map((line) => [line.number, judge(line, rules, exhibits.get(line.number) ?? null, reruns?.get(line.number) ?? null)]));
+    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories, noCommits) };
   };
   const withAll = run(policy);
   const withoutLeaks = without === null ? null : run(without);
@@ -43,7 +54,7 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
         const verdict = result.verdicts.get(pr);
         return { verdict: verdict.verdict, missing: verdict.missing, strong: isStrong(verdict, defect, rules, categories) };
       };
-      replayed.push({ id: defect.id, category: defect.category, pr, ...replay(withAll, policy), without: withoutLeaks === null ? null : replay(withoutLeaks, without) });
+      replayed.push({ id: defect.id, category: defect.category, pr, ...replay(withAll, policy), without: withoutLeaks === null ? null : replay(withoutLeaks, without), ...(reruns === null ? {} : { no_commits: noCommits.has(pr) }) });
     }
   }
 
@@ -56,7 +67,7 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
     counts: withAll.counts,
     counts_without_leaks: withoutLeaks === null ? null : withoutLeaks.counts,
     replayed,
-    prs: testSet.map((line) => ({ number: line.number, ...withAll.verdicts.get(line.number), role: roles.roleOf(line.number) }))
+    prs: testSet.map((line) => ({ number: line.number, ...withAll.verdicts.get(line.number), role: roles.roleOf(line.number), rerun: reruns === null ? null : rerunSummary(reruns.get(line.number)) }))
   };
 }
 
@@ -65,18 +76,21 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
  * requirements, missing, basis, unknown_only }:
  * - kinds: the kinds the PR matches, or [default] when it matches none.
  * - requirements: each requirement the policy needs, with its `status` and `from`: `exhibit`
- *   when the PR's exhibit has the same requirement, `body` when the body has an evidence section,
- *   or `none` when there is neither. Then the status is `unknown`.
+ *   when the PR's exhibit has the same requirement, `rerun` when --rerun ran it and it gave met,
+ *   missing or failed, `body` when the body has an evidence section, or `none` when there is
+ *   neither. Then the status is `unknown`. A rerun that gave error or skipped tells nothing, so
+ *   the body or none gives the status then.
  * - verdict: needs_person when a requirement is not met, or when the PR changes the policy file,
  *   or when no rule covers it, as exhibit check gives it (spec 9.8). An unknown requirement
  *   counts as not met: Exhibit could not tell, so a person would have had to read it. Otherwise
  *   meets_policy.
  * - missing: the requirements that are not met, as short names such as tests-before-after or
  *   probe manual, then policy-change or no-rule.
- * - basis: `exhibit`, `body` or `none`, as for `from`, for the PR as a whole.
+ * - basis: `exhibit`, `rerun`, `body` or `none`, as for `from`, for the PR as a whole. `rerun`
+ *   when the PR has no exhibit and a rerun gave at least one requirement.
  * - unknown_only: needs_person only because of unknown requirements.
  */
-export function judge(line, rules, exhibit) {
+export function judge(line, rules, exhibit, rerun = null) {
   const files = line.files.map((file) => file.path);
   const fixed = { fix: line.classification.fix, fix_signal: line.classification.fix_signal };
   // history.jsonl does not say which files a PR added, so only the feature label marks a feature.
@@ -85,6 +99,8 @@ export function judge(line, rules, exhibit) {
   const judged = requirements.filter((requirement) => !requirement.not_needed).map((requirement) => {
     const found = exhibit?.requirements?.find((item) => item.type === requirement.type && sameParams(item.params, requirement.params));
     if (found) return { ...requirement, status: found.status === 'met' ? 'met' : ['missing', 'failed'].includes(found.status) ? 'missing' : 'unknown', from: 'exhibit' };
+    const ran = rerun?.requirements?.find((item) => item.type === requirement.type && sameParams(item.params, requirement.params) && ['met', 'missing', 'failed'].includes(item.status));
+    if (ran) return { ...requirement, status: ran.status === 'met' ? 'met' : 'missing', from: 'rerun' };
     if (section !== null) return { ...requirement, status: bodyStatus(requirement, section, rules.settings), from: 'body' };
     return { ...requirement, status: 'unknown', from: 'none' };
   });
@@ -93,7 +109,7 @@ export function judge(line, rules, exhibit) {
   if (classification.policy_changed) gaps.push('policy-change');
   if (classification.used_default && !classification.has_default) gaps.push('no-rule');
   const verdict = notMet.length === 0 && gaps.length === 0 ? 'meets_policy' : 'needs_person';
-  const basis = exhibit ? 'exhibit' : section !== null ? 'body' : 'none';
+  const basis = exhibit ? 'exhibit' : judged.some((requirement) => requirement.from === 'rerun') ? 'rerun' : section !== null ? 'body' : 'none';
   return {
     kinds: classification.kinds.length === 0 ? [DEFAULT_KIND] : classification.kinds,
     verdict,
@@ -102,6 +118,20 @@ export function judge(line, rules, exhibit) {
     basis,
     unknown_only: verdict === 'needs_person' && gaps.length === 0 && notMet.every((requirement) => requirement.status === 'unknown')
   };
+}
+
+/**
+ * The test set: the PRs merged at or after `from` (a Date), or every PR with null, by PR number.
+ * The rerun runs this same set, so it must come from here.
+ */
+export function testSetOf(lines, from) {
+  return lines.filter((line) => from === null || new Date(line.merged_at) >= from).sort(byNumber);
+}
+
+// What the report and --json say about one PR's rerun: its status, run time and errors.
+function rerunSummary(result) {
+  if (!result) return null;
+  return { status: result.status, seconds: Math.round(result.seconds), errors: result.errors, mutation: result.mutation };
 }
 
 // tests-before-after, failing-before, mutation 0.85, probe restart-run.
@@ -155,7 +185,7 @@ function findLeaks(policy, counted) {
 // The policy with the named rules taken out. A kind is removed, so its PRs fall to the other kinds
 // they match, or to default. A default that leaks keeps its risk but asks for nothing, so a PR
 // that matches no kind is not stopped by a rule that has no default.
-function withoutRules(policy, names) {
+export function withoutRules(policy, names) {
   const kinds = Object.fromEntries(Object.entries(policy.kinds).filter(([name]) => !names.includes(name)));
   const result = { ...policy, kinds };
   if (policy.default && names.includes(DEFAULT_KIND)) result.default = { ...policy.default, needs: [], source: [] };
@@ -201,18 +231,20 @@ function isStrong(verdict, defect, rules, categories) {
  * - unlabeled: PRs with an SZZ link that nobody labeled yet, in no rate.
  * - deferral_prs: introducing PRs of a deferral, in no rate.
  * - unknown_only: needs_person verdicts that rest only on unknown requirements.
+ * - no_commits: PRs that --rerun could not run, because a commit is not in the clone. They are
+ *   in no rate: not in defects, and not in clean.
  */
-function countByKind(testSet, verdicts, roles, rules, categories) {
+function countByKind(testSet, verdicts, roles, rules, categories, noCommits = new Set()) {
   const pairs = [];
   for (const defect of roles.defects) {
-    for (const pr of defect.introducing_prs) if (testSet.some((line) => line.number === pr)) pairs.push({ defect, pr });
+    for (const pr of defect.introducing_prs) if (!noCommits.has(pr) && testSet.some((line) => line.number === pr)) pairs.push({ defect, pr });
   }
   const row = (kind, inKind) => {
     const prs = testSet.filter((line) => inKind(line.number));
     const mine = pairs.filter((pair) => inKind(pair.pr));
     const caught = mine.filter((pair) => verdicts.get(pair.pr).verdict === 'needs_person');
     const strong = caught.filter((pair) => isStrong(verdicts.get(pair.pr), pair.defect, rules, categories));
-    const clean = prs.filter((line) => roles.roleOf(line.number) === 'clean');
+    const clean = prs.filter((line) => roles.roleOf(line.number) === 'clean' && !noCommits.has(line.number));
     const demands = clean.filter((line) => verdicts.get(line.number).verdict === 'needs_person');
     return {
       kind,
@@ -225,7 +257,8 @@ function countByKind(testSet, verdicts, roles, rules, categories) {
       false_demands: share(demands.length, clean.length),
       unlabeled: prs.filter((line) => roles.roleOf(line.number) === 'unlabeled').length,
       deferral_prs: prs.filter((line) => roles.roleOf(line.number) === 'deferral').length,
-      unknown_only: prs.filter((line) => verdicts.get(line.number).unknown_only).length
+      unknown_only: prs.filter((line) => verdicts.get(line.number).unknown_only).length,
+      no_commits: prs.filter((line) => noCommits.has(line.number)).length
     };
   };
   const kinds = [...new Set(testSet.flatMap((line) => verdicts.get(line.number).kinds))].sort((a, b) => (a === DEFAULT_KIND) - (b === DEFAULT_KIND) || a.localeCompare(b));

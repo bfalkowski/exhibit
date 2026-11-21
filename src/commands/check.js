@@ -161,7 +161,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 // signal to Exhibit again, so Exhibit ends by that signal, and a shell shows the usual code: 130
 // for SIGINT, 143 for SIGTERM and 129 for SIGHUP. A second signal while it cleans up changes
 // nothing. `off()` removes the handlers.
-function onStopSignal(cleanUp) {
+export function onStopSignal(cleanUp) {
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   let stopping = false;
   const off = () => signals.forEach((signal) => process.off(signal, handler));
@@ -189,7 +189,7 @@ function waitForever() {
 // before each probe, so no probe sees the files of the one before it. Each keeps its files in its
 // own folder under .exhibit/probes, named after the probe. Each gets the run's env, as the test
 // command does.
-function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
+export function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
   const used = new Set();
   return async (requirement, context) => {
     const folder = folderName(requirement.params.name, used);

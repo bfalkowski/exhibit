@@ -98,13 +98,13 @@ test('exhibit backtest reads the exhibit of a PR from the data branch, and --jso
   assert.equal(result.labels, 'none');
 });
 
-test('exhibit backtest exits 2 with a plain message for a bad --from, --rerun, or no history', (t) => {
+test('exhibit backtest exits 2 with a plain message for a bad --from, a bad --budget, or no history', (t) => {
   const cwd = newFolder(t);
   const none = exhibit(cwd, ['backtest']);
   assert.equal(none.status, 2);
   assert.equal(none.stderr, 'exhibit: there is no .exhibit/history.jsonl in this folder. Run exhibit history first, inside a clone of the repo.\n');
   const bad = exhibit(cwd, ['backtest', '--from', '2026-02-30']);
   assert.equal(bad.stderr, 'exhibit: --from must be a real date like 2026-03-01 (UTC) or an ISO time, not "2026-02-30".\n');
-  const rerun = exhibit(cwd, ['backtest', '--rerun']);
-  assert.equal(rerun.stderr, 'exhibit: --rerun is not built yet. Run exhibit backtest without it.\n');
+  const budget = exhibit(cwd, ['backtest', '--rerun', '--budget', 'soon']);
+  assert.equal(budget.stderr, 'exhibit: --budget must be a whole number of minutes, 1 or more, not "soon".\n');
 });
