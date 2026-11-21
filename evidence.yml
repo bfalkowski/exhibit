@@ -7,8 +7,8 @@ settings:
   # The whole test suite, as JUnit. Each worktree is clean, so it installs the packages first.
   test_command: "npm ci --no-audit --no-fund && node --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml test/*.test.js"
   test_results: .exhibit/junit.xml
-  # Titles here start with a ticket number, such as "192: ...". A number alone is not a key
-  # (spec 9.1), so a fix title is seen only when it has no number. The bug label always works.
+  # Titles here start with a ticket number and a colon, such as "192: Fix ...". title_after_key
+  # skips that number (spec 9.1), so a fix title matches. Branches start with task/, not fix/.
   fix_signals: [label:bug, title_after_key:fix, branch:fix/]
 
 kinds:

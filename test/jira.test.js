@@ -182,6 +182,8 @@ test('ticketKey finds the key at the start of the title, else at the start of th
   assert.equal(key('#79, PAY-482: Crash'), 'PAY-482');
   assert.equal(key('Crash in PAY-482'), null);
   assert.equal(key('#79: Crash'), null);
+  assert.equal(key('192: Crash'), null);
+  assert.equal(key('192: PAY-482: Crash'), 'PAY-482');
   assert.equal(key('Crash', 'PAY-482-crash'), 'PAY-482');
   assert.equal(key('Crash', 'PAY-482/crash'), 'PAY-482');
   assert.equal(key('Crash', 'PAY-482'), 'PAY-482');
