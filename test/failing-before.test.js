@@ -8,7 +8,7 @@ import { buildExhibit } from '../src/check.js';
 import { check } from '../src/commands/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
 import { isTestPath } from '../src/failing-before.js';
-import { TestRunError } from '../src/test-runs.js';
+import { NothingLoaded, TestRunError } from '../src/test-runs.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -18,9 +18,48 @@ dropGitEnv();
 const NAME = (file, name) => new RegExp(`^(${file.replace(/[.]/g, '\\.')} > )?test > ${name}$`);
 
 const NODE_TESTS = `"${process.execPath}" --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml test/*.test.js`;
-const POLICY = `version: 3
+// A step that runs before the tests and stops the command when a test imports a file that is not
+// there, as `tsc && node --test` stops when a new test uses types that the base lacks. It writes no
+// JUnit file then.
+const CHECK_IMPORTS = `import { existsSync, readdirSync, readFileSync } from 'node:fs';
+for (const name of readdirSync('test')) {
+  for (const [, path] of readFileSync('test/' + name, 'utf8').matchAll(/from '(\\.\\.\\/[^']+)'/g)) {
+    if (!existsSync(new URL(path, 'file://' + process.cwd() + '/test/'))) {
+      console.error('test/' + name + ': cannot find ' + path);
+      process.exit(2);
+    }
+  }
+}
+`;
+const CHECKED_TESTS = `"${process.execPath}" scripts/check-imports.js && ${NODE_TESTS}`;
+// A type check that runs after the tests, as in `node --test && tsc --noEmit`. It exits 2 when a
+// test names a types file, in a "// types: PATH" line, that is not there.
+const CHECK_TYPES = `import { existsSync, readdirSync, readFileSync } from 'node:fs';
+for (const name of readdirSync('test')) {
+  for (const [, path] of readFileSync('test/' + name, 'utf8').matchAll(/\\/\\/ types: (\\S+)/g)) {
+    if (!existsSync(new URL(path, 'file://' + process.cwd() + '/test/'))) {
+      console.error('test/' + name + ': no types file ' + path);
+      process.exit(2);
+    }
+  }
+}
+`;
+const TYPED_TESTS = `${NODE_TESTS} && "${process.execPath}" scripts/check-types.js`;
+// A runner that skips the test files that cannot load, runs the rest, and then fails. So its
+// JUnit file holds only the tests of the files that loaded, and no failed test.
+const LOADABLE = `import { existsSync, readdirSync, readFileSync } from 'node:fs';
+let missing = false;
+for (const name of readdirSync('test')) {
+  const ok = [...readFileSync('test/' + name, 'utf8').matchAll(/from '(\\.\\.\\/[^']+)'/g)].every(([, path]) => existsSync(new URL(path, 'file://' + process.cwd() + '/test/')));
+  if (ok) console.log('test/' + name);
+  else missing = true;
+}
+process.exit(missing ? 2 : 0);
+`;
+const LOADABLE_TESTS = `"${process.execPath}" scripts/loadable.js > .exhibit/loadable.txt; ok=$?; "${process.execPath}" --test --test-reporter=junit --test-reporter-destination=.exhibit/junit.xml $(cat .exhibit/loadable.txt) && exit $ok`;
+const POLICY = (command) => `version: 3
 settings:
-  test_command: ${JSON.stringify(NODE_TESTS)}
+  test_command: ${JSON.stringify(command)}
   test_results: ".exhibit/junit.xml"
 default:
   risk: medium
@@ -48,7 +87,8 @@ test('double is checked once', () => {
 
 // A repo with the bug on main (tag start), and one branch for each case. A branch whose name
 // starts with fix/ is a fix by the default fix signals.
-function buildRepo(t) {
+// `command` is the policy's test command.
+function buildRepo(t, command = NODE_TESTS) {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-failing-before-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, 'home');
@@ -70,7 +110,10 @@ function buildRepo(t) {
   };
   git('init', '-q', '-b', 'main');
   commit({
-    'evidence.yml': POLICY,
+    'evidence.yml': POLICY(command),
+    'scripts/check-imports.js': CHECK_IMPORTS,
+    'scripts/check-types.js': CHECK_TYPES,
+    'scripts/loadable.js': LOADABLE,
     '.gitignore': '.exhibit/\nflaky.mark\n',
     'package.json': '{ "type": "module" }\n',
     'README.md': 'Math.\n',
@@ -82,6 +125,8 @@ function buildRepo(t) {
   branch('fix/weak-test', { 'src/math.js': FIXED, 'test/double.test.js': `${header}import { double } from '../src/math.js';\ntest('double is a function', () => assert.equal(typeof double, 'function'));\n` });
   branch('fix/changed-test', { 'src/math.js': FIXED, 'test/math.test.js': MATH_TEST.replace("assert.equal(typeof double(2), 'number')", 'assert.equal(double(2), 4)') });
   branch('fix/new-module', { 'src/half.js': 'export const half = (a) => a / 2;\n', 'test/half.test.js': `${header}import { half } from '../src/half.js';\ntest('half halves', () => assert.equal(half(4), 2));\n` });
+  // add is right on the base already, so this test passes there. Only the type check fails.
+  branch('fix/types', { 'src/types.js': '// The types of add.\n', 'test/add.test.js': `${header}import { add } from '../src/math.js';\n// types: ../src/types.js\ntest('add adds two and two', () => assert.equal(add(2, 2), 4));\n` });
   branch('fix/flaky', { 'src/math.js': FIXED, 'test/flaky.test.js': FLAKY_TEST });
   branch('notes', { 'README.md': 'Math, with notes.\n' });
   git('checkout', '-q', 'main');
@@ -159,6 +204,122 @@ test('a new test file that cannot load on the base counts, and the summary says 
   assert.deepEqual(requirement.details.tests[0].files, ['test/half.test.js']);
   assert.match(summary, /half halves \(its file did not load on the base: test\/half\.test\.js\)/);
   assert.equal(evidence.verdict, 'meets_policy');
+});
+
+test('a new test file that stops the test command before it writes JUnit on the base counts as did not load', async (t) => {
+  const fixture = buildRepo(t, CHECKED_TESTS);
+  const { evidence, summary, requirement } = await runCheck(fixture.repo, 'fix/new-module');
+  // The plain base and head runs give results, so only the run with the PR's test files stops.
+  assert.equal(evidence.requirements.find((item) => item.type === 'tests-before-after').status, 'met');
+  assert.equal(requirement.status, 'met');
+  assert.deepEqual(requirement.details.did_not_load_on_base, ['test/half.test.js']);
+  assert.match(requirement.details.base_with_pr_tests_error, /the test command failed on the base with the PR's test files \(exit code 2\) and wrote no JUnit file/);
+  // Only the PR's test counts. The tests in test/math.test.js are not the PR's.
+  assert.equal(requirement.details.tests.length, 1);
+  assert.match(requirement.details.tests[0].name, NAME('test/half.test.js', 'half halves'));
+  assert.equal(requirement.details.tests[0].on_base, 'did_not_load');
+  assert.deepEqual(requirement.details.tests[0].files, ['test/half.test.js']);
+  assert.match(summary, /half halves \(its file did not load on the base: test\/half\.test\.js\)/);
+  assert.equal(evidence.verdict, 'meets_policy');
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log'), 'utf8'), 'test/half.test.js: cannot find ../src/half.js\n');
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a PR test that ran and passed on the base does not count when a step after the tests fails there', async (t) => {
+  const fixture = buildRepo(t, TYPED_TESTS);
+  const { evidence, requirement, gap } = await runCheck(fixture.repo, 'fix/types');
+  assert.equal(requirement.status, 'missing');
+  assert.deepEqual(requirement.details.tests, []);
+  assert.deepEqual(requirement.details.did_not_load_on_base, []);
+  assert.equal(requirement.details.passed_on_base.length, 1);
+  assert.match(requirement.details.passed_on_base[0], NAME('test/add.test.js', 'add adds two and two'));
+  assert.match(requirement.details.base_with_pr_tests_error, /\(exit code 2\), but \.exhibit\/junit\.xml names no failing test/);
+  assert.match(gap.how_to_fix, /1 test that the change adds or changes passes on the base too/);
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+test('a PR test file with no result in a JUnit file that holds only the other files\' tests counts as did not load', async (t) => {
+  const fixture = buildRepo(t, LOADABLE_TESTS);
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/new-module');
+  assert.equal(requirement.status, 'met');
+  assert.deepEqual(requirement.details.did_not_load_on_base, ['test/half.test.js']);
+  assert.match(requirement.details.base_with_pr_tests_error, /names no failing test/);
+  assert.equal(requirement.details.tests.length, 1);
+  assert.match(requirement.details.tests[0].name, NAME('test/half.test.js', 'half halves'));
+  assert.equal(requirement.details.tests[0].on_base, 'did_not_load');
+  assert.equal(evidence.verdict, 'meets_policy');
+});
+
+// Node 20's reporter gives no file in a test's name. When a PR test ran on the base and another
+// did not, Exhibit cannot tell which file stopped, so no test counts as not loaded.
+test('with no file in the names, a PR test that has no result counts as not loaded only when no PR test ran', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const runTests = async () => ({
+    base: new Map([['test > old', 'passed']]),
+    head: new Map([['test > old', 'passed'], ['test > ran', 'passed'], ['test > absent', 'passed']])
+  });
+  const build = (overlay) => buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['a.test.js', 'b.test.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests: async () => overlay, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+
+  const someRan = (await build(new NothingLoaded('stopped', new Map([['test > old', 'passed'], ['test > ran', 'passed']])))).requirements[0];
+  assert.equal(someRan.status, 'missing');
+  assert.deepEqual(someRan.details.tests, []);
+  assert.deepEqual(someRan.details.passed_on_base, ['test > ran']);
+  assert.deepEqual(someRan.details.did_not_load_on_base, []);
+
+  const onlyOld = (await build(new NothingLoaded('stopped', new Map([['test > old', 'passed']])))).requirements[0];
+  assert.equal(onlyOld.status, 'met');
+  assert.deepEqual(onlyOld.details.tests.map((item) => item.name), ['test > absent', 'test > ran']);
+  assert.deepEqual(onlyOld.details.did_not_load_on_base, ['a.test.js', 'b.test.js']);
+});
+
+test('a test command that stops the run on the base with the PR\'s tests only once is flaky there, so a person must check', async (t) => {
+  // Only the base with the PR's test files has changes that git has staged. There the command
+  // stops before it writes JUnit on its first run only.
+  const fixture = buildRepo(t, `if ! git diff --cached --quiet && [ ! -e stop.mark ]; then touch stop.mark; exit 2; fi; ${NODE_TESTS}`);
+  const { evidence, requirement, gap } = await runCheck(fixture.repo, 'fix/new-test');
+  assert.equal(requirement.status, 'missing');
+  assert.deepEqual(requirement.details.tests, []);
+  assert.match(requirement.details.base_error.message, /differ, so it is flaky: on its first run it failed and gave no results, and on its second run it gave results for \d+ tests/);
+  assert.match(gap.how_to_fix, /base-pr-tests-first\.log/);
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+test('two runs that stop with different results on the base with the PR\'s tests are flaky, so a person must check', async (t) => {
+  // The first run with the PR's tests stops before it writes JUnit. The second runs the tests,
+  // where the PR's test passes on the base, and then the type check fails.
+  const fixture = buildRepo(t, `if ! git diff --cached --quiet && [ ! -e stop.mark ]; then touch stop.mark; exit 2; fi; ${TYPED_TESTS}`);
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/types');
+  assert.equal(requirement.status, 'missing');
+  assert.deepEqual(requirement.details.tests, []);
+  assert.match(requirement.details.base_error.message, /on its first run it failed and gave no results, and on its second run it failed with results for \d+ tests and no failing test/);
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+// With test results made by hand: when the run with the PR's tests gives nothing, only the PR's
+// tests count. A test in a file the PR did not change is not the PR's, and neither is a test with
+// no file that the plain base run has too.
+test('when nothing loads on the base with the PR\'s tests, only the PR\'s tests that pass on the head count', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const runTests = async () => ({
+    base: new Map([['old.test.js > a', 'passed'], ['test > b', 'passed']]),
+    head: new Map([['old.test.js > a', 'passed'], ['test > b', 'passed'], ['new.test.js > c', 'passed'], ['new.test.js > d', 'failed'], ['test > e', 'passed']])
+  });
+  const runBaseWithPrTests = async () => new NothingLoaded('the test command failed on the base with the PR\'s test files (exit code 2) and wrote no JUnit file at r.xml');
+  const exhibit = await buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['new.test.js', 'src/a.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+  const [requirement] = exhibit.requirements;
+  assert.equal(requirement.status, 'met');
+  assert.deepEqual(requirement.details.tests, [
+    { name: 'new.test.js > c', on_base: 'did_not_load', files: ['new.test.js'] },
+    { name: 'test > e', on_base: 'did_not_load', files: ['new.test.js'] }
+  ]);
+  assert.deepEqual(requirement.details.did_not_load_on_base, ['new.test.js']);
+  assert.deepEqual(requirement.details.passed_on_base, []);
 });
 
 test('a change that is neither fix nor feature skips failing-before with the reason, and can still meet the policy', async (t) => {

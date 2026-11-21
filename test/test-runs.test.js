@@ -205,8 +205,9 @@ test('the gap of a second run that fails names the log of that run', async (t) =
 test('the run of the base with the PR\'s test files writes its own log, and its gap names it', async (t) => {
   const fixture = buildRepo(t);
   // Only the base with the PR's test files has changes that git has staged: Exhibit checks out
-  // the PR's test files there. So only that run fails.
-  const command = `if ! git diff --cached --quiet; then echo "base with the PR tests"; exit 4; fi; ${NODE_TESTS}`;
+  // the PR's test files there. So only that run fails: it exits 0 but writes no JUnit file. A run
+  // that exits 0 with no results is an error there too, not a file that did not load.
+  const command = `if ! git diff --cached --quiet; then echo "base with the PR tests"; exit 0; fi; ${NODE_TESTS}`;
   fixture.setBasePolicy(policy(command).replace('    - tests-before-after\n', '    - tests-before-after\n    - failing-before\n'));
   const { evidence } = await runCheck(fixture.repo, 'flaky');
   const gap = evidence.gaps.find((item) => item.type === 'failing-before');
