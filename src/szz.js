@@ -1013,17 +1013,18 @@ const closesBlock = (text) => {
   return rest.startsWith('*') && rest.endsWith('*/') && !rest.slice(0, -2).includes('/*');
 };
 
-// Says whether one of these rows closes a block comment that opened before the first of them.
+// Finds the row that closes a block comment that opened before the first of these rows, and
+// returns its index, or -1 when no row closes it.
 // The look stops at the first row that opens a block with "/*": a "*/" after that row closes the
 // new block, not the earlier one. So in " * qty;", "/* a", " * b */" the last row does not make
 // " * qty;" a comment. A row that starts with "*" or "//" opens no block, even when its text
 // names "/*", such as " * Use '/*' to open.": it is comment text or a block end.
-function closesEarlierBlock(texts) {
-  for (const text of texts) {
-    if (closesBlock(text)) return true;
-    if (opensBlock(text)) return false;
+function earlierBlockEnd(texts) {
+  for (let i = 0; i < texts.length; i++) {
+    if (closesBlock(texts[i])) return i;
+    if (opensBlock(texts[i])) return -1;
   }
-  return false;
+  return -1;
 }
 
 // Says whether a code row opens a block comment with "/*". As in blockStarts, a "/*" in quotes,
@@ -1068,20 +1069,28 @@ function blockEnd(rest) {
 // starts with "*" counts as a row of such a block only when the row or a later row of the hunk
 // closes the block before any row that opens a new one, or when the row is a JSDoc tag such as
 // "* @param". Code can start with "*" too, such as "* qty;" after a line that ends in "price".
+// When a later row closes the block, the rows between the "*" row and that row are inside the
+// block too, so they are comment, even when they do not start with "*", such as
+// "x = 1; // see /*" between " * Old words." and " */".
 function markComments(texts, path, starts = []) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
   if (style !== 'slash') return texts.map(() => false);
   let inBlock = false;
+  // The index of the row that closes a block from before the hunk. Rows before it are comment.
+  let guessedEnd = -1;
   return texts.map((text, i) => {
     let rest = text.trim();
     if (starts[i] !== undefined) inBlock = starts[i];
     if (!inBlock) {
+      if (starts[i] === undefined && i < guessedEnd) return true;
       if (rest.startsWith('//')) return true;
       if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
         const end = blockEnd(rest);
         if (end !== -1) return rest.slice(end + 2).trim() === '';
-        return /^\*\s*@\w/.test(rest) || closesEarlierBlock(texts.slice(i + 1));
+        const close = earlierBlockEnd(texts.slice(i + 1));
+        if (close !== -1) guessedEnd = i + 1 + close;
+        return /^\*\s*@\w/.test(rest) || close !== -1;
       }
       if (!rest.startsWith('/*')) return false;
       rest = rest.slice(2);

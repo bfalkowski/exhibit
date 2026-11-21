@@ -574,8 +574,11 @@ test('comments: a JSDoc row with a glob such as **/*.js is still a comment', () 
 });
 
 test('comments: without the file, a glob with a name after "**/" still ends the block, so its row counts', () => {
-  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' * Matches src/**/foo.js files.', ' */'] }] }));
-  assert.deepEqual(counted(result), [['a.js', [6]]]);
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Matches src/**/foo.js files.'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5]]]);
+  // A later row that closes the block shows that the row is inside it, so the row is comment.
+  const closed = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' * Matches src/**/foo.js files.', ' */'] }] }));
+  assert.deepEqual(counted(closed), []);
 });
 
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
@@ -814,9 +817,26 @@ test('comments: with the file, an indented Python comment that the fix turns bac
 test('comments: a later code row with "/*" only in quotes or after "//" does not stop the look for the block end', () => {
   for (const code of ['x = 1; // see /*', "s = '/*';", 's = "a/*b";', 's = `/*`;', "s = '\\'/*';"]) {
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', code, ' */'] }] }));
-    const comments = dropped(result).filter(([, line]) => line !== 6);
-    assert.deepEqual(comments, [['a.js', 5, 'comment'], ['a.js', 7, 'comment']], code);
+    assert.deepEqual(counted(result), [], code);
+    assert.deepEqual(dropped(result), [['a.js', 5, 'comment'], ['a.js', 6, 'comment'], ['a.js', 7, 'comment']], code);
   }
+});
+
+test('comments: without the file, a non-* row between a * row and the row that closes the block is comment', () => {
+  // The file is "/*", " * Old words.", "x = 1; // see /*", " */", "export const y = 2;".
+  // The fix deletes lines 2 to 4: all three are inside the block.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: [' * Old words.', 'x = 1; // see /*', ' */'] }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 2, 'comment'], ['a.js', 3, 'comment'], ['a.js', 4, 'comment']]);
+});
+
+test('comments: code rows after a * code row are not swept in when a later row opens a block first', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', 'total += 1;', '/* a', ' * b */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
+  assert.deepEqual(dropped(result), [['a.js', 7, 'comment'], ['a.js', 8, 'comment']]);
+  // With no row that closes a block, nothing is swept in either.
+  const open = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', 'total += 1;'] }] }));
+  assert.deepEqual(counted(open), [['a.js', [5, 6]]]);
 });
 
 test('comments: a later code row with a real "/*" after a string still stops the look for the block end', () => {
@@ -827,6 +847,6 @@ test('comments: a later code row with a real "/*" after a string still stops the
 test('comments: a known wrong guess: a quote or "//" in a regex literal hides a later "/*" on the row', () => {
   for (const code of ["r = /'/; /* a", 'r = /\\/\\//; /* a']) {
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', code, ' * b */'] }] }));
-    assert.deepEqual(counted(result), [['a.js', [6]]], code);
+    assert.deepEqual(counted(result), [], code);
   }
 });
