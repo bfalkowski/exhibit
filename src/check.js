@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
 import { describeTests, failingBefore } from './failing-before.js';
 import { describeMutation, mutation } from './mutation.js';
-import { runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
+import { describeBaseError, runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
@@ -222,9 +222,11 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
 }
 
 // More words for a requirement's line in summary.md: the tests that failing-before found, why
-// a requirement was not needed, or the catch rate and the surviving mutants.
+// a requirement was not needed, the catch rate and the surviving mutants, or that the base gave
+// no test results.
 function otherDetails(item) {
   if (item.type === 'mutation') return describeMutation(item.details);
+  if (item.type === 'tests-before-after') return describeBaseError(item.details);
   if (item.type !== 'failing-before') return '';
   if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
   return describeTests(item.details);

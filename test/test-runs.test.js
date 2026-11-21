@@ -87,14 +87,21 @@ function buildRepo(t) {
     git('tag', '-f', 'start');
     git('checkout', '-q', 'main');
   };
-  return { repo, home, git, setBasePolicy };
+  // Makes the branch `name` from start, with `files` committed on it.
+  const branch = (name, files) => {
+    git('checkout', '-q', '-b', name, 'start');
+    commit(files, name);
+    git('checkout', '-q', 'main');
+  };
+  return { repo, home, git, setBasePolicy, branch };
 }
 
 async function runCheck(repo, head) {
   const code = await check(['--base', 'start', '--head', head], { env: { PATH: process.env.PATH }, cwd: repo, stdout: { write() {} } });
   const evidence = JSON.parse(readFileSync(join(repo, '.exhibit', 'evidence.json'), 'utf8'));
   assert.deepEqual(checkExhibit(evidence), []);
-  return { code, evidence, requirement: evidence.requirements.find((item) => item.type === 'tests-before-after'), gap: evidence.gaps.find((item) => item.type === 'tests-before-after') };
+  const summary = readFileSync(join(repo, '.exhibit', 'summary.md'), 'utf8');
+  return { code, evidence, summary, requirement: evidence.requirements.find((item) => item.type === 'tests-before-after'), gap: evidence.gaps.find((item) => item.type === 'tests-before-after') };
 }
 
 // The repo's worktrees, from git. Only the repo itself must be left.
@@ -173,7 +180,10 @@ test('the gap of a test command that fails names the log with its output', async
   fixture.setBasePolicy(policy('echo "why it broke"; exit 3'));
   const { requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
-  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
+  // The command fails on both sides. The head's error is the one that counts, and the base's
+  // error is kept in details.
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/head-first\.log\./);
+  assert.match(requirement.details.base_error.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
   assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), 'utf8'), 'why it broke\n');
 });
 
@@ -196,7 +206,10 @@ test('the run of the base with the PR\'s test files writes its own log, and its 
   fixture.setBasePolicy(policy(command).replace('    - tests-before-after\n', '    - tests-before-after\n    - failing-before\n'));
   const { evidence } = await runCheck(fixture.repo, 'flaky');
   const gap = evidence.gaps.find((item) => item.type === 'failing-before');
-  assert.equal(gap.status, 'error');
+  // A run on the base that gives no results is no error of Exhibit: failing-before cannot check,
+  // so a person must.
+  assert.equal(gap.status, 'missing');
+  assert.equal(evidence.verdict, 'needs_person');
   assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-pr-tests-first\.log\./);
   assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log'), 'utf8'), 'base with the PR tests\n');
 });
@@ -218,7 +231,7 @@ test('a test command that is not found gives error, and verdict error', async (t
   fixture.setBasePolicy(policy('exhibit-no-such-test-command --run'));
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
-  assert.match(gap.how_to_fix, /could not run on the base: the shell could not find it \(exit code 127\)/);
+  assert.match(gap.how_to_fix, /could not run on the head: the shell could not find it \(exit code 127\)/);
   assert.equal(evidence.verdict, 'error');
   assert.equal(code, 2);
   assertNoWorktreeLeft(fixture);
@@ -350,5 +363,69 @@ test('the base run does not see the head, or changes in the checkout', async (t)
   assert.equal(statusOf(runs.head, 'add sums two numbers'), 'failed');
   assert.equal(statusOf(runs.base, 'add keeps zero'), 'passed');
   assert.equal(statusOf(runs.head, 'add keeps zero'), 'passed');
+  assertNoWorktreeLeft(fixture);
+});
+
+// The PR adds the test tools: the base policy runs scripts/test.sh, which only the head has. So
+// the command cannot run on the base (sh exits 127), and runs on the head.
+const TOOLS = { 'scripts/test.sh': `${NODE_TESTS}\n` };
+
+test('a test command that cannot run on the base only: tests-before-after is judged by the head, and keeps the base error', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy('sh scripts/test.sh'));
+  fixture.branch('tools', TOOLS);
+  const { code, evidence, summary, requirement } = await runCheck(fixture.repo, 'tools');
+  assert.equal(requirement.status, 'met');
+  assert.equal(requirement.details.base, null);
+  assert.deepEqual(requirement.details.head, { passed: 2, failed: 0, skipped: 0, flaky: 0 });
+  assert.match(requirement.details.base_error.message, /could not run on the base: the shell could not find it \(exit code 127\)/);
+  assert.match(requirement.details.base_error.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
+  assert.equal(evidence.verdict, 'meets_policy');
+  assert.equal(code, 0);
+  assert.match(summary, /tests-before-after \(from default\): met\. The tests gave no results on the base, so only the head counts: the test command could not run on the base/);
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a test that fails on the head still gives failed when the base gives no results', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy('sh scripts/test.sh'));
+  fixture.branch('tools-broken', { ...TOOLS, 'src/math.js': 'export const add = (a, b) => a + b + 1;\n' });
+  const { evidence, requirement, gap } = await runCheck(fixture.repo, 'tools-broken');
+  assert.equal(requirement.status, 'failed');
+  assert.equal(requirement.details.failed_on_head.length, 2);
+  assert.match(requirement.details.base_error.message, /on the base/);
+  assert.match(gap.how_to_fix, /2 tests fail on the head/);
+  assert.equal(evidence.verdict, 'needs_person');
+});
+
+test('a base that gives no results leaves failing-before missing: it says it cannot check, and runs no more tests', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy('sh scripts/test.sh').replace('    - tests-before-after\n', '    - tests-before-after\n    - failing-before\n'));
+  fixture.branch('tools-and-test', { ...TOOLS, 'test/zero.test.js': "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { add } from '../src/math.js';\ntest('add keeps a number', () => assert.equal(add(0, 7), 7));\n" });
+  const { code, evidence, summary } = await runCheck(fixture.repo, 'tools-and-test');
+  const requirement = evidence.requirements.find((item) => item.type === 'failing-before');
+  const gap = evidence.gaps.find((item) => item.type === 'failing-before');
+  assert.equal(requirement.status, 'missing');
+  assert.match(requirement.details.base_error.message, /could not run on the base/);
+  assert.match(gap.how_to_fix, /The tests gave no results on the base, so Exhibit cannot show that a test fails there/);
+  assert.match(gap.how_to_fix, /could not run on the base: the shell could not find it/);
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
+  assert.equal(evidence.requirements.find((item) => item.type === 'tests-before-after').status, 'met');
+  assert.equal(evidence.verdict, 'needs_person');
+  assert.equal(code, 1);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log')), false);
+  assert.match(summary, /failing-before \(from default\): missing\./);
+  assertNoWorktreeLeft(fixture);
+});
+
+test('the base and head runs give the base error, not a throw, when only the base cannot run', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.branch('tools', TOOLS);
+  const sha = (ref) => fixture.git('rev-parse', ref).trim();
+  const runs = await runTestsOnBaseAndHead({ cwd: fixture.repo, base: sha('start'), head: sha('tools'), settings: { test_command: 'sh scripts/test.sh', test_results: '.exhibit/junit.xml' } });
+  assert.equal(runs.base, null);
+  assert.equal(runs.baseError.name, 'TestRunError');
+  assert.match(runs.baseError.message, /on the base/);
+  assert.equal(statusOf(runs.head, 'add sums two numbers'), 'passed');
   assertNoWorktreeLeft(fixture);
 });
