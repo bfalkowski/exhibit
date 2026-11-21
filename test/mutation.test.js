@@ -275,12 +275,14 @@ test('the budget stops Stryker and every process it started', async (t) => {
   assert.match(JSON.parse(read(fixture.repo, 'evidence.json')).gaps[0].how_to_fix, /budget of 15 seconds/);
 });
 
-// Two changed files with eight mutants each, one on each line.
+// Two changed files with eight changed lines each. Stryker makes two mutants on each line: one for
+// the * and one for the arrow function, so 32 in all.
 const eightLines = (name) => Array.from({ length: 8 }, (_, i) => `export const ${name}${i} = (x) => x * ${i + 2};\n`).join('');
 // A test file that kills every mutant of both files. Each time it runs, it takes the next number
 // in the folder RUN_DIR. Its first run is Stryker's coverage run. After that run and LIMIT more, it
-// waits far past the budget, so the budget stops Stryker after a few mutants, the same ones each
-// time. With the order of the code, those few would all come from src/a.js.
+// waits far past the budget, so only the next LIMIT mutants are killed, the same ones each time.
+// The mutants whose test file waits can time out near the end of the budget, and count too. With
+// the order of the code, the killed ones would all come from src/a.js.
 const CUT_SHORT_TEST = `import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
@@ -307,12 +309,15 @@ test('a partial run tests mutants from every changed file, in an order that the 
     const runs = mkdtempSync(join(fixture.home, 'runs-'));
     const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }) });
     assert.equal(outcome.complete, false, JSON.stringify(outcome));
-    assert.ok(outcome.mutants.length > 0 && outcome.mutants.length < 16, `${outcome.mutants.length} mutants`);
-    return outcome.mutants.map((mutant) => `${relative(realpathSync(fixture.repo), mutant.fileName)}:${mutant.location.start.line}`).sort();
+    // Only the killed mutants are the same each time. The waiting test files time out about when
+    // the budget runs out, so the timeouts in the sample depend on the speed of the machine.
+    const killed = outcome.mutants.filter((mutant) => mutant.status === 'Killed');
+    assert.equal(killed.length, 6, JSON.stringify(outcome.mutants.map((mutant) => mutant.status)));
+    return killed.map((mutant) => `${relative(realpathSync(fixture.repo), mutant.fileName)}:${mutant.location.start.line}`).sort();
   };
   const seed = 'f'.repeat(40);
   const first = await sample(seed);
-  // The sample is a few mutants, and they come from both files, not only the first.
+  // The 6 killed mutants come from both files, not only the first.
   assert.deepEqual([...new Set(first.map((place) => place.split(':')[0]))], ['src/a.js', 'src/b.js'], first.join(' '));
   // A second run with the same seed tests the same mutants first.
   assert.deepEqual(await sample(seed), first);
