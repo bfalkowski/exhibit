@@ -761,6 +761,27 @@ test('comments: with the file, a known wrong guess: a division that reads as a r
   assert.deepEqual(counted(result), [['a.js', [2]]]);
 });
 
+test('comments: with the file, a known wrong guess: a division that reads as a regex can swallow a backtick, so a code row drops', () => {
+  // A known limit (spec 9.2), from the review of PR 377. "/ 2 + `a /" reads as a regex, so the
+  // backtick before "b" opens a template string that ends at the first backtick of row 2. Then
+  // "c /* d" reads as code, and its "/*" opens a block, so row 3 drops as a comment.
+  const file = (x) => `y = x++ / 2 + \`a / b\`;\nconst s = \`c /* d\`;\nx = ${x};\n`;
+  const hunks = [{ at: 3, deleted: ['x = 1;'], added: ['x = 2;'] }];
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': file(1) }, { 'a.js': file(2) }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 3, 'comment']]);
+});
+
+test('comments: with the file, a known wrong guess: a division at the start of a row reads as a regex', () => {
+  // A known limit (spec 9.2), from the review of PR 377. Each row is read alone, so a "/" at its
+  // start opens a regex. Here "/ b; /" reads as one, the "/*" opens no block, and the comment
+  // row after it counts.
+  const file = (note) => `const t = a\n  / b; /* note\n * ${note}\n */\n`;
+  const hunks = [{ at: 3, deleted: [' * old'], added: [' * new'] }];
+  const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': file('old') }, { 'a.js': file('new') }));
+  assert.deepEqual(counted(result), [['a.js', [3]]]);
+});
+
 test('whitespace: with the file, a Python line that keeps its block level is whitespace, tabs or spaces', () => {
   const before = 'def total(xs):\n\tt = 0\n\treturn t\n';
   const after = 'def total(xs):\n    t = 0\n    return t\n';

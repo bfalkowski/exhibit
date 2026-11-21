@@ -809,7 +809,10 @@ function squashCode(text, style) {
 //   triple-quoted string or after a backslash at the end of the line before.
 // Text in quotes is skipped, so a "/*" in a string such as 'src/**/*.js' opens nothing. A
 // regex literal is skipped too, found as the line reader finds it (opensRegex and endOfRegex),
-// so a "/*" or a backtick in one, such as /[/*]/ or /`/, opens nothing.
+// so a "/*" or a backtick in one, such as /[/*]/ or /`/, opens nothing. A division that reads
+// as a regex, such as "x++ / 2" or a "/" at the start of a row, is a rare wrong guess. It can
+// hide a "/*", so a comment line counts. Or it can take in a backtick, so the text of a later
+// template string reads as code, and a "/*" in it drops the code lines after it as a comment.
 function lineFacts(text, path) {
   const rows = text.split('\n');
   return [undefined, ...(commentStyle(path) === 'hash' ? pythonLevels(rows) : blockStarts(rows))];
