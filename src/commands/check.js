@@ -185,12 +185,16 @@ async function git(cwd, args) {
 async function policyAtBase(cwd, base, path) {
   const short = base.slice(0, 7);
   let bytes = null;
-  // "-q" makes rev-parse print nothing and exit 1 when the base has no file at that path.
-  const blob = await git(cwd, ['rev-parse', '--verify', '-q', `${base}:${path}`]).catch(() => null);
-  if (blob !== null) {
-    const type = (await git(cwd, ['cat-file', '-t', blob.trim()])).trim();
+  // ls-tree gives the mode, type and blob of the entry at the path, or nothing when the base
+  // has no entry there. --full-tree reads the path from the top of the repo, from any folder.
+  const entry = (await git(cwd, ['ls-tree', '-z', '--full-tree', base, '--', path])).split('\0').find((line) => line.endsWith(`\t${path}`));
+  if (entry !== undefined) {
+    const [mode, type, blob] = entry.slice(0, entry.indexOf('\t')).split(' ');
     if (type !== 'blob') throw new ToolError(`${path} in the base commit ${short} is a ${type === 'tree' ? 'folder' : type}, not a file. Give --policy the path of the policy file.`);
-    bytes = await gitBytes(cwd, ['cat-file', 'blob', blob.trim()]);
+    // A link is refused, not followed. A change to the file it points to would not show as a
+    // change to the policy file, so the policy-change gap would miss it (spec 8.1).
+    if (mode === '120000') throw new ToolError(`${path} in the base commit ${short} is a symlink. Exhibit does not follow it. Give --policy the path of the real file.`);
+    bytes = await gitBytes(cwd, ['cat-file', 'blob', blob]);
   }
   try {
     const policy = parsePolicy(bytes === null ? null : bytes.toString('utf8'), path);
