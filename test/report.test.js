@@ -354,3 +354,14 @@ test('the rule for weak history does not count a deferral', () => {
   const { markdown } = report(lines, { labels });
   assert.match(markdown, /Only 1 of 3 escaped defects has a link that holds at least half of the fix's counted lines/);
 });
+
+test('when every linked defect is a deferral, the history is weak, with no "0 of the 0"', () => {
+  // 11 fix PRs, and SZZ linked only fix PR 1. Its label says review saw it.
+  const lines = [fixLine(1, { confidence: 1 }), ...Array.from({ length: 10 }, (_, i) => fixLine(20 + i, { confidence: 0 }))];
+  assert.equal(factsIn(markdownText(report(lines).markdown)).weak, false);
+  const labels = { state: 'read', lines: [labelLine(1, { kept: [1], known: true })] };
+  const { markdown } = report(lines, { labels });
+  assert.equal(factsIn(markdownText(markdown)).weak, true);
+  assert.match(markdown, /Every linked defect is a deferral, so there are no escaped defects to judge\./);
+  assert.doesNotMatch(markdown, /0 of the 0/);
+});

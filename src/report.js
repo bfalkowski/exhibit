@@ -166,6 +166,7 @@ function weakReasons({ fixes, linked, escaped, strong, szzRan, fixSignals }) {
   if (fixes < WEAK_HISTORY.minFixPrs) reasons.push(`Only ${fixes} fix ${fixes === 1 ? 'PR' : 'PRs'}. Exhibit needs at least ${WEAK_HISTORY.minFixPrs} to say how often bugs get through.`);
   if (!szzRan) reasons.push('SZZ did not run, so there are no links to judge.');
   else if (linked === 0) reasons.push('SZZ linked no fix PR to the PR that brought its bug.');
+  else if (escaped === 0) reasons.push('Every linked defect is a deferral, so there are no escaped defects to judge.');
   else if (strong * 2 < escaped) reasons.push(`Only ${strong} of ${escaped} escaped defects ${strong === 1 ? 'has' : 'have'} a link that holds at least half of the fix's counted lines.`);
   return reasons;
 }

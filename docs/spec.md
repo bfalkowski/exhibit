@@ -384,7 +384,7 @@ The history report has these parts, in this order:
    1. Merged PRs read.
    2. Fix PRs.
    3. Fix PRs with an SZZ link. A fix whose bug was found before release is not one (part 7). This step still counts deferrals, because SZZ linked them. Part 1 says how many of them are deferrals.
-   4. Defects labeled: the escaped defects with a line in `.exhibit/labels.jsonl` (section 8.4). A line for a defect that is no longer in the history is not counted. Each defect counts once, by its first line, as in `exhibit label`. A second line for the same fix PR, for example from a merge of two label files, is not counted again.
+   4. Defects labeled: the linked defects with a line in `.exhibit/labels.jsonl` (section 8.4), deferrals too. A line for a defect that is no longer in the history is not counted. Each defect counts once, by its first line, as in `exhibit label`. A second line for the same fix PR, for example from a merge of two label files, is not counted again.
    5. Defects with at least one link that a person kept: the labeled defects whose `introducing_prs` is not empty. A defect whose links the person all rejected counts as labeled, but not as kept.
 
    `exhibit history` reads `.exhibit/labels.jsonl` only to count it, and never changes it. With no labels file, steps 4 and 5 say "not labeled yet" in place of a number. When the file cannot be read, or a line is not JSON or fails the labels schema, steps 4 and 5 say "the labels could not be read", a sentence under the funnel names the problem, `exhibit history` gives a warning on stderr, and the run still succeeds. Outside a clone, SZZ did not run, so steps 3 to 5 say "SZZ did not run". `--json` gives the same counts in its `funnel` field, for example `{ "merged_prs": 14, "fix_prs": 7, "szz_linked": 4, "labeled": 2, "kept": 1, "labels": "read" }`. A step with no number is null there, and `labels` is `none`, `read` or `unreadable`. The backtest steps (a rule's `source`, and what the policy would have flagged) are in the backtest report, not here.
@@ -399,6 +399,7 @@ The history report has these parts, in this order:
 - It has fewer than 10 fix PRs. With 9 it is weak, and with 10 it is not. A re-land is no fix PR (section 9.1), so it does not count here, in the counts or in the funnel.
 - SZZ linked none of the fix PRs, or did not run.
 - Fewer than half of the escaped defects have a strong link. A strong link has a confidence of 0.5 or more. So 2 strong defects of 4 is not weak, and 1 of 4 is weak. A deferral (part 5) is no escaped defect, so this rule does not count it.
+- SZZ linked at least one fix PR, but every linked defect is a deferral. Then there is no escaped defect to judge, and the report says so.
 
 Each link counts lines, not bugs, so with few fixes, or with links that hold only a small part of a fix's lines, Exhibit cannot tell a real pattern from chance. A weak history makes the report say "The history is weak" and list the reasons. With no fix PRs, the report also says to check that the fix signals match how the repo marks a fix, and names them.
 
