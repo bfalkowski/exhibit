@@ -103,6 +103,13 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   git('checkout', '-q', '-b', 'moved-src', 'start');
   git('mv', 'src/app.js', 'src/moved.js');
   git('commit', '-q', '-m', 'move app');
+  // git pairs a removed and a new file as a rename only when they are at least 50% alike. This
+  // move also rewrites the whole file, so git sees a new file.
+  git('checkout', '-q', '-b', 'moved-and-rewritten', 'start');
+  git('mv', 'src/app.js', 'src/main.js');
+  writeFileSync(join(fixture.repo, 'src', 'main.js'), 'import { run } from "node:test";\nrun();\n');
+  git('add', 'src/main.js');
+  git('commit', '-q', '-m', 'move and rewrite app');
   git('checkout', '-q', 'main');
 
   exhibitCheck(fixture, ['--base', 'start', '--head', 'new-src']);
@@ -121,6 +128,10 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   // A file that moves inside src is not a new file.
   exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-src']);
   assert.equal(readEvidence(fixture.repo).classification.feature, false);
+
+  // A file that moves and changes more than half of its content counts as a new file (spec 9.1).
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-and-rewritten']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, true);
 });
 
 test('check exits 1 for a change to evidence.yml', (t) => {
