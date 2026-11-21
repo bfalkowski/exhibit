@@ -91,6 +91,38 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
+test('a PR that adds a file under a source path is a feature, and one that only changes a file is not', (t) => {
+  const fixture = buildRepo(t);
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\nsettings:\n  source_paths: ["src/**"]\ndefault:\n  risk: medium\n  needs:\n    - failing-before: { when: [feature] }\n');
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '-b', 'new-src', 'start');
+  mkdirSync(join(fixture.repo, 'src'), { recursive: true });
+  writeFileSync(join(fixture.repo, 'src', 'b.js'), 'export const b = 1;\n');
+  git('add', 'src/b.js');
+  git('commit', '-q', '-m', 'add b');
+  git('checkout', '-q', '-b', 'moved-src', 'start');
+  git('mv', 'src/app.js', 'src/moved.js');
+  git('commit', '-q', '-m', 'move app');
+  git('checkout', '-q', 'main');
+
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'new-src']);
+  const added = readEvidence(fixture.repo);
+  assert.equal(added.classification.feature, true);
+  // failing-before { when: [feature] } is needed, so it has no reason to skip.
+  assert.equal(added.requirements[0].details.reason, undefined);
+  assert.deepEqual(checkExhibit(added), []);
+
+  // The fix/src branch only changes src/app.js, so failing-before is not needed.
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  const changed = readEvidence(fixture.repo);
+  assert.equal(changed.classification.feature, false);
+  assert.match(changed.requirements[0].details.reason, /only on a feature/);
+
+  // A file that moves inside src is not a new file.
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'moved-src']);
+  assert.equal(readEvidence(fixture.repo).classification.feature, false);
+});
+
 test('check exits 1 for a change to evidence.yml', (t) => {
   const fixture = buildRepo(t);
   const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'policy']);

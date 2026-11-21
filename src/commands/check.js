@@ -84,6 +84,9 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   const base = await commitSha(cwd, refs.base, refs.hint);
   const head = await commitSha(cwd, refs.head, refs.hint);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
+  // The new files, for the feature rule (spec 9.1). Here git looks for renames, so a file that
+  // only moves is not a new file.
+  const added = (await git(cwd, ['diff', '--name-only', '--find-renames', '--diff-filter=A', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
 
   // The head worktree for probes is made only when a probe asks for it, and removed at the end.
   const headWorktree = worktreeOnDemand(cwd, head);
@@ -91,7 +94,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
-    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
   } finally {
     await headWorktree.remove();
   }
