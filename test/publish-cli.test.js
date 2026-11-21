@@ -314,10 +314,16 @@ test('--pr, --repo and --head must match the exhibit, or publish exits 2 and sto
 test('--head must be a full commit SHA', (t) => {
   const fixture = buildFixture(t);
   const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
-  for (const bad of ['main', HEAD_1.slice(0, 12), '', `${HEAD_1}0`]) {
+  for (const bad of ['main', HEAD_1.slice(0, 12), '', `${HEAD_1}0`, '3'.repeat(63), '3'.repeat(65)]) {
     const run = runPublish(fixture, fixture.repo, file, ['--head', bad]);
     assert.equal(run.status, 2, bad);
     assert.match(run.stderr, new RegExp(`^exhibit: --head must be a full commit SHA of 40 or 64 hex digits, not "${bad}"\\.`));
   }
+  // A SHA-256 repo has 64-digit SHAs, so --head takes one. This one is not the exhibit's head, so
+  // publish gets past the SHA check and refuses at the match.
+  const long = '3'.repeat(64);
+  const run = runPublish(fixture, fixture.repo, file, ['--head', long]);
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, new RegExp(`^exhibit: ${file} is the exhibit for PR 12 in acme/widgets at ${HEAD_1}, not for PR 12 in acme/widgets at ${long}, so nothing was stored\\.`));
   assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
 });
