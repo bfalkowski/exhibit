@@ -38,9 +38,11 @@ const DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}
 // many points they used. A run that fails says it too, on stderr.
 // At the end, also after a run that fails, it removes the cache entries that no run has used for
 // 30 days (spec 8.6).
-// With tracker:jira in the fix signals, it asks Jira about each PR's ticket (spec 9.1), with the
-// token in JIRA_API_TOKEN, and says how many Jira requests it made. With no token, the signal
-// matches no PR, the run still succeeds, and it says so in one line on stderr.
+// With tracker:jira in the fix signals, it asks Jira about the ticket of each PR it reads (spec
+// 9.1), with the token in JIRA_API_TOKEN, and says how many Jira requests it made. A kept line
+// takes the Jira answer that its line saved, with no request (spec 8.3). With no token, a line
+// with a saved answer keeps it, the signal matches no other PR, the run still succeeds, and it
+// says so in one line on stderr.
 // It writes the kinds of change that each PR's files match in evidence.yml (spec 8.3). With no
 // kinds in the policy, every PR's kinds is empty, which means default, and it says so in one line.
 export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
@@ -59,7 +61,7 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     stderr.write(`exhibit: note: ${why}, so the kinds of every PR in ${OUTPUT} are empty, which means default.\n`);
   }
   const warn = (text) => stderr.write(`exhibit: warning: ${text}\n`);
-  const tracker = connectTracker(policy.settings, { env, fetch, stderr });
+  const tracker = connectTracker(policy.settings, { env, fetch });
   const folder = options.cache ? cacheFolder({ env }) : null;
   const cache = folder ? createReplyCache({ dir: folder, token }) : undefined;
   const forge = forgeModule.connect({ repo: options.repo, token, fetch, cache });
@@ -70,7 +72,7 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
     if (requests > 0 || queries > 0) {
       stderr.write(`exhibit: note: this run made ${plural(requests, 'GitHub REST request')}, and ${notModified} got a 304. It made ${plural(queries, 'GitHub GraphQL query', 'queries')}, which used ${plural(points, 'point')}.\n`);
     }
-    if (tracker && tracker.counts().requests > 0) stderr.write(`exhibit: note: this run made ${plural(tracker.counts().requests, 'Jira request')}.\n`);
+    if (tracker?.canAsk && tracker.counts().requests > 0) stderr.write(`exhibit: note: this run made ${plural(tracker.counts().requests, 'Jira request')}.\n`);
     throw error;
   } finally {
     // After the run, so the entries this run read have a new file time and stay (spec 8.6).
@@ -78,22 +80,28 @@ export async function history(argv, { env, cwd, fetch, stdout, stderr }) {
   }
 }
 
-// Returns the Jira tracker when the fix signals hold tracker:jira and JIRA_API_TOKEN is set.
-// Returns null when they do not hold it, and null with a one-line note when the token is missing:
-// then the signal matches no PR, and every other signal still works.
-function connectTracker(settings, { env, fetch, stderr }) {
+// Returns the Jira tracker when the fix signals hold tracker:jira, or null when they do not.
+// Without JIRA_API_TOKEN, the tracker cannot ask Jira (canAsk is false), but it still reads the
+// answers saved in the old history file, and every other signal still works.
+function connectTracker(settings, { env, fetch }) {
   if (!settings.fix_signals.includes(`tracker:${JIRA_TRACKER.name}`)) return null;
-  const token = env[JIRA_TRACKER.tokenEnv];
-  if (!token) {
-    stderr.write(`exhibit: note: ${JIRA_TRACKER.tokenEnv} is not set, so the tracker:jira fix signal matched no PR. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.\n`);
-    return null;
-  }
-  return JIRA_TRACKER.connect({ settings: settings.jira, token, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch });
+  return JIRA_TRACKER.connect({ settings: settings.jira, token: env[JIRA_TRACKER.tokenEnv] || undefined, email: env[JIRA_TRACKER.emailEnv] || undefined, fetch });
+}
+
+// The one note for a run with tracker:jira and no token. It says how many lines kept the Jira
+// answer that the old history file saved, when there are any.
+function noTokenNote(lines) {
+  const saved = lines.filter((line) => line.ticket).length;
+  const what = saved === 0
+    ? 'so the tracker:jira fix signal matched no PR'
+    : `so Exhibit did not ask Jira. ${saved === 1 ? '1 PR keeps' : `${saved} PRs keep`} the Jira answer saved in ${OUTPUT}, and the tracker:jira fix signal matched no other PR`;
+  return `exhibit: note: ${JIRA_TRACKER.tokenEnv} is not set, ${what}. Set it to a Jira API token, and for Jira Cloud set ${JIRA_TRACKER.emailEnv} to the email of its account.\n`;
 }
 
 async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, warn, stdout, stderr }) {
   const previous = options.full ? [] : await readPrevious(cwd, forge, (text) => stderr.write(`exhibit: note: ${text}\n`));
   const updated = await updateHistory({ forge, since: options.since, limit: options.limit, previous, fixSignals, kinds, tracker, warn });
+  if (tracker && !tracker.canAsk) stderr.write(noTokenNote(updated.lines));
   const read = keepSzz(updated.lines, previous);
   const kindChanges = kindsChanges(read, previous);
   if (kindChanges.length > 0) stderr.write(`exhibit: note: ${kindChanges}\n`);
@@ -142,7 +150,7 @@ async function run(options, { cwd, forge, tracker, fixSignals, kinds, folder, wa
   const mode = previous.length > 0 ? 'incremental' : 'full';
   // Only with tracker:jira in the fix signals: the Jira requests, or null when there was no token.
   const usesJira = fixSignals.includes(`tracker:${JIRA_TRACKER.name}`);
-  const jira = tracker ? tracker.counts() : null;
+  const jira = tracker?.canAsk ? tracker.counts() : null;
   if (options.json) {
     stdout.write(JSON.stringify({ prs: lines.length, output: OUTPUT, szz, funnel: funnel(lines, { szzRan: root !== null, labels }), report: HISTORY_REPORT, github, mode, read: updated.read, ...(usesJira ? { jira } : {}) }) + '\n');
   } else {

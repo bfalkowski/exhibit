@@ -90,6 +90,19 @@
         }
       }
     },
+    "ticket": {
+      "type": "object",
+      "description": "Only with the tracker:jira signal, on a PR that names a Jira issue that Jira answered for (spec 8.3). It saves what Jira said, not what it means, so a later run judges it under its own settings.jira. A kept line is classified from it with no request, and a line keeps it when Jira cannot answer.",
+      "required": ["issue", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "issue": { "type": "string", "pattern": "^jira:.+$", "description": "The issue the PR names, such as jira:PAY-482." },
+        "type": { "type": ["string", "null"], "description": "The issue type's name, such as Bug. null when Jira does not know the issue (404): then no other field is there." },
+        "created_at": { "type": "string", "description": "When the issue was made, as an ISO time in UTC. SZZ takes it as the bug report date (spec 9.2)." },
+        "found_field": { "type": ["string", "null"], "description": "settings.jira.found_field when Jira answered, or null when it was not set. A run with another found_field asks Jira again." },
+        "found": { "type": "array", "items": { "type": "string" }, "description": "The texts in found_field. Empty when the field had no value or found_field was not set." }
+      }
+    },
     "evidence_section": { "type": "null", "description": "Filled by a later ticket." },
     "szz": {
       "type": [
