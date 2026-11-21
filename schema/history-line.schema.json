@@ -95,6 +95,9 @@
       "description": "Only with the tracker:jira signal, on a PR that names a Jira issue that Jira answered for (spec 8.3). It saves what Jira said, not what it means, so a later run judges it under its own settings.jira. A kept line is classified from it with no request, and a line keeps it when Jira cannot answer.",
       "required": ["issue", "type"],
       "additionalProperties": false,
+      "if": { "properties": { "type": { "type": "string" } } },
+      "then": { "required": ["created_at", "found_field", "found"] },
+      "else": { "maxProperties": 2 },
       "properties": {
         "issue": { "type": "string", "pattern": "^jira:.+$", "description": "The issue the PR names, such as jira:PAY-482." },
         "type": { "type": ["string", "null"], "description": "The issue type's name, such as Bug. null when Jira does not know the issue (404): then no other field is there." },
