@@ -658,10 +658,43 @@ Example: 30 fix PRs, 22 with an SZZ link, 15 with a kept link, 9 in a rule's `so
 
 **4. Rules that do not pay.** Rules only grow if nobody removes them. So for each kind of change, the report gives two counts on the test set:
 
-- Caught: the defects whose kept introducing PR matches the kind, and would have been `needs_person` because a requirement of this kind was missing. A defect in the kind's own `source` does not count, because that is a leak.
-- False demands: the clean PRs that match the kind, and would have been `needs_person` because a requirement of this kind was missing.
+- Caught: the defects whose kept introducing PR matches the kind, and would have been `needs_person` because a requirement of this kind was not met. A defect in the kind's own `source` does not count, because that is a leak.
+- False demands: the clean PRs that match the kind, and would have been `needs_person` because a requirement of this kind was not met.
 
 A kind with 0 caught and at least 1 false demand is marked "does not pay", with both counts and the number of test-set defects that matched the kind. With 0 matching defects, the kind had no chance to catch one, and the report says so. `default` gets the same counts. A person reads the mark and decides whether to remove the kind from `evidence.yml`, or to change its `needs`. Exhibit never removes or changes a rule itself.
+
+**A need that two kinds share (ticket 267).** A PR can match more than one kind, and two kinds can ask for the same item, such as `tests-before-after`. Then the PR has one requirement, and its `kinds` names both (section 8.2). When that requirement is not met, each kind that it names gets the whole count: one caught, or one false demand, for each kind. No kind gets a part of a count, and no kind is picked over the other.
+
+- "A requirement of this kind" means a requirement whose `kinds` names this kind.
+- "Not met" means missing or unknown, as for the verdict and the table ("An unknown requirement counts as not met", above). For each kind, the report also gives how many of its caught and its false demands rest only on unknown requirements of this kind, so a reader can see how much of the mark is unknown. This is not the table's `unknown_only`, which looks at every requirement and gap of the PR. Take a PR that matches `docs` and `relay`, where the need of `docs` is unknown and a need that only `relay` has is missing. For `docs`, its count rests only on unknown, so it counts here, but the table's `unknown_only` leaves the PR out. Only missing would make caught and false demands unfair to each other. A PR with no exhibit and no evidence section has only unknown requirements, so it could never be caught. But a clean PR whose evidence section leaves a need out is still a false demand. In the Building58 history (below), every catch rests on an unknown requirement, so "only missing" marks every kind "does not pay". A strong catch still needs a missing requirement, because an unknown one does not show why the PR was stopped.
+- Items are the same only when their type and `params` are the same, as in `exhibit check`. `params` holds an item's fields without `author` (section 8.2), so a probe with `author: hidden` and the same probe without it are one requirement. A `mutation` with `min` 0.70 in one kind and `min` 0.50 in another are two requirements, so each one is judged and counted for its own kind.
+- The rule for each kind stays apart. A defect in one kind's `source` does not count for that kind, but it still counts for the other kind that shares the requirement.
+- A strong catch also looks at every kind in `kinds`. The table's caught count is wider: it counts every `needs_person` verdict, for every kind the PR matches, also when the verdict comes from another kind's requirement or from a `policy-change` or `no-rule` gap. So a kind's caught count here can be lower than its caught count in the table.
+
+Why every kind. The mark answers one question for each kind: "did this kind's needs ever stop a bug in the test set?" When two kinds ask for the same item, each kind's needs did stop it. The two other choices both mark a kind that did stop a bug:
+
+- Only one kind, such as the first by name: the other kind gets 0 caught and keeps its false demands, so it can be marked "does not pay".
+- Only a kind whose need no other kind shares: both kinds get 0 caught, so both can be marked. A person who removes both loses the catch.
+
+A part of a count, such as one half to each kind, gives the same mark as a whole count, because any part is more than 0. But it does not fit the counts as "k of n" with their 95% intervals. So the report does not use it. The mark does not say whether a kind is the only kind that stops its bugs. Two kinds that ask for the same item both keep their mark off, and a person who wants fewer kinds reads their `needs` side by side.
+
+Example. The policy has two kinds. `relay` matches `relay/**` and needs `tests-before-after`. `docs` matches `docs/**` and needs `tests-before-after`. The test set has three PRs:
+
+| PR | Changes | Kinds | Missing requirement | Escaped defect |
+|---|---|---|---|---|
+| 19 | `relay/core.js`, `docs/relay.md` | `docs`, `relay` | `tests-before-after` (kinds `docs`, `relay`) | D-088 |
+| 30 | `docs/setup.md` | `docs` | `tests-before-after` (kind `docs`) | none |
+| 41 | `relay/queue.js` | `relay` | `tests-before-after` (kind `relay`) | none |
+
+PR 19 brought D-088, and its one missing requirement is shared. So `relay` and `docs` each get 1 caught. PR 30 and PR 41 are clean, so each of them is 1 false demand for its own kind:
+
+| Rule | `docs` | `relay` |
+|---|---|---|
+| Every kind gets the whole count | 1 caught, 1 false demand | 1 caught, 1 false demand |
+| Only the first kind by name | 1 caught, 1 false demand | 0 caught, 1 false demand: "does not pay" |
+| Only a need no other kind shares | 0 caught, 1 false demand: "does not pay" | 0 caught, 1 false demand: "does not pay" |
+
+With the rule above, no kind is marked. This case is common. In the Building58 history of section 12, phase A, the policy has four kinds that all need `tests-before-after`. Over the whole history, its backtest has 5 caught pairs. Each one came from a PR that matched two or three kinds, and in each one `tests-before-after` was unknown, because the PR had no exhibit and no evidence section. With the rule above, `docs` gets 5 caught and 25 false demands, `office` 2 and 20, `relay` 5 and 27, and `tooling` 0 and 8, so only `tooling` is marked "does not pay". With "only the first kind by name", `docs` would get all 5, and `relay` and `office`, the two `high` risk kinds, would get 0 caught and be marked too. With only missing requirements, every kind would get 0 caught and be marked.
 
 ### 9.10 Numbers for the trust ladder
 
