@@ -445,6 +445,8 @@ test('a partial run that the budget stopped is judged on its sample', async (t) 
   assert.deepEqual(asked.testFiles, ['test/inside.test.js']);
   // The policy sets no budget, so it is the default.
   assert.equal(asked.budgetSeconds, 600);
+  // The head SHA fixes the random order of the mutants.
+  assert.equal(asked.seed, context.head);
   // The head SHA fixes the order of the mutants.
   assert.equal(asked.seed, context.head);
   assert.equal(result.status, 'met');
@@ -568,15 +570,37 @@ test('the collector does not run Stryker when nothing can be mutated, or the pol
   assert.equal(met.status, 'met');
   assert.match(met.details.reason, /nothing to mutate/);
 
-  const python = collectorRepo(t, { 'tool/run.py': 'print(1)\n', 'src/inside.js': NEW_CODE });
-  const skipped = await never({ params: { min: 0.9 } }, python);
+  const go = collectorRepo(t, { 'tool/run.go': 'package main\n', 'src/inside.js': NEW_CODE });
+  const skipped = await never({ params: { min: 0.9 } }, go);
   assert.equal(skipped.status, 'skipped');
-  assert.deepEqual(skipped.details.no_adapter, ['tool/run.py']);
+  assert.deepEqual(skipped.details.no_adapter, ['tool/run.go']);
 
   const noGlobs = collectorRepo(t, { 'src/inside.js': NEW_CODE }, {});
   const missing = await never({ params: { min: 0.9 } }, noGlobs);
   assert.equal(missing.status, 'missing');
   assert.match(missing.how_to_fix, /mutation_test_files/);
+});
+
+test('Stryker gets only the matched test files that it can run, so a Python file in mutation_test_files does not reach it', async (t) => {
+  // No test imports src/twice.js, so Stryker gets every matched test file. py/conftest.py matches
+  // the globs, as the mutmut adapter's left-out gap advises, but node cannot run it.
+  const context = collectorRepo(t, { 'src/twice.js': NEW_CODE, 'test/inside.test.js': WEAK_TEST, 'py/conftest.py': 'import os\n' }, { mutation_test_files: ['test/*.test.js', 'py/conftest.py'] });
+  let asked;
+  const runStryker = async (options) => {
+    asked = options;
+    return { mutants: [], complete: true, timedOut: false, code: 0 };
+  };
+  const result = await mutationCollector({ runStryker })({ params: { min: 0.5 } }, context);
+  assert.deepEqual(asked.testFiles, ['test/inside.test.js']);
+  assert.deepEqual(result.details.test_files, ['test/inside.test.js']);
+});
+
+test('when the globs match only Python files, the gap says that Stryker needs JavaScript or TypeScript test files', async (t) => {
+  const context = collectorRepo(t, { 'src/twice.js': NEW_CODE, 'py/tests/test_a.py': 'def test_a():\n    pass\n' }, { mutation_test_files: ['py/tests/*.py'] });
+  const result = await mutationCollector({ runStryker: async () => assert.fail('Stryker should not run') })({ params: { min: 0.5 } }, context);
+  assert.equal(result.status, 'missing');
+  assert.match(result.details.reason, /No JavaScript or TypeScript file in the head matches settings\.mutation_test_files/);
+  assert.match(result.how_to_fix, /Stryker needs JavaScript or TypeScript test files/);
 });
 
 test('a failing mutation_setup gives error and its log', async (t) => {

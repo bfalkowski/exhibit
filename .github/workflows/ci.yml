@@ -45,4 +45,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # mutmut and pytest for the tests that run mutmut for real (test/mutmut.test.js). Exhibit's
+      # mutmut driver needs mutmut 3.8.1 exactly (docs/spec.md section 9.5).
+      - run: python3 -m venv "$RUNNER_TEMP/mutmut" && "$RUNNER_TEMP/mutmut/bin/pip" install --quiet mutmut==3.8.1 pytest==9.2.0
       - run: npm test
+        env:
+          EXHIBIT_TEST_MUTMUT_PYTHON: ${{ runner.temp }}/mutmut/bin/python

@@ -105,7 +105,12 @@
         "mutation_setup": {
           "type": "string",
           "minLength": 1,
-          "description": "The command that installs what the tests need in the head worktree before Stryker runs, such as npm ci (spec 9.5)."
+          "description": "The command that installs what the tests need in the head worktree before Stryker or mutmut runs, such as npm ci (spec 9.5)."
+        },
+        "mutation_python": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command that starts the Python of a changed Python file's project, with the project's packages and mutmut 3.8.1, such as uv run --with mutmut==3.8.1 python (spec 9.5). It runs with sh in the project's folder. Absent means python3."
         },
         "mutation_test_files": {
           "type": "array",
