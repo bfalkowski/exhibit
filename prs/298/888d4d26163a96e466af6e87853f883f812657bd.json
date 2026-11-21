@@ -1,0 +1,113 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "92b8614fd44348060557cf6f5980affefedd2f429ca506d026a337a4aa6d6909"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 298,
+  "base": "2089f628b5aacac7df96d74e2e389a70d756c641",
+  "head": "888d4d26163a96e466af6e87853f883f812657bd",
+  "classification": {
+    "kinds": [
+      "docs",
+      "source",
+      "tooling"
+    ],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs examples"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "met",
+      "details": {
+        "exit_code": 0,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 48
+    },
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "source",
+        "tooling"
+      ],
+      "status": "failed",
+      "details": {
+        "base": {
+          "passed": 689,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 692,
+          "failed": 2,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": [
+          "test > a base that gives no results leaves failing-before missing: it says it cannot check, and runs no more tests",
+          "test > a test command that cannot run on the base only: tests-before-after is judged by the head, and keeps the base error"
+        ]
+      },
+      "author": "builder",
+      "duration_ms": 170403
+    },
+    {
+      "type": "failing-before",
+      "params": {
+        "when": [
+          "fix"
+        ]
+      },
+      "kinds": [
+        "source"
+      ],
+      "status": "skipped",
+      "details": {
+        "reason": "The policy asks for it only on a fix, and this change is not classified as one, so it is not needed. This does not stop meets_policy."
+      },
+      "author": "builder",
+      "duration_ms": 0
+    }
+  ],
+  "verdict": "needs_person",
+  "gaps": [
+    {
+      "type": "tests-before-after",
+      "status": "failed",
+      "how_to_fix": "2 tests fail on the head, also when run again: test > a base that gives no results leaves failing-before missing: it says it cannot check, and runs no more tests; test > a test command that cannot run on the base only: tests-before-after is judged by the head, and keeps the base error. Fix the change so that they pass, and run exhibit check again."
+    }
+  ],
+  "checks_by_author": {
+    "builder": 2,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-21T04:42:54.414Z"
+}
