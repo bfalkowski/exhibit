@@ -808,11 +808,11 @@ function squashCode(text, style) {
 //   no indent that counts: a blank line, a comment line, or a line inside brackets, a
 //   triple-quoted string or after a backslash at the end of the line before.
 // Text in quotes is skipped, so a "/*" in a string such as 'src/**/*.js' opens nothing. A
-// regex literal is read as code, so a "/*" in one, such as /[/*]/, is a rare wrong guess.
-// A backtick in one, such as /`/, is a second: it reads as a template string that goes on
-// until the next backtick. So a block comment after it can be missed, and its lines count. Or
-// the next backtick opens a real template string, its text reads as code, and a "/*" in that
-// text opens a block, so the code lines after it drop as a comment.
+// regex literal is skipped too, found as the line reader finds it (opensRegex and endOfRegex),
+// so a "/*" or a backtick in one, such as /[/*]/ or /`/, opens nothing. A division that reads
+// as a regex, such as "x++ / 2" or a "/" at the start of a row, is a rare wrong guess. It can
+// hide a "/*", so a comment line counts. Or it can take in a backtick, so the text of a later
+// template string reads as code, and a "/*" in it drops the code lines after it as a comment.
 function lineFacts(text, path) {
   const rows = text.split('\n');
   return [undefined, ...(commentStyle(path) === 'hash' ? pythonLevels(rows) : blockStarts(rows))];
@@ -823,6 +823,8 @@ function blockStarts(rows) {
   let state = null;
   for (const row of rows) {
     facts.push({ inBlock: state === 'block' });
+    // The code of this row so far, without its comments, to tell a regex from a division.
+    let code = '';
     for (let i = 0; i < row.length; i++) {
       const ch = row[i];
       if (state === 'block') {
@@ -830,16 +832,26 @@ function blockStarts(rows) {
           state = null;
           i++;
         }
-      } else if (state !== null) {
-        if (ch === '\\') i++;
+        continue;
+      }
+      if (state !== null) {
+        code += ch;
+        if (ch === '\\') code += row[++i] ?? '';
         else if (ch === state) state = null;
+        continue;
+      }
+      const regexEnd = ch === '/' && opensRegex(code) ? endOfRegex(row, i) : -1;
+      if (regexEnd !== -1) {
+        code += row.slice(i, regexEnd + 1);
+        i = regexEnd;
       } else if (row.startsWith('//', i)) {
         break;
       } else if (row.startsWith('/*', i)) {
         state = 'block';
         i++;
-      } else if ('\'"`'.includes(ch)) {
-        state = ch;
+      } else {
+        code += ch;
+        if ('\'"`'.includes(ch)) state = ch;
       }
     }
     // Only a template string goes on to the next line.
@@ -1012,8 +1024,8 @@ function closesEarlierBlock(texts) {
 
 // Says whether a code row opens a block comment with "/*". As in blockStarts, a "/*" in quotes,
 // such as "s = '/*';", or after "//", such as "x = 1; // see /*", opens nothing.
-// A regex literal reads as code, as in blockStarts. So a quote or "//" in one, such as
-// "r = /'/; /* a", hides a real "/*" after it on the row: a rare wrong guess.
+// A regex literal reads as code here, though blockStarts finds it. So a quote or "//" in one,
+// such as "r = /'/; /* a", hides a real "/*" after it on the row: a rare wrong guess.
 // A row that starts with "*" opens no block here, so the code row " * rate /* a" is a rare wrong
 // guess: one row alone cannot tell it from the comment row " * Use /* to open.".
 function opensBlock(text) {
