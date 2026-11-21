@@ -172,3 +172,22 @@ test('a PR whose commits are not in the clone is in no rate, even when its body 
   assert.equal(after.counts.all.no_commits, 2);
   assert.deepEqual(after.replayed.map((item) => [item.pr, item.no_commits]), [[1, true]]);
 });
+
+test('a defect whose only introducing PR has no commits makes no leak (second review of PR 370)', () => {
+  // The default learned from D-003, whose introducing PR 1 is in the test set.
+  const policy = parsePolicy('version: 3\ndefault:\n  risk: medium\n  needs: [tests-before-after]\n  source: [D-003]\n');
+  const lines = [
+    line(1),
+    { ...line(3), title: 'Fix 3', labels: ['bug'], classification: { fix: true, fix_signal: 'label:bug', kinds: [] }, szz: { blamed_commit: 'a'.repeat(40), links: [{ pr: 1, confidence: 1, lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null } }
+  ];
+  const labels = [{ id: 'D-003', fix_pr: 3, introducing_prs: [1], rejected_prs: [], code: 'x', category: 'Bug', would_have_caught: 'x', labeled_by: 'person', szz_link_rejected: false, known_at_review: false, labeled_at: '2026-03-01T00:00:00Z' }];
+  const before = backtest({ lines, labels, policy });
+  assert.deepEqual(before.leaks, [{ rule: 'default', defects: ['D-003'] }]);
+
+  const reruns = new Map([[1, { status: 'no_commits', seconds: 0, requirements: [], errors: [], mutation: null }], [3, { status: 'ran', seconds: 1, requirements: [], errors: [], mutation: null }]]);
+  const after = backtest({ lines, labels, policy, reruns });
+  assert.deepEqual(after.leaks, []);
+  assert.equal(after.counts_without_leaks, null);
+  // The replayed line is still there, and says it is not counted.
+  assert.deepEqual(after.replayed.map((item) => [item.id, item.pr, item.no_commits, item.without]), [['D-003', 1, true, null]]);
+});

@@ -28,7 +28,9 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
   const noCommits = new Set([...(reruns ?? new Map())].filter(([, result]) => result.status === 'no_commits').map(([number]) => number));
   const roles = prRoles(lines, labels);
   const counted = roles.defects.filter((defect) => defect.introducing_prs.some((pr) => testSet.some((line) => line.number === pr)));
-  const leaks = findLeaks(policy, counted);
+  // A leak is a defect that a rate counts, so a defect whose only introducing PRs in the test set
+  // have no commits in the clone makes no leak. `counted` keeps it, for its replayed line.
+  const leaks = findLeaks(policy, counted.filter((defect) => defect.introducing_prs.some((pr) => !noCommits.has(pr) && testSet.some((line) => line.number === pr))));
   const without = leaks.length === 0 ? null : withoutRules(policy, leaks.map((leak) => leak.rule));
   const categories = sourceCategories(roles.defects);
 
