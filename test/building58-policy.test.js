@@ -65,7 +65,7 @@ test('building58: a file that never ends fails after its time limit, and the oth
 // or 0, gives 600. Here the files end at once, so with 600 they pass, and with a broken limit of
 // NaN or 0 seconds each file would fail at once.
 for (const value of ['abc', '0']) {
-  test(`building58: TEST_FILE_SECONDS=${value} gives the limit of 600 seconds, as in run.js`, async () => {
+  test(`building58: TEST_FILE_SECONDS=${value} does not make every file fail at once, as in run.js`, async () => {
     const files = { 'relay/test/pass.test.js': FILES['relay/test/pass.test.js'] };
     const { dir, result, junit } = await runCommand(value, files);
     try {
@@ -76,3 +76,9 @@ for (const value of ['abc', '0']) {
     }
   });
 }
+
+// The run above shows only that the limit is not near 0. This shows the value it falls back to.
+test('building58: the script reads TEST_FILE_SECONDS as run.js does, with 600 when it is not a number', async () => {
+  const policy = await readPolicy(join(root, 'examples', 'building58'));
+  assert.ok(policy.settings.test_command.includes('Math.max(1, Number(process.env.TEST_FILE_SECONDS) || 600)'));
+});
