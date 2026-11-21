@@ -58,6 +58,7 @@ runs:
         INPUT_ENFORCE: ${{ inputs.enforce }}
         GITHUB_TOKEN: ${{ inputs.token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
         bad() { echo "::error::The input $1 must be $2, not \"$3\"."; exit 2; }
@@ -70,7 +71,9 @@ runs:
             if [ "$INPUT_ENFORCE" = false ]; then args+=(--shadow); fi
             ;;
           publish)
-            args=(publish --evidence .exhibit/evidence.json --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY")
+            # The check job ran the PR's code, which can rewrite evidence.json. --head with --pr and
+            # --repo makes publish refuse an exhibit for another PR or commit than this event's.
+            args=(publish --evidence .exhibit/evidence.json --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA")
             if [ -n "$INPUT_POLICY" ]; then args+=(--policy "$INPUT_POLICY"); fi
             if [ -n "$INPUT_DATA_BRANCH" ]; then args+=(--data-branch "$INPUT_DATA_BRANCH"); fi
             if [ "$INPUT_COMMENT" = true ]; then args+=(--comment); fi

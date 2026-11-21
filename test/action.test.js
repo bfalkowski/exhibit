@@ -43,7 +43,8 @@ test('each input reaches the run step only as an env variable, never pasted into
     INPUT_COMMENT: '${{ inputs.comment }}',
     INPUT_ENFORCE: '${{ inputs.enforce }}',
     GITHUB_TOKEN: '${{ inputs.token }}',
-    PR_NUMBER: '${{ github.event.pull_request.number }}'
+    PR_NUMBER: '${{ github.event.pull_request.number }}',
+    HEAD_SHA: '${{ github.event.pull_request.head.sha }}'
   });
   // An expression in a script is pasted in before bash runs, so a value could become a command.
   for (const step of action.runs.steps) assert.doesNotMatch(step.run ?? '', /\$\{\{/, step.name);
@@ -81,6 +82,7 @@ function runScript(script, { inputs = {}, env = {}, cwd, pathDir }) {
       INPUT_ENFORCE: all.enforce,
       GITHUB_TOKEN: 'test-token',
       PR_NUMBER: '7',
+      HEAD_SHA: 'f'.repeat(40),
       GITHUB_REPOSITORY: 'owner/name',
       GITHUB_ACTION_PATH: root,
       ...env,
@@ -122,13 +124,15 @@ test('check maps policy to --policy and enforce false to --shadow, with the PR f
 test('publish maps data-branch, comment and enforce to their flags, each on its own', (t) => {
   const map = stubNode(t);
   // --pr and --repo let publish post the error on the PR when the check wrote no evidence.json.
-  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name'];
+  // With --head too, publish stores only an exhibit for the PR event's repo, PR and head.
+  const event = ['--pr', '7', '--repo', 'owner/name', '--head', 'f'.repeat(40)];
+  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', ...event];
   assert.deepEqual(map({ command: 'publish' }).argv, base);
   assert.deepEqual(map({ command: 'publish', policy: 'ci/policy.yml' }).argv, [...base, '--policy', 'ci/policy.yml']);
   assert.deepEqual(map({ command: 'publish', 'data-branch': 'store', comment: 'true', enforce: 'true' }).argv, [...base, '--data-branch', 'store', '--comment', '--enforce']);
   assert.deepEqual(map({ command: 'publish', enforce: 'true' }).argv, [...base, '--enforce']);
   // A value with spaces or a $ stays one argument, and nothing in it runs.
-  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--pr', '7', '--repo', 'owner/name', '--policy', 'my policy $(touch x).yml']);
+  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', ...event, '--policy', 'my policy $(touch x).yml']);
 });
 
 test('the step exits with the exit code of the CLI', (t) => {
