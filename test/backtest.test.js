@@ -265,6 +265,11 @@ test('bodyStatus reads n’t, and a 0 only in "0 fail"', () => {
   assert.equal(bodyStatus(tests, 'On Node 22.0 npm test passes.'), 'met');
   assert.equal(bodyStatus(failing, 'Before the fix, 0 of 4 pass and 4 fail.'), 'met');
   assert.equal(bodyStatus(failing, 'Before: 0 failures, zero failed, 0 fail.'), 'missing');
+  // Review of 63efa26: one word may stand between the count and the failure word, and a version
+  // number that ends in 0 is not a count.
+  assert.equal(bodyStatus(failing, 'On main, 0 tests failed.'), 'missing');
+  assert.equal(bodyStatus(failing, 'On main zero tests failed.'), 'missing');
+  assert.equal(bodyStatus(failing, 'On Node 22.0 failed before the fix.'), 'met');
 });
 
 test('share gives k of n with its 95% interval, and null for n = 0', () => {
