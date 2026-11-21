@@ -39,12 +39,17 @@ Building58's branch protection covers `main` only, so the publish job can push `
 
 ## The first policy
 
-[evidence.yml](evidence.yml) has two kinds of change:
+[evidence.yml](evidence.yml) has five kinds of change. A PR can match more than one, and then it needs what each of them needs.
 
 | Kind | Files | Risk | Needs |
 |---|---|---|---|
 | `code` | `relay/`, `office/`, `shared/`, `index.html`, the packages, the git hooks, CI and the lint config | medium | The tests on the base and the head. For a fix, a test that fails before the change. |
 | `docs` | `docs/` and every Markdown file | low | The manual's checks, the same ones CI runs for a docs-only change. |
+| `relay-tests` | `relay/test/*.test.js` | medium | The `load` probe: each test file the PR added or changed runs three times at once. |
+| `test-helpers` | `relay/test/helpers.js` | medium | The `room-settings` probe: the tests that start relays run with a room's settings set. |
+| `needs-you` | `relay/needs-you-plan.js`, `relay/needs-you.js`, `office/needs-you.js` | medium | The tests on the base and the head, and a test that fails before the change, for every PR. |
+
+The last three come from Building58's own escaped defects. The person labeled them in phase A of the field test, and [docs/field/phase-a-labels.md](../../docs/field/phase-a-labels.md) gives each rule with the defects behind it. Each rule names those defects in `source`.
 
 Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`.
 
@@ -68,7 +73,18 @@ The command differs from `npm test` in two ways:
 
 A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 7.5 minutes on a Mac. The same files, one at a time with one shared HOME, took 39 minutes there, and more than 72 minutes for two runs on a GitHub runner, so this policy does not do that. A room ticket can make it simpler later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
 
-This policy is a start. Phase A of the field test finds Building58's escaped defects, and the kinds and their needs come from them later.
+The `load` probe starts with `set -e`, so a step that fails, such as `git merge-base` with no `origin/main`, or `npm ci`, fails the probe. It never passes without running the tests. The probe is not the same each time: on one commit it passed in one run and failed in the next, when two test files timed out under the load. That is what it looks for, but it can also ask for a fix on a PR that only touched a test file that was flaky before.
+
+Two settings wait for a newer release. `v0.1.0` refuses both, so the policy leaves them out:
+
+- `test_timeout_seconds: 900`. A full test run takes about 8 minutes. In a phase A check run, `relay/test/lead-check.test.js` hung for 40 minutes on an older commit. Without a limit, a hang holds the check job until its own limit of 60 minutes.
+- `source_paths: ["relay/**", "office/**", "shared/**"]`, with `failing-before: { when: [fix, feature] }` in `needs-you`. Building58 PRs have no labels, so `v0.1.0` never sees a feature. So `needs-you` asks every PR for a failing test, a refactor too. With `source_paths`, a PR that adds a file there is a feature, as PR 48 was, and a PR that only changes the files there needs a failing test only when it is a fix.
+
+Once the setup note pins a release that has Exhibit tickets 162 and 178, add both in a PR of their own.
+
+The `load` probe finds the changed test files with `git merge-base HEAD origin/main`, so `origin/main` must be in the clone. The workflow's `fetch-depth: 0` gives it. It runs three copies of `relay/test/run.js` at once with `TEST_SLOTS=0`, so the copies do not wait on each other's slots, and the machine is busy. So the policy sets `probe_timeout_seconds` to 1200. The `room-settings` probe runs `node --test` and not `run.js`, because `run.js` takes the room's settings away.
+
+The new rules are in shadow mode like the rest. The backtest (Exhibit's slice S8) and the first weeks of phase B show how often each one asks for evidence that a PR did not need.
 
 ## After it merges
 
