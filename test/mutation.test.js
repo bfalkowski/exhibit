@@ -431,6 +431,14 @@ test('Stryker gets only the matched test files that it can run, so a Python file
   assert.deepEqual(result.details.test_files, ['test/inside.test.js']);
 });
 
+test('when the globs match only Python files, the gap says that Stryker needs JavaScript or TypeScript test files', async (t) => {
+  const context = collectorRepo(t, { 'src/twice.js': NEW_CODE, 'py/tests/test_a.py': 'def test_a():\n    pass\n' }, { mutation_test_files: ['py/tests/*.py'] });
+  const result = await mutationCollector({ runStryker: async () => assert.fail('Stryker should not run') })({ params: { min: 0.5 } }, context);
+  assert.equal(result.status, 'missing');
+  assert.match(result.details.reason, /No JavaScript or TypeScript file in the head matches settings\.mutation_test_files/);
+  assert.match(result.how_to_fix, /Stryker needs JavaScript or TypeScript test files/);
+});
+
 test('a failing mutation_setup gives error and its log', async (t) => {
   const context = collectorRepo(t, { 'src/inside.js': NEW_CODE }, { mutation_test_files: ['test/*.test.js'], mutation_setup: 'echo no network; exit 3' });
   const result = await mutationCollector({ runStryker: async () => assert.fail('Stryker should not run') })({ params: { min: 0.5 } }, context);

@@ -136,8 +136,8 @@ async function strykerRun({ root, settings, budgetSeconds, outDir, env, mutated,
   // node cannot run that.
   const allTests = (await gitLines(root, ['ls-files', '-z'])).filter((path) => STRYKER_FILE.test(path) && testGlobs.some((glob) => matchesGlob(path, glob))).sort();
   if (allTests.length === 0) {
-    return fixed('missing', { reason: 'No file in the head matches settings.mutation_test_files.', mutated },
-      `No file in the head commit matches settings.mutation_test_files (${testGlobs.join(', ')}), so no test can kill a mutant. Fix the globs in evidence.yml, or add tests.`);
+    return fixed('missing', { reason: 'No JavaScript or TypeScript file in the head matches settings.mutation_test_files.', mutated },
+      `No JavaScript or TypeScript file in the head commit matches settings.mutation_test_files (${testGlobs.join(', ')}), so no test can kill a mutant in the changed JavaScript or TypeScript. Stryker needs JavaScript or TypeScript test files: files that the globs match in another language, such as Python, only stay out of mutation. Fix the globs in evidence.yml, or add tests.`);
   }
   const reaching = await testsThatReach(root, allTests, files.map((file) => file.path));
   const testFiles = reaching.length > 0 ? reaching : allTests;
