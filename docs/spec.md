@@ -732,7 +732,7 @@ On stderr it prints: `Waiting for a second defect: "Broken doc link" (D-023).`
 
 The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo, only maps its inputs to CLI flags, and the CLI's exit code is the step's exit code. Every decision, shadow mode too, is in the CLI, so a GitLab CI job can later be a second thin wrapper. `test/action.test.js` reads `action.yml` and runs its script to check this.
 
-- `action.yml` is a composite action. It installs Exhibit's own packages with `npm ci`, then runs the CLI with the `node` on the job's PATH, which must be Node 20 or later, as on GitHub's runners. It does not set up Node itself: `exhibit check` runs the repo's own tests, and they must run on the Node that the repo set up.
+- `action.yml` is a composite action. It installs Exhibit's own packages with `npm ci`, then runs the CLI with the `node` on the job's PATH, which must be Node 20 or later, as on GitHub's runners. It does not set up Node itself: `exhibit check` runs the repo's own tests, and they must run on the Node that the repo set up. Its upload step uses `actions/upload-artifact@v6`, which needs Actions runner 2.327.1 or later, as on GitHub's hosted runners.
 - Inputs, each passed to the script as an environment variable, never pasted into it:
   - `command`: `check` (the default) or `publish`. `trace` and `history` come with slices S7 and S8.
   - `policy`: the path of the policy file in the repo, by default `evidence.yml`. It goes to `--policy`.

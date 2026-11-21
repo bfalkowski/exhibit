@@ -54,7 +54,10 @@ test('no step decides anything: the steps are install, run, summary and upload, 
   const conditions = action.runs.steps.map((step) => step.if ?? null);
   assert.deepEqual(conditions, [null, null, "${{ !cancelled() && inputs.command == 'check' }}", "${{ !cancelled() && inputs.command == 'check' }}"]);
   const upload = action.runs.steps[3];
-  assert.equal(upload.uses, 'actions/upload-artifact@v4');
+  // v6 is the first major that runs on Node 24. The .exhibit folder is hidden, so without
+  // include-hidden-files the artifact would be empty.
+  assert.equal(upload.uses, 'actions/upload-artifact@v6');
+  assert.equal(upload.with['include-hidden-files'], true);
   assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/tests/', '.exhibit/mutation/']);
   // The run step ends by handing over to the CLI, so its exit code is the step's exit code.
   assert.match(runStep.run.trimEnd(), /\nexec node "\$GITHUB_ACTION_PATH\/bin\/exhibit\.js" "\$\{args\[@\]\}"$/);
@@ -265,6 +268,15 @@ for (const path of WORKFLOWS) {
     assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
     assert.match(note.run, /This PR comes from a fork\..*publish job is skipped/);
     assert.match(note.run, />> "\$GITHUB_STEP_SUMMARY"/);
+  });
+
+  // checkout@v5 and download-artifact@v7 are the first majors that run on Node 24. An older one
+  // gets GitHub's "Node.js 20 is deprecated" annotation on every run.
+  test(`${path}: both jobs use the checkout and download-artifact majors that run on Node 24`, () => {
+    for (const job of Object.values(workflow.jobs)) {
+      assert.equal(job.steps.find((step) => step.uses?.startsWith('actions/checkout@')).uses, 'actions/checkout@v5');
+    }
+    assert.equal(workflow.jobs.publish.steps[1].uses, 'actions/download-artifact@v7');
   });
 
   test(`${path}: both jobs run Exhibit from a fixed commit SHA or a release tag, never a branch or ./`, () => {
