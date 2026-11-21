@@ -132,6 +132,8 @@ test('ticketKey finds the key at the start of the title, else at the start of th
   assert.equal(key('Crash', 'PAY-4821x'), null);
   assert.equal(key('Crash', 'fix/PAY-482'), null);
   assert.equal(key('PAY-1: Crash', 'PAY-2-crash'), 'PAY-1');
+  assert.equal(key('ZOOKEEPER-5076. Upgrade JDK'), 'ZOOKEEPER-5076');
+  assert.equal(key('PAY-482.Crash'), null);
 });
 
 test('revert and tracker:jira in one list: the first signal that matches wins, and a revert first asks Jira nothing', async () => {
