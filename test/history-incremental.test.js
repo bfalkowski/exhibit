@@ -456,6 +456,17 @@ test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ
   assert.deepEqual(reverted.classification, { kinds: [], fix: true, fix_signal: 'revert' });
   assert.deepEqual(reverted.szz, { blamed_commit: null, links: [{ pr: 13, confidence: 1, found_by: 'revert', lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null });
 
+  // A person edits the revert's body on GitHub to name PR 12. The signal is still revert, but
+  // the links come from the body, so SZZ runs again and the old link to PR 13 goes.
+  shop.history.find((pr) => pr.number === 14).body = 'Reverts fixture/shop#12';
+  replay.cleanup();
+  replay = writeHistoryReplay(shop, 'fixture/shop');
+  const edited = run();
+  assert.equal(edited.status, 0, edited.stderr);
+  const renamed = linesOf().get(14);
+  assert.deepEqual([renamed.body, renamed.classification.fix_signal], ['Reverts fixture/shop#12', 'revert']);
+  assert.deepEqual(renamed.szz.links.map((link) => link.pr), [12]);
+
   // Back to blame: the revert's szz no longer fits, so SZZ blames the lines again.
   writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [label:bug]\n');
   const third = run();

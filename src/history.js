@@ -23,8 +23,8 @@ export async function readHistory(options) {
 // both, so it can stop its list of merged PRs early. It may list more PRs than these two options
 // keep, and they pick from the list.
 // `previous` holds the lines of the old history file, which must pass the schema. A kept PR that
-// has a line there is not read again, and keeps that line as it is, unless it was merged in the
-// look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
+// has a line there is not read again, and keeps that line, except for its title, body, labels and
+// classification (see below), unless it was merged in the look-back window: at or after LOOK_BACK_MS before the newest merge in `previous`. A PR with no
 // line there is read. So an empty `previous` reads every kept PR.
 // Only the PRs that are read ask for their files, reviews, comments and CI results.
 // `fixSignals` (spec 9.1, the defaults when left out) fills `classification` on every line, kept
@@ -32,8 +32,7 @@ export async function readHistory(options) {
 // line takes the title, body and labels that the list of merged PRs holds now, and is classified
 // from them and from the branch name in that list. So a bug label that a person adds to an old PR
 // reaches its line with no extra request, and the line's fields agree with its classification.
-// The lines that are
-// read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
+// The lines that are read fill the spec 8.3 fields this version knows: the later fields (evidence_section, szz,
 // exhibit) are left out. The schema requires szz, so the history command
 // (src/commands/history.js) adds szz to each line that has none before it checks and writes the
 // lines.
