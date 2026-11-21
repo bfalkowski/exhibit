@@ -282,7 +282,9 @@ const eightLines = (name) => Array.from({ length: 8 }, (_, i) => `export const $
 // in the folder RUN_DIR. Its first run is Stryker's coverage run. After that run and LIMIT more, it
 // waits far past the budget, so only the next LIMIT mutants are killed, the same ones each time.
 // The mutants whose test file waits can time out near the end of the budget, and count too. With
-// the order of the code, the killed ones would all come from src/a.js.
+// the order of the code, the killed ones would all come from src/a.js. Stryker runs one test
+// process at a time here: with several at once, a busy machine can start them out of order, so
+// another mutant takes one of the first LIMIT numbers, and the killed ones differ between runs.
 const CUT_SHORT_TEST = `import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
@@ -307,7 +309,7 @@ test('a partial run tests mutants from every changed file, in an order that the 
   execFileSync('git', ['checkout', '-q', 'both'], { cwd: fixture.repo, env: gitEnv(fixture.home) });
   const sample = async (seed) => {
     const runs = mkdtempSync(join(fixture.home, 'runs-'));
-    const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }) });
+    const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }), concurrency: 1 });
     assert.equal(outcome.complete, false, JSON.stringify(outcome));
     // Only the killed mutants are the same each time. The waiting test files time out about when
     // the budget runs out, so the timeouts in the sample depend on the speed of the machine.

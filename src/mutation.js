@@ -557,7 +557,10 @@ async function isFile(path) {
 // mutants it finished. Gives back { mutants, complete, timedOut, code, signal, failedInFirstRun }.
 // `complete` is true when Stryker exited 0 and wrote its done line. `failedInFirstRun` lists the
 // tests that failed in Stryker's coverage run, from its log.
-export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, seed, logFile, env }) {
+//
+// `concurrency` is how many test processes Stryker runs at once. It is half the cores unless a
+// caller sets it. A test that needs the test processes to start in Stryker's order sets it to 1.
+export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, seed, logFile, env, concurrency = '50%' }) {
   const dir = await mkdtemp(join(tmpdir(), 'exhibit-stryker-'));
   try {
     const resultsFile = join(dir, 'mutants.jsonl');
@@ -582,7 +585,7 @@ export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds
       // on each core but one) made mutants that change nothing time out. Half the cores, and 2.5
       // times the normal time plus 15 seconds, leave room for a busy machine. A real endless
       // loop still ends as a timeout, only later.
-      concurrency: '50%',
+      concurrency,
       timeoutFactor: 2.5,
       timeoutMS: 15000,
       fileLogLevel: 'off',
