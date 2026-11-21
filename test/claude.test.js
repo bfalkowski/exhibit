@@ -41,6 +41,14 @@ test('Claude reads the PR title and body, the defect text and the categories use
   for (const part of [defect.title, defect.body, defect.text, '- state', '- arithmetic']) assert.ok(prompt.includes(part), part);
 });
 
+test('the request tells Claude the length limits of the labels schema', async () => {
+  const { draft, bodies } = recorded('draft');
+  await draft(defect);
+  const { properties } = bodies[0].output_config.format.schema;
+  assert.match(properties.code.description, /at most 200 characters/);
+  assert.match(properties.category.description, /at most 60 characters/);
+});
+
 test('the model is a setting', async () => {
   const { draft, bodies } = recorded('draft', { model: 'claude-sonnet-5-5' });
   assert.equal((await draft(defect)).model, 'claude-sonnet-5-5');
@@ -70,4 +78,13 @@ test('a refusal is a DraftError', async () => {
 
 test('a draft that does not fit the labels schema is a DraftError, so a person never confirms a line that cannot be written', async () => {
   await assert.rejects(recorded('too-long').draft(defect), (error) => error instanceof DraftError && /code/.test(error.message));
+});
+
+test('a draft category of only digits is a DraftError, because the category question reads digits as a pick from the list', async () => {
+  await assert.rejects(recorded('digits-category').draft(defect), (error) => {
+    assert.ok(error instanceof DraftError);
+    assert.equal(error.message, 'Claude\'s draft category "5" is only digits, and a category cannot be only digits');
+    assert.equal(error.stopsDrafting, null);
+    return true;
+  });
 });
