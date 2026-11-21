@@ -474,6 +474,34 @@ test('inside a clone, a kept fix whose signal changes to revert or back gets SZZ
   assert.deepEqual(linesOf().get(14).szz, blamed);
 });
 
+test('inside a clone, a revert in the look-back window whose body changed gets SZZ again', (t) => {
+  const shop = buildSzzRepo();
+  t.after(() => shop.cleanup());
+  execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:fixture/shop.git'], { cwd: shop.dir, env: gitEnv(shop.dir) });
+  shop.history.find((pr) => pr.number === 14).body = 'Reverts fixture/shop#13';
+  let replay = writeHistoryReplay(shop, 'fixture/shop');
+  t.after(() => replay.cleanup());
+  writeFileSync(join(shop.dir, 'evidence.yml'), 'settings:\n  fix_signals: [revert, label:bug]\n');
+  const bin = fileURLToPath(new URL('../bin/exhibit.js', import.meta.url));
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const run = () => spawnSync(process.execPath, ['--import', preload, bin, 'history', '--repo', 'fixture/shop', '--json', '--no-cache'], { cwd: shop.dir, env: gitEnv(shop.dir, { EXHIBIT_TEST_FIXTURE: replay.path, GITHUB_TOKEN: 'test-token' }), encoding: 'utf8' });
+  const pr14 = () => readFileSync(join(shop.dir, '.exhibit/history.jsonl'), 'utf8').trim().split('\n').map((row) => JSON.parse(row)).find((line) => line.number === 14);
+
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(pr14().szz.links.map((link) => link.pr), [13]);
+
+  // PR 14 is the newest merge, so the next run reads it again: its line has no szz, and the old
+  // file's szz is taken over only when the body is the same.
+  shop.history.find((pr) => pr.number === 14).body = 'Reverts fixture/shop#12';
+  replay.cleanup();
+  replay = writeHistoryReplay(shop, 'fixture/shop');
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(JSON.parse(second.stdout).mode, 'incremental');
+  assert.deepEqual([pr14().classification.fix_signal, pr14().szz.links.map((link) => link.pr)], ['revert', [12]]);
+});
+
 // A small policy with three kinds, and a default. No kind needs evidence, so check runs no tests.
 const THREE_KINDS = `kinds:
   api:
