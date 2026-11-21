@@ -185,16 +185,23 @@ async function git(cwd, args) {
 async function policyAtBase(cwd, base, path) {
   const short = base.slice(0, 7);
   let bytes = null;
-  // ls-tree gives the mode, type and blob of the entry at the path, or nothing when the base
-  // has no entry there. --full-tree reads the path from the top of the repo, from any folder.
-  const entry = (await git(cwd, ['ls-tree', '-z', '--full-tree', base, '--', path])).split('\0').find((line) => line.endsWith(`\t${path}`));
-  if (entry !== undefined) {
-    const [mode, type, blob] = entry.slice(0, entry.indexOf('\t')).split(' ');
-    if (type !== 'blob') throw new ToolError(`${path} in the base commit ${short} is a ${type === 'tree' ? 'folder' : type}, not a file. Give --policy the path of the policy file.`);
+  const entry = await treeEntry(cwd, base, path);
+  if (entry !== null) {
+    if (entry.type !== 'blob') throw new ToolError(`${path} in the base commit ${short} is a ${entry.type === 'tree' ? 'folder' : entry.type}, not a file. Give --policy the path of the policy file.`);
     // A link is refused, not followed. A change to the file it points to would not show as a
     // change to the policy file, so the policy-change gap would miss it (spec 8.1).
-    if (mode === '120000') throw new ToolError(`${path} in the base commit ${short} is a symlink. Exhibit does not follow it. Give --policy the path of the real file.`);
-    bytes = await gitBytes(cwd, ['cat-file', 'blob', blob]);
+    if (entry.mode === '120000') throw new ToolError(`${path} in the base commit ${short} is a symlink. Exhibit does not follow it. Give --policy the path of the real file.`);
+    bytes = await gitBytes(cwd, ['cat-file', 'blob', entry.blob]);
+  } else {
+    // git finds no file at a path that goes through a linked folder. Say that the link is the
+    // cause, so the run does not go on as if the base had no policy.
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i += 1) {
+      const folder = parts.slice(0, i).join('/');
+      const parent = await treeEntry(cwd, base, folder);
+      if (parent === null) break;
+      if (parent.mode === '120000') throw new ToolError(`${folder} in the base commit ${short} is a symlink, so ${path} goes through it. Exhibit does not follow it. Give --policy the path of the real file.`);
+    }
   }
   try {
     const policy = parsePolicy(bytes === null ? null : bytes.toString('utf8'), path);
@@ -203,6 +210,15 @@ async function policyAtBase(cwd, base, path) {
     if (!(error instanceof ToolError)) throw error;
     throw new ToolError(`${error.message}\nExhibit reads ${path} from the base commit ${short}, not from the files on disk. Fix the policy on the base branch.`);
   }
+}
+
+// The entry at `path` in `commit`: its mode, type and blob, or null when there is none. ls-tree
+// reads the path as it is, with no globs, and --full-tree reads it from the top of the repo.
+async function treeEntry(cwd, commit, path) {
+  const line = (await git(cwd, ['ls-tree', '-z', '--full-tree', commit, '--', path])).split('\0').find((item) => item.endsWith(`\t${path}`));
+  if (line === undefined) return null;
+  const [mode, type, blob] = line.slice(0, line.indexOf('\t')).split(' ');
+  return { mode, type, blob };
 }
 
 async function gitBytes(cwd, args) {

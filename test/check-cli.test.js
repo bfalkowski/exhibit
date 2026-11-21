@@ -221,6 +221,27 @@ test('a policy that is a symlink in the base commit is refused, and --policy can
   assert.deepEqual(readEvidence(fixture.repo).classification.kinds, ['notes']);
 });
 
+// The review of PR 284 by Nadia, finding 2: a folder in the policy path that is a symlink.
+test('a policy path that goes through a linked folder is refused, and does not read as no policy', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, 'config/evidence.yml');
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '--detach', 'start');
+  symlinkSync('config', join(fixture.repo, '.github'));
+  git('add', '.github');
+  git('commit', '-q', '-m', 'link the folder');
+  git('tag', '-f', 'start');
+  git('checkout', '-q', 'main');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']);
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /\.github in the base commit [0-9a-f]{7} is a symlink, so \.github\/evidence\.yml goes through it\. Exhibit does not follow it\. Give --policy the path of the real file\./);
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'config/evidence.yml']).status, 0);
+  // A path whose folder is not in the base at all is still no policy, not an error.
+  const missing = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'nowhere/evidence.yml']);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.equal(readEvidence(fixture.repo).policy.sha256, null);
+});
+
 test('the policy is read from the top of the repo, also when exhibit check runs in a subfolder', (t) => {
   const fixture = buildRepo(t);
   const run = spawnSync(process.execPath, [bin, 'check', '--base', 'start', '--head', 'notes'], { cwd: join(fixture.repo, 'src'), encoding: 'utf8', env: gitEnv(fixture.home) });
