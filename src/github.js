@@ -470,6 +470,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // - defaultBranch: the branch name.
 // - sameRepo: true or false.
 // - upsertComment, for exhibit publish --comment: { action, url }.
+// - labelAddedBy, for a skip in exhibit check: a login or null.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
   const base = `/repos/${repo}`;
@@ -634,6 +635,15 @@ export function createGitHubForge({ repo, ...client }) {
 
     // One PR, for exhibit check --pr.
     pull: async (number) => fromRestPull(await github.getOne(`${base}/pulls/${number}`, pullRequests)),
+
+    // The login of the account that last added the label `label` to PR `number`, or null when
+    // GitHub does not say, as for a deleted account. GitHub lists a PR's label events as events
+    // of the issue with the same number, oldest first.
+    async labelAddedBy(number, label) {
+      const events = await github.getAll(`${base}/issues/${number}/events?per_page=100`, pullRequests);
+      const added = events.filter((event) => event?.event === 'labeled' && event.label?.name === label).at(-1);
+      return added?.actor?.login ?? null;
+    },
 
     async defaultBranch() {
       return (await thisRepo()).default_branch;
