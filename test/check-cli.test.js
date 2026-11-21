@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +59,16 @@ function buildRepo(t) {
   git('checkout', '-q', '-b', 'policy', 'start');
   commit('evidence.yml', POLICY.replace('0.7', '0.1'), 'weaker policy');
   git('checkout', '-q', 'main');
-  return { repo, home };
+  // Commits `text` as the policy on top of start, and moves the tag start to that commit, so
+  // --base start reads it (spec 8.1). The branches above still start from the old commit, so the
+  // changed files of each branch stay the same.
+  const setBasePolicy = (text, path = 'evidence.yml') => {
+    git('checkout', '-q', '--detach', 'start');
+    commit(path, text, 'base policy');
+    git('tag', '-f', 'start');
+    git('checkout', '-q', 'main');
+  };
+  return { repo, home, setBasePolicy };
 }
 
 const exhibitCheck = ({ repo, home }, args) => spawnSync(process.execPath, [bin, 'check', ...args], { cwd: repo, encoding: 'utf8', env: gitEnv(home) });
@@ -94,7 +104,7 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
 
 test('a PR that adds a file under a source path is a feature, and one that only changes a file is not', (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\nsettings:\n  source_paths: ["src/**"]\ndefault:\n  risk: medium\n  needs:\n    - failing-before: { when: [feature] }\n');
+  fixture.setBasePolicy('version: 3\nsettings:\n  source_paths: ["src/**"]\ndefault:\n  risk: medium\n  needs:\n    - failing-before: { when: [feature] }\n');
   const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
   git('checkout', '-q', '-b', 'new-src', 'start');
   mkdirSync(join(fixture.repo, 'src'), { recursive: true });
@@ -155,6 +165,101 @@ test('check exits 1 for a change to evidence.yml', (t) => {
   assert.ok(readEvidence(fixture.repo).gaps.some((gap) => gap.type === 'policy-change'));
 });
 
+// The review of PR 163, finding 2: a policy on disk that is not committed must not change the rules.
+test('the policy comes from the base commit, so an edit on disk does not change the verdict', (t) => {
+  const fixture = buildRepo(t);
+  const before = exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  assert.equal(before.status, 1, before.stderr);
+  const expected = readEvidence(fixture.repo);
+  // A weaker policy on disk that asks for nothing, as an edit that is not committed.
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'default: { risk: low, needs: [] }\n');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.equal(evidence.verdict, 'needs_person');
+  assert.deepEqual(evidence.requirements.map((item) => item.type), ['tests-before-after', 'mutation']);
+  // The hash is of the policy in the base commit, not of the file on disk.
+  assert.equal(evidence.policy.sha256, createHash('sha256').update(POLICY).digest('hex'));
+  assert.deepEqual(evidence.policy, expected.policy);
+});
+
+test('with no policy in the base commit, a policy on disk is not read', (t) => {
+  const fixture = buildRepo(t);
+  // A base with no evidence.yml, then one commit that changes a file.
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('rm', '-q', 'evidence.yml');
+  git('commit', '-q', '-m', 'no policy');
+  writeFileSync(join(fixture.repo, 'src', 'app.js'), 'export const a = 3;\n');
+  git('commit', '-q', '-am', 'change app');
+  // The reviewer's run: an untracked evidence.yml that asks for nothing.
+  writeFileSync(join(fixture.repo, 'evidence.yml'), 'default: { risk: low, needs: [] }\n');
+  const run = exhibitCheck(fixture, ['--base', 'HEAD~1']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.equal(evidence.policy.sha256, null);
+  assert.ok(evidence.gaps.some((gap) => gap.type === 'no-rule'));
+});
+
+// The review of PR 284, finding 1: a policy that is a symlink in the base commit.
+test('a policy that is a symlink in the base commit is refused, and --policy can name the real file', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, '.github/evidence.yml');
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '--detach', 'start');
+  git('rm', '-q', 'evidence.yml');
+  symlinkSync('.github/evidence.yml', join(fixture.repo, 'evidence.yml'));
+  git('add', 'evidence.yml');
+  git('commit', '-q', '-m', 'link the policy');
+  git('tag', '-f', 'start');
+  git('checkout', '-q', 'main');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes']);
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /evidence\.yml in the base commit [0-9a-f]{7} is a symlink\. Exhibit does not follow it\. Give --policy the path of the real file\./);
+  assert.doesNotMatch(run.stderr, /must be object/);
+  const real = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']);
+  assert.equal(real.status, 0, real.stderr);
+  assert.deepEqual(readEvidence(fixture.repo).classification.kinds, ['notes']);
+});
+
+// The review of PR 284 by Nadia, finding 2: a folder in the policy path that is a symlink.
+test('a policy path that goes through a linked folder is refused, and does not read as no policy', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, 'config/evidence.yml');
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '--detach', 'start');
+  symlinkSync('config', join(fixture.repo, '.github'));
+  git('add', '.github');
+  git('commit', '-q', '-m', 'link the folder');
+  git('tag', '-f', 'start');
+  git('checkout', '-q', 'main');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']);
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /\.github in the base commit [0-9a-f]{7} is a symlink, so \.github\/evidence\.yml goes through it\. Exhibit does not follow it\. Give --policy the path of the real file\./);
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'config/evidence.yml']).status, 0);
+  // A path whose folder is not in the base at all is still no policy, not an error.
+  const missing = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'nowhere/evidence.yml']);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.equal(readEvidence(fixture.repo).policy.sha256, null);
+});
+
+test('the policy is read from the top of the repo, also when exhibit check runs in a subfolder', (t) => {
+  const fixture = buildRepo(t);
+  const run = spawnSync(process.execPath, [bin, 'check', '--base', 'start', '--head', 'notes'], { cwd: join(fixture.repo, 'src'), encoding: 'utf8', env: gitEnv(fixture.home) });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(JSON.parse(readFileSync(join(fixture.repo, 'src', '.exhibit', 'evidence.json'), 'utf8')).policy.sha256, createHash('sha256').update(POLICY).digest('hex'));
+});
+
+test('a change to the policy is checked by the policy in the base commit, and still needs a person', (t) => {
+  const fixture = buildRepo(t);
+  // The policy branch weakens the default mutation min from 0.7 to 0.1.
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'policy']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.equal(evidence.policy.sha256, createHash('sha256').update(POLICY).digest('hex'));
+  assert.equal(evidence.requirements.find((item) => item.type === 'mutation').params.min, 0.7);
+  assert.ok(evidence.gaps.some((gap) => gap.type === 'policy-change'));
+});
+
 test('check exits 2 when Exhibit fails, and leaves no old verdict behind', (t) => {
   const fixture = buildRepo(t);
   assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes']).status, 0);
@@ -167,10 +272,12 @@ test('check exits 2 when Exhibit fails, and leaves no old verdict behind', (t) =
 
 test('check exits 2 on a bad policy', (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+  fixture.setBasePolicy('kinds:\n  x:\n    risk: extreme\n');
   const run = exhibitCheck(fixture, ['--base', 'start']);
   assert.equal(run.status, 2);
-  assert.match(run.stderr, /evidence\.yml/);
+  assert.match(run.stderr, /evidence\.yml kinds\.x/);
+  // The message says where the policy came from, so a person fixes the right copy.
+  assert.match(run.stderr, /Exhibit reads evidence\.yml from the base commit [0-9a-f]{7}, not from the files on disk/);
 });
 
 test('a collector that throws gives verdict error and exit 2 from the command', async (t) => {
@@ -235,7 +342,7 @@ test('check --pr reads the base, the head, the title and the labels from the for
 
 test('check --pr passes the body and the repo to the revert signal', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [revert]\n'));
+  fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [revert]\n'));
   const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
   const signalFor = async (body) => {
     const fetch = async () => {
@@ -308,9 +415,8 @@ test('--shadow gives exit 0 for a bad argument too, and summary.md says why', (t
 test('--policy reads the policy from another path, and a change to that file is a policy change', (t) => {
   const fixture = buildRepo(t);
   // The notes kind lives only in the other file. With evidence.yml, notes match the default.
-  mkdirSync(join(fixture.repo, 'ci'));
-  writeFileSync(join(fixture.repo, 'ci', 'policy.yml'), POLICY);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\n');
+  fixture.setBasePolicy(POLICY, 'ci/policy.yml');
+  fixture.setBasePolicy('version: 3\n');
   const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', './ci//policy.yml']);
   assert.equal(run.status, 0, run.stderr);
   const evidence = readEvidence(fixture.repo);
@@ -321,7 +427,7 @@ test('--policy reads the policy from another path, and a change to that file is 
   assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'policy', '--policy', 'ci/policy.yml']).status, 1);
   assert.equal(readEvidence(fixture.repo).classification.policy_changed, false);
   // A bad policy names the file it came from.
-  writeFileSync(join(fixture.repo, 'ci', 'policy.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+  fixture.setBasePolicy('kinds:\n  x:\n    risk: extreme\n', 'ci/policy.yml');
   assert.match(exhibitCheck(fixture, ['--base', 'start', '--policy', 'ci/policy.yml']).stderr, /ci\/policy\.yml kinds\.x/);
 });
 
@@ -334,11 +440,11 @@ test('--policy must be a file in the repo', (t) => {
   }
 });
 
-// A policy in the working tree whose notes kind needs the given probes. The notes branch has
+// A policy in the base commit whose notes kind needs the given probes. The notes branch has
 // notes/one.md, and start does not, so a probe that reads it shows it ran in the head worktree.
 function withProbes(fixture, probes, settings = '') {
   const needs = probes.map((probe) => `      - probe: ${JSON.stringify(probe)}`).join('\n');
-  writeFileSync(join(fixture.repo, 'evidence.yml'), `version: 3\n${settings}kinds:\n  notes:\n    match: ["notes/**"]\n    risk: low\n    needs:\n${needs}\n`);
+  fixture.setBasePolicy(`version: 3\n${settings}kinds:\n  notes:\n    match: ["notes/**"]\n    risk: low\n    needs:\n${needs}\n`);
 }
 
 const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map((name) => join(dir, name)) : []);

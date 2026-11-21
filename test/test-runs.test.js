@@ -79,7 +79,15 @@ function buildRepo(t) {
   git('checkout', '-q', '-b', 'flaky', 'start');
   commit({ 'test/flaky.test.js': FLAKY_TEST }, 'flaky');
   git('checkout', '-q', 'main');
-  return { repo, home, git };
+  // Commits `text` as the policy on top of start, and moves the tag start there, because exhibit
+  // check reads the policy from the base commit (spec 8.1). The branches keep their changed files.
+  const setBasePolicy = (text) => {
+    git('checkout', '-q', '--detach', 'start');
+    commit({ 'evidence.yml': text }, 'base policy');
+    git('tag', '-f', 'start');
+    git('checkout', '-q', 'main');
+  };
+  return { repo, home, git, setBasePolicy };
 }
 
 async function runCheck(repo, head) {
@@ -133,7 +141,7 @@ test('a test that fails once and then passes is flaky, and does not fail the req
 
 test('a test command that writes no JUnit file gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, '.exhibit/elsewhere.xml'));
+  fixture.setBasePolicy(policy(NODE_TESTS, '.exhibit/elsewhere.xml'));
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
   assert.match(gap.how_to_fix, /wrote no JUnit file at \.exhibit\/elsewhere\.xml/);
@@ -144,7 +152,7 @@ test('a test command that writes no JUnit file gives error, and verdict error', 
 
 test('a test command that is not found gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), policy('exhibit-no-such-test-command --run'));
+  fixture.setBasePolicy(policy('exhibit-no-such-test-command --run'));
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
   assert.match(gap.how_to_fix, /could not run on the base: the shell could not find it \(exit code 127\)/);
@@ -155,7 +163,7 @@ test('a test command that is not found gives error, and verdict error', async (t
 
 test('a policy with no test command gives missing, so a person must check the tests', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\ndefault:\n  risk: low\n  needs: [tests-before-after]\n');
+  fixture.setBasePolicy('version: 3\ndefault:\n  risk: low\n  needs: [tests-before-after]\n');
   const { evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'missing');
   assert.match(gap.how_to_fix, /settings\.test_command/);
@@ -168,7 +176,7 @@ test('a results path outside the worktree gives error, and Exhibit touches no fi
   const outside = join(dirname(fixture.repo), 'keep.xml');
   writeFileSync(outside, 'keep');
   for (const results of ['../keep.xml', outside, './', 'a/..//']) {
-    writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, results));
+    fixture.setBasePolicy(policy(NODE_TESTS, results));
     const { code, requirement, gap } = await runCheck(fixture.repo, 'good');
     assert.equal(requirement.status, 'error');
     assert.match(gap.how_to_fix, /not a file inside the repo/);

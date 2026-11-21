@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
 import { MUTATION_DIR } from '../mutation.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
-import { DEFAULT_POLICY, policyPath, readPolicy } from '../policy.js';
+import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe } from '../probe.js';
 import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
@@ -27,7 +27,8 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, body,
 // labels and branch for the fix signals. Without it, only the local branch name is known.
 //
-// --policy FILE reads the policy from that path in the repo, in place of evidence.yml.
+// The policy comes from the base commit, not from the files on disk (spec 8.1). --policy FILE
+// reads it from that path in the repo, in place of evidence.yml.
 //
 // It removes the old evidence.json, summary.md, probe files and mutation logs first. So when the run fails before
 // it can write them, no old file is left to be read as this run's verdict. Any failure that is not
@@ -62,9 +63,6 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   const forgeModule = GITHUB_FORGE;
   const options = parseOptions(argv, forgeModule);
 
-  const policy = await readPolicy(cwd, options.policy);
-  const policyFile = { path: options.policy, sha256: await fileHash(join(cwd, options.policy)) };
-
   let refs;
   if (options.pr !== null) {
     const token = env[forgeModule.tokenEnv];
@@ -84,6 +82,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 
   const base = await commitSha(cwd, refs.base, refs.hint);
   const head = await commitSha(cwd, refs.head, refs.hint);
+  const { policy, policyFile } = await policyAtBase(cwd, base, options.policy);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
   // The new files, for the feature rule (spec 9.1). Here git looks for renames, so a file that
   // only moves is not a new file.
@@ -179,12 +178,56 @@ async function git(cwd, args) {
   }
 }
 
-async function fileHash(path) {
+// The policy as the base commit has it, not as the files on disk have it, so a change cannot
+// change the rules that check it (spec 8.1 and 15). A change to the policy file is still a
+// policy-change gap. It returns the policy, as parsePolicy gives it, and policyFile: the path and
+// the SHA-256 of the file's bytes in the base commit, or null when the base has no such file.
+async function policyAtBase(cwd, base, path) {
+  const short = base.slice(0, 7);
+  let bytes = null;
+  const entry = await treeEntry(cwd, base, path);
+  if (entry !== null) {
+    if (entry.type !== 'blob') throw new ToolError(`${path} in the base commit ${short} is a ${entry.type === 'tree' ? 'folder' : entry.type}, not a file. Give --policy the path of the policy file.`);
+    // A link is refused, not followed. A change to the file it points to would not show as a
+    // change to the policy file, so the policy-change gap would miss it (spec 8.1).
+    if (entry.mode === '120000') throw new ToolError(`${path} in the base commit ${short} is a symlink. Exhibit does not follow it. Give --policy the path of the real file.`);
+    bytes = await gitBytes(cwd, ['cat-file', 'blob', entry.blob]);
+  } else {
+    // git finds no file at a path that goes through a linked folder. Say that the link is the
+    // cause, so the run does not go on as if the base had no policy.
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i += 1) {
+      const folder = parts.slice(0, i).join('/');
+      const parent = await treeEntry(cwd, base, folder);
+      if (parent === null) break;
+      if (parent.mode === '120000') throw new ToolError(`${folder} in the base commit ${short} is a symlink, so ${path} goes through it. Exhibit does not follow it. Give --policy the path of the real file.`);
+    }
+  }
   try {
-    return createHash('sha256').update(await readFile(path)).digest('hex');
+    const policy = parsePolicy(bytes === null ? null : bytes.toString('utf8'), path);
+    return { policy, policyFile: { path, sha256: bytes === null ? null : createHash('sha256').update(bytes).digest('hex') } };
   } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    throw new ToolError(`could not read ${path}: ${error.message}`);
+    if (!(error instanceof ToolError)) throw error;
+    throw new ToolError(`${error.message}\nExhibit reads ${path} from the base commit ${short}, not from the files on disk. Fix the policy on the base branch.`);
+  }
+}
+
+// The entry at `path` in `commit`: its mode, type and blob, or null when there is none. ls-tree
+// reads the path as it is, with no globs, and --full-tree reads it from the top of the repo.
+async function treeEntry(cwd, commit, path) {
+  const line = (await git(cwd, ['ls-tree', '-z', '--full-tree', commit, '--', path])).split('\0').find((item) => item.endsWith(`\t${path}`));
+  if (line === undefined) return null;
+  const [mode, type, blob] = line.slice(0, line.indexOf('\t')).split(' ');
+  return { mode, type, blob };
+}
+
+async function gitBytes(cwd, args) {
+  try {
+    const { stdout } = await run('git', args, { cwd, encoding: 'buffer', maxBuffer: 256 * 1024 * 1024 });
+    return stdout;
+  } catch (error) {
+    const reason = String(error.stderr ?? '').trim().split('\n')[0] || error.message;
+    throw new ToolError(`git ${args[0]} failed: ${reason}`);
   }
 }
 

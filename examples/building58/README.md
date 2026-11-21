@@ -11,7 +11,7 @@ Open one PR in Building58 that adds two files:
 1. [exhibit.yml](exhibit.yml) as `.github/workflows/exhibit.yml`. It runs Exhibit on every PR in two jobs.
 2. [evidence.yml](evidence.yml) as `evidence.yml` at the top of the repo. It is the first policy.
 
-Change nothing else in the PR. A PR that changes `evidence.yml` always gets `needs_person`, so this first PR gets it too. That is expected.
+Change nothing else in the PR. A PR that changes `evidence.yml` always gets `needs_person`, so this first PR gets it too. That is expected. Exhibit reads the policy from the PR's base commit, which has no `evidence.yml` yet, so this PR's run uses no policy, and its summary says that no rule covers the change. The new policy checks the PRs that come after it merges (Exhibit's docs/spec.md section 8.1).
 
 ## The workflow
 
