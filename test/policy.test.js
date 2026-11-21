@@ -202,6 +202,9 @@ test('readPolicy now checks the rest of the file too, not only fix_signals', asy
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\n  mutation_budget_seconds: soon\n', /^evidence\.yml settings\.mutation_budget_seconds must be integer, not string\.$/);
   // setTimeout cannot wait longer than about 24.8 days, so the limit is one day.
   await refuses(t, 'settings:\n  probe_timeout_seconds: 86401\n', /^evidence\.yml settings\.probe_timeout_seconds must be at most 86400\.$/);
+  await refuses(t, 'settings:\n  test_timeout_seconds: 86401\n', /^evidence\.yml settings\.test_timeout_seconds must be at most 86400\.$/);
+  await refuses(t, 'settings:\n  test_timeout_seconds: 0\n', /^evidence\.yml settings\.test_timeout_seconds must be at least 1\.$/);
+  await refuses(t, 'settings:\n  test_timeout_seconds: 1.5\n', /^evidence\.yml settings\.test_timeout_seconds must be integer, not number\.$/);
   await refuses(t, 'settings:\n  fix_signals: [branch:bugfix/]\nkinds: 7\n', /^evidence\.yml kinds must be object or null, not integer\.$/);
 });
 
