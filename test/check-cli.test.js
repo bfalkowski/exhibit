@@ -359,6 +359,19 @@ test('check --pr passes the body and the repo to the revert signal', async (t) =
   assert.deepEqual(await signalFor('Reverts lodash/lodash#5000'), [false, null]);
 });
 
+test('check --pr N marks the PR as a fix when fix_signals has pr:N', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [pr:7]\n'));
+  const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
+  const fetch = async () => {
+    const pull = { number: 7, title: 'Change the app', labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+    return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await check(['--pr', '7', '--repo', 'owner/name'], { env: { GITHUB_TOKEN: 'test-token' }, cwd: fixture.repo, fetch, stdout: { write() {} } });
+  const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
+  assert.deepEqual([fix, fixSignal], [true, 'pr:7']);
+});
+
 test('a bad argument removes the old evidence.json too, and summary.md says error and why', (t) => {
   const fixture = buildRepo(t);
   mkdirSync(join(fixture.repo, '.exhibit'));
