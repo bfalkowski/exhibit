@@ -321,7 +321,9 @@ function createKeyboard({ input, output }) {
       if (choice === 's') return SKIP;
       if (choice === 'r') rejectedNow.push(link.pr);
     }
-    output.write(`Saved the new links of ${defect.id}.\n`);
+    // labelDefects writes the line after this returns, and the write can still fail, so this does
+    // not say "saved". The end of the run counts the defects it wrote.
+    output.write(`Got the answers for ${defect.id}.\n`);
     return { rejected_prs: rejectedNow };
   }
 

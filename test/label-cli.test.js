@@ -373,7 +373,7 @@ test('a labeled defect with a new SZZ link asks only about that link, and the an
   assert.match(run.stdout, /Its label keeps PR 1\. SZZ now links it to PR 11 too\./);
   assert.match(run.stdout, /Link to PR 11, confidence 50%: k to keep it, or r to reject it/);
   assert.match(run.stdout, /Please type k, r or s\./);
-  assert.match(run.stdout, /Saved the new links of D-012\./);
+  assert.match(run.stdout, /Got the answers for D-012\./);
   assert.match(run.stdout, /Answered the new links of 1 labeled defect\. Every labeled defect has an answer for each SZZ link now\./);
   assert.deepEqual(readLabels(cwd), [{ ...before[0], rejected_prs: [11], szz_link_rejected: true }, before[1], before[2]]);
 

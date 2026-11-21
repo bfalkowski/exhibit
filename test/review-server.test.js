@@ -170,3 +170,31 @@ test('--review with every defect labeled starts no page, and --no-open needs --r
   assert.match(out, /3 labeled defects have new SZZ links that nobody kept or rejected yet\. Run exhibit label without --review to answer them\./);
   await assert.rejects(label(['--no-open'], { cwd, env: {}, stdout: { write() {} } }), /--no-open works only with --review/);
 });
+
+test('when a labeled line changes while its new link is asked, the terminal never says it was saved', async (t) => {
+  const { PassThrough } = await import('node:stream');
+  const cwd = folderWithHistory(t);
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: 'Code 12', category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-01T10:00:00.000Z' };
+  const others = ['D-007', 'D-006'].map((id) => ({ ...line, id, fix_pr: Number(id.slice(2)), introducing_prs: id === 'D-007' ? [2, 3] : [1], code: 'x' }));
+  const path = join(cwd, '.exhibit', 'labels.jsonl');
+  writeFileSync(path, [line, ...others].map((l) => JSON.stringify(l) + '\n').join(''));
+  const stdin = new PassThrough();
+  let out = '';
+  let edited = null;
+  const stdout = {
+    write: (text) => {
+      out += text;
+      // Someone edits the line by hand while the question about PR 11 is on screen.
+      if (edited === null && out.includes('Link to PR 11')) {
+        writeFileSync(path, [{ ...line, code: 'Edited by hand' }, ...others].map((l) => JSON.stringify(l) + '\n').join(''));
+        edited = readFileSync(path, 'utf8');
+        stdin.end('k\n');
+      }
+    }
+  };
+
+  await assert.rejects(label([], { cwd, env: {}, stdin, stdout, stderr: stdout }), /the line for D-012 .* changed during this run/);
+  assert.doesNotMatch(out, /Saved/);
+  assert.match(out, /Got the answers for D-012\./);
+  assert.equal(readFileSync(path, 'utf8'), edited);
+});
