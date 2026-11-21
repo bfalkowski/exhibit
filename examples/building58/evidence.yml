@@ -1,7 +1,9 @@
 # A first policy for Building58 (Exhibit's docs/spec.md section 8.1). Copy it to evidence.yml at
-# the top of Building58. It is a start: phase A of the field test (spec 12) finds the escaped
-# defects, and the kinds and their needs come from them later. A change to this file always needs
-# a person (spec 9.8).
+# the top of Building58. A change to this file always needs a person (spec 9.8).
+# The kinds code and docs are the starter policy. The kinds relay-tests, test-helpers and needs-you
+# come from Building58's own escaped defects, which the person labeled in phase A of the field test
+# (docs/field/phase-a-labels.md). Each one has a rule only because at least two labeled defects
+# call for it, and its match is the files where those defects' lines came from. source names them.
 version: 3
 
 settings:
@@ -19,6 +21,9 @@ settings:
   test_results: .exhibit/junit.xml
   # Titles start with a ticket key, such as "T-401: ...", so title_after_key skips it (spec 9.1).
   fix_signals: [label:bug, title_after_key:fix, branch:fix/]
+  # The load probe of relay-tests runs the changed test files three times at once, so it gets 20
+  # minutes, not the default 10.
+  probe_timeout_seconds: 1200
 
 kinds:
   # The code that runs: the relay, the office page, and what they share, with the packages, the
@@ -37,6 +42,58 @@ kinds:
     risk: low
     needs:
       - probe: { name: manual, run: "npm ci --ignore-scripts --no-audit --no-fund && node relay/test/run.js relay/test/manual.test.js" }
+
+  # Flaky tests: 6 labeled defects (category "flaky test"). Each was a test that raced a timer or a
+  # kept-alive connection, and passed alone but failed on a busy machine. The probe runs each test
+  # file the PR added or changed three times at once, with no shared test slots, so the machine is
+  # busy. It runs nothing when no such file changed. origin/main must be in the clone, as it is
+  # with the workflow's fetch-depth 0.
+  relay-tests:
+    match: ["relay/test/*.test.js"]
+    risk: medium
+    needs:
+      - probe:
+          name: load
+          run: >-
+            base="$(git merge-base HEAD origin/main)" &&
+            files="$(git diff --name-only --diff-filter=AM "$base" HEAD | grep -E '^relay/test/[^/]+[.]test[.]js$' || true)" &&
+            if [ -z "$files" ]; then echo "No relay test file was added or changed."; exit 0; fi &&
+            npm ci --ignore-scripts --no-audit --no-fund > /dev/null &&
+            pids="" &&
+            for i in 1 2 3; do TEST_SLOTS=0 node relay/test/run.js $files > "load-$i.log" 2>&1 & pids="$pids $!"; done;
+            code=0; for p in $pids; do wait "$p" || code=1; done;
+            tail -n 20 load-1.log load-2.log load-3.log; exit $code
+    source: [D-144, D-139, D-136, D-131, D-088, D-066]
+
+  # Room settings that leak into test relays: 2 labeled defects (category "Test environment
+  # leak"). In both, relay/test/helpers.js gave each test relay the shell's settings, so a test
+  # passed on CI and failed in an office session. The probe runs the tests that start relays with
+  # a room's settings set. relay/test/run.js takes them away, so the probe uses node --test.
+  test-helpers:
+    match: ["relay/test/helpers.js"]
+    risk: medium
+    needs:
+      - probe:
+          name: room-settings
+          run: >-
+            npm ci --ignore-scripts --no-audit --no-fund > /dev/null &&
+            HOME="$(mktemp -d)" RELAY_ROLLBACK=1 RELAY_WORLD=office OFFICE_HOOK_URL=http://127.0.0.1:9/hook
+            OFFICE_TICKET_TOKEN=probe OFFICE_ROOM_PROBE=1 CLAUDE_CODE_ROOM_PROBE=1
+            node --test --test-timeout=120000 relay/test/room-env.test.js relay/test/rollback.test.js
+            relay/test/restart.test.js relay/test/review-link.test.js
+    source: [D-135, D-092]
+
+  # Needs you: 2 labeled defects (category "Stale state"), both from PR 48, which made the Needs
+  # you list. Each showed an old hand-over after the state had moved on. A test that fails before
+  # the change would have shown each case. PRs here are seldom labeled fix or feature, so the
+  # requirement has no when.
+  needs-you:
+    match: ["relay/needs-you-plan.js", "relay/needs-you.js", "office/needs-you.js"]
+    risk: medium
+    needs:
+      - tests-before-after
+      - failing-before
+    source: [D-120, D-053]
 
 # Any other file.
 default:

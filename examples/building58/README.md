@@ -39,12 +39,17 @@ Building58's branch protection covers `main` only, so the publish job can push `
 
 ## The first policy
 
-[evidence.yml](evidence.yml) has two kinds of change:
+[evidence.yml](evidence.yml) has five kinds of change. A PR can match more than one, and then it needs what each of them needs.
 
 | Kind | Files | Risk | Needs |
 |---|---|---|---|
 | `code` | `relay/`, `office/`, `shared/`, `index.html`, the packages, the git hooks, CI and the lint config | medium | The tests on the base and the head. For a fix, a test that fails before the change. |
 | `docs` | `docs/` and every Markdown file | low | The manual's checks, the same ones CI runs for a docs-only change. |
+| `relay-tests` | `relay/test/*.test.js` | medium | The `load` probe: each test file the PR added or changed runs three times at once. |
+| `test-helpers` | `relay/test/helpers.js` | medium | The `room-settings` probe: the tests that start relays run with a room's settings set. |
+| `needs-you` | `relay/needs-you-plan.js`, `relay/needs-you.js`, `office/needs-you.js` | medium | The tests on the base and the head, and a test that fails before the change, for every PR. |
+
+The last three come from Building58's own escaped defects. The person labeled them in phase A of the field test, and [docs/field/phase-a-labels.md](../../docs/field/phase-a-labels.md) gives each rule with the defects behind it. Each rule names those defects in `source`.
 
 Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`.
 
@@ -56,7 +61,9 @@ The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run
 
 A real run of this test command on Building58's `main` (145143a) passed: 1338 test cases, none failed, 3 skipped, in 7.5 minutes on a Mac. The same files, one at a time with one shared HOME, took 39 minutes there, and more than 72 minutes for two runs on a GitHub runner, so this policy does not do that. A room ticket can make it simpler later: if `run.js` writes JUnit, the command can be `node relay/test/run.js` again.
 
-This policy is a start. Phase A of the field test finds Building58's escaped defects, and the kinds and their needs come from them later.
+The `load` probe finds the changed test files with `git merge-base HEAD origin/main`, so `origin/main` must be in the clone. The workflow's `fetch-depth: 0` gives it. It runs three copies of `relay/test/run.js` at once with `TEST_SLOTS=0`, so the copies do not wait on each other's slots, and the machine is busy. So the policy sets `probe_timeout_seconds` to 1200. The `room-settings` probe runs `node --test` and not `run.js`, because `run.js` takes the room's settings away.
+
+The new rules are in shadow mode like the rest. The backtest (Exhibit's slice S8) and the first weeks of phase B show how often each one asks for evidence that a PR did not need.
 
 ## After it merges
 
