@@ -73,11 +73,14 @@ export async function failingBefore(requirement, context) {
   if (nothingLoaded) overlay = nothingLoaded.tests;
   const flaky = new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky'), ...namesWith(overlay, 'flaky')]);
   const fileOf = (name) => testFiles.find((file) => name.startsWith(`${file} > `));
-  const didNotLoad = nothingLoaded
-    ? testFiles.filter((file) => ![...overlay.keys()].some((name) => fileOf(name) === file))
-    : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
-  // With nothing loaded, a test with no file counts as not loaded only when no PR test ran.
+  // With nothing loaded, a test with no file counts as not loaded only when no PR test ran. When
+  // a PR test with no file in its name ran, Exhibit cannot tell which files did not load, so it
+  // names none.
   const prTestRan = nothingLoaded !== null && [...overlay.keys()].some((name) => fileOf(name) !== undefined || !runs.base.has(name));
+  const filelessPrTestRan = nothingLoaded !== null && [...overlay.keys()].some((name) => fileOf(name) === undefined && !runs.base.has(name));
+  const didNotLoad = nothingLoaded
+    ? (filelessPrTestRan ? [] : testFiles.filter((file) => ![...overlay.keys()].some((name) => fileOf(name) === file)))
+    : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
 
   const tests = [];
   const passedOnBase = [];

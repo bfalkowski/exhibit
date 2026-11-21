@@ -267,10 +267,12 @@ test('with no file in the names, a PR test that has no result counts as not load
   assert.equal(someRan.status, 'missing');
   assert.deepEqual(someRan.details.tests, []);
   assert.deepEqual(someRan.details.passed_on_base, ['test > ran']);
+  assert.deepEqual(someRan.details.did_not_load_on_base, []);
 
   const onlyOld = (await build(new NothingLoaded('stopped', new Map([['test > old', 'passed']])))).requirements[0];
   assert.equal(onlyOld.status, 'met');
   assert.deepEqual(onlyOld.details.tests.map((item) => item.name), ['test > absent', 'test > ran']);
+  assert.deepEqual(onlyOld.details.did_not_load_on_base, ['a.test.js', 'b.test.js']);
 });
 
 test('a test command that stops the run on the base with the PR\'s tests only once is flaky there, so a person must check', async (t) => {
