@@ -102,6 +102,18 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
+test('the schema takes an exhibit with no feature_signal, as one stored before the field, and refuses a signal of another form', (t) => {
+  const fixture = buildRepo(t);
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  const evidence = readEvidence(fixture.repo);
+  assert.equal(evidence.classification.feature_signal, null);
+  const old = { ...evidence.classification };
+  delete old.feature_signal;
+  assert.deepEqual(checkExhibit({ ...evidence, classification: old }), []);
+  assert.deepEqual(checkExhibit({ ...evidence, classification: { ...old, feature_signal: 'added:src/a.js' } }), []);
+  assert.notDeepEqual(checkExhibit({ ...evidence, classification: { ...old, feature_signal: 'label:bug' } }), []);
+});
+
 test('a PR that adds a file under a source path is a feature, and one that only changes a file is not', (t) => {
   const fixture = buildRepo(t);
   fixture.setBasePolicy('version: 3\nsettings:\n  source_paths: ["src/**"]\ndefault:\n  risk: medium\n  needs:\n    - failing-before: { when: [feature] }\n');
@@ -135,6 +147,8 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   exhibitCheck(fixture, ['--base', 'start', '--head', 'new-src']);
   const added = readEvidence(fixture.repo);
   assert.equal(added.classification.feature, true);
+  assert.equal(added.classification.feature_signal, 'added:src/b.js');
+  assert.match(readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8'), /^- Fix: no\. Feature: yes, from the signal added:src\/b\.js\.$/m);
   // failing-before { when: [feature] } is needed, so it has no reason to skip.
   assert.equal(added.requirements[0].details.reason, undefined);
   assert.deepEqual(checkExhibit(added), []);
@@ -143,6 +157,7 @@ test('a PR that adds a file under a source path is a feature, and one that only 
   exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
   const changed = readEvidence(fixture.repo);
   assert.equal(changed.classification.feature, false);
+  assert.equal(changed.classification.feature_signal, null);
   assert.match(changed.requirements[0].details.reason, /only on a feature/);
 
   // A file that moves inside src is not a new file.

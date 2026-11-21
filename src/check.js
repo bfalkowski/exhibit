@@ -211,7 +211,7 @@ export function renderSummary(exhibit, { shadow = false, notes = [] } = {}) {
   else if (exhibit.gaps.some((gap) => gap.type === 'no-rule')) lines.push('- No kind of change matched the changed files, and the policy has no default, so no rule covers this change.');
   else lines.push('- No kind of change matched the changed files, so the default rules apply.');
   lines.push(`- Risk: ${c.risk}.`);
-  lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
+  lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? `yes, from the signal ${c.feature_signal}` : 'no'}.`);
   for (const note of notes) lines.push(`- ${note.charAt(0).toUpperCase()}${note.slice(1)}`);
   if (c.signals_from === 'branch') {
     lines.push('- Exhibit knew only the branch name, not the PR\'s title, body or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');

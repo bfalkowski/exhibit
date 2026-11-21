@@ -12,8 +12,9 @@ const RISKS = ['low', 'medium', 'high'];
 // - classification.risk: the highest risk among them, or default's risk when none matches.
 // - classification.fix, fix_signal: from the fix signals, or from `fixed` when the caller has
 //   classified the PR already, as classifyWithTracker does with the tracker (spec 9.1).
-//   classification.feature: a `feature`
-//   label, or an added path that matches a glob in settings.source_paths (spec 9.1).
+// - classification.feature: a `feature` label, or an added path that matches a glob in
+//   settings.source_paths (spec 9.1). feature_signal says which: label:feature, or added: and the
+//   first such path, as in added:src/cache.js, or null when the change is no feature.
 // - classification.merge_without_reading: `allowed` only when every matched kind says `allowed`.
 // - classification.used_default: no kind matched, so default's rules apply. has_default says
 //   whether the policy has a default at all. Without one, the risk is high and nothing is needed,
@@ -27,7 +28,8 @@ const RISKS = ['low', 'medium', 'high'];
 export function classifyChange(policy, files, pr, policyPath = 'evidence.yml', added = [], fixed = classifyFix(pr, policy.settings.fix_signals)) {
   const { fix, fix_signal: fixSignal } = fixed;
   const sourcePaths = policy.settings.source_paths ?? [];
-  const feature = pr.labels.some((label) => label.toLowerCase() === 'feature') || added.some((path) => sourcePaths.some((glob) => matchesGlob(path, glob)));
+  const featureSignal = featureSignalOf(pr.labels, added, sourcePaths);
+  const feature = featureSignal !== null;
 
   const matched = matchKinds(policy.kinds, files);
   const usedDefault = matched.length === 0;
@@ -62,6 +64,7 @@ export function classifyChange(policy, files, pr, policyPath = 'evidence.yml', a
       fix,
       fix_signal: fixSignal,
       feature,
+      feature_signal: featureSignal,
       merge_without_reading: allowed ? 'allowed' : 'never',
       used_default: usedDefault,
       has_default: policy.default !== undefined,
@@ -87,6 +90,14 @@ function toRequirement(need) {
   const author = params.author === 'hidden' ? 'hidden' : 'builder';
   delete params.author;
   return { type, params, author };
+}
+
+// Why a change is a feature (spec 9.1): label:feature when a label is named feature, in any case.
+// Else added: and the first path in path order that a glob in `sourcePaths` matches. Else null.
+function featureSignalOf(labels, added, sourcePaths) {
+  if (labels.some((label) => label.toLowerCase() === 'feature')) return 'label:feature';
+  const path = [...added].sort().find((file) => sourcePaths.some((glob) => matchesGlob(file, glob)));
+  return path === undefined ? null : `added:${path}`;
 }
 
 // failing-before with `when` is needed only for a change of a kind it names (spec 8.1). For any

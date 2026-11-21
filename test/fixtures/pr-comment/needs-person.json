@@ -14,6 +14,7 @@
     "fix": true,
     "fix_signal": "label:bug",
     "feature": false,
+    "feature_signal": null,
     "signals_from": "pr",
     "merge_without_reading": "never",
     "used_default": true,

@@ -6,7 +6,7 @@
   "base": "1111111111111111111111111111111111111111",
   "head": "2222222abcdef222222222222222222222222222",
   "classification": {
-    "kinds": ["api", "docs"], "risk": "medium", "fix": false, "fix_signal": null, "feature": false,
+    "kinds": ["api", "docs"], "risk": "medium", "fix": false, "fix_signal": null, "feature": false, "feature_signal": null,
     "signals_from": "pr", "merge_without_reading": "never", "used_default": false, "policy_changed": false
   },
   "requirements": [

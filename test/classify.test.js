@@ -92,6 +92,9 @@ test('failing-before with when is needed only for a change of that kind, fix or 
 
   const feature = classifyChange(POLICY, ['relay/supervisor.js'], { title: 'Add restart', labels: ['Feature'], branch: 'x' });
   assert.equal(feature.classification.feature, true);
+  // The label rule matches in any case, and the signal names the rule.
+  assert.equal(feature.classification.feature_signal, 'label:feature');
+  assert.equal(fix.classification.feature_signal, null);
   assert.deepEqual(types(feature), ['tests-before-after', 'failing-before', 'mutation']);
   assert.equal(fix.requirements[1].not_needed, undefined);
   assert.equal(feature.requirements[1].not_needed, undefined);
@@ -101,6 +104,7 @@ test('a change that adds a file under a source path is a feature, with no label'
   const policy = { ...POLICY, settings: { ...POLICY.settings, source_paths: ['relay/**', 'lib/*.js'] } };
   const added = classifyChange(policy, ['relay/new.js', 'relay/supervisor.js'], NOT_FIX, 'evidence.yml', ['relay/new.js']);
   assert.equal(added.classification.feature, true);
+  assert.equal(added.classification.feature_signal, 'added:relay/new.js');
   assert.equal(added.requirements.find((item) => item.type === 'failing-before').not_needed, undefined);
   // A file that only changes is no feature, and neither is a new file outside the source paths.
   assert.equal(classifyChange(policy, ['relay/supervisor.js'], NOT_FIX, 'evidence.yml', []).classification.feature, false);
@@ -110,6 +114,12 @@ test('a change that adds a file under a source path is a feature, with no label'
   assert.equal(classifyChange(policy, ['lib/x.js'], NOT_FIX, 'evidence.yml', ['lib/x.js']).classification.feature, true);
   // With no source_paths, a new file is never a feature.
   assert.equal(classifyChange(POLICY, ['relay/new.js'], NOT_FIX, 'evidence.yml', ['relay/new.js']).classification.feature, false);
+  // The signal names the first added path, in path order, that a source glob matches.
+  assert.equal(classifyChange(policy, [], NOT_FIX, 'evidence.yml', ['relay/z.js', 'docs/a.md', 'lib/b.js']).classification.feature_signal, 'added:lib/b.js');
+  // The label comes first: with both, the signal is the label.
+  assert.equal(classifyChange(policy, [], { ...NOT_FIX, labels: ['feature'] }, 'evidence.yml', ['relay/new.js']).classification.feature_signal, 'label:feature');
+  // No feature, no signal.
+  assert.equal(classifyChange(policy, ['relay/supervisor.js'], NOT_FIX, 'evidence.yml', []).classification.feature_signal, null);
   // Without the list of added files, as before, only the label counts.
   assert.equal(classifyChange(policy, ['relay/new.js'], NOT_FIX).classification.feature, false);
 });
