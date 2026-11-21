@@ -87,7 +87,7 @@ test('Finish on the page ends the server\'s run with the summary', async (t) => 
   await post(`${server.url}api/answer`, { id: 'D-012', ...ANSWER });
   const reply = await post(`${server.url}api/finish`, {});
   assert.equal(reply.status, 200);
-  assert.deepEqual((await reply.json()).run, { shown: 3, labeled: 1, skipped: 0, open: 2 });
+  assert.deepEqual((await reply.json()).run, { shown: 1, labeled: 1, skipped: 0, open: 2 });
   await server.finished;
 });
 
@@ -110,6 +110,8 @@ test('exhibit label --review opens the page, writes what the page sends, and pri
     child.on('exit', () => reject(new Error(`exhibit exited before it printed the address: ${stderr}`)));
   });
   assert.match(stderr, /^3 escaped defects have no code yet\. Label them on the review page:/);
+  // The page says when it shows a defect: here D-012, D-007 and D-006, but D-006 gets no answer.
+  for (const id of ['D-012', 'D-007', 'D-006']) assert.equal((await post(`${url}api/seen`, { id })).status, 200);
   assert.equal((await post(`${url}api/answer`, { id: 'D-012', ...ANSWER })).status, 200);
   assert.equal((await post(`${url}api/answer`, { id: 'D-007', action: 'skip' })).status, 200);
   await post(`${url}api/finish`, {});
@@ -126,13 +128,18 @@ test('Ctrl+C stops the page and prints the summary; the browser opener gets the 
   const signals = new EventEmitter();
   const opened = [];
   let out = '';
+  let err = '';
   const stdout = { write: (text) => { out += text; } };
-  const run = label(['--review'], { cwd, env: {}, stdout, stderr: stdout, signals, openBrowser: (url) => opened.push(url) });
+  const stderr = { write: (text) => { err += text; } };
+  const run = label(['--review', '--json'], { cwd, env: {}, stdout, stderr, signals, openBrowser: (url) => opened.push(url) });
   while (opened.length === 0) await new Promise((resolve) => setImmediate(resolve));
+  await post(`${opened[0]}api/seen`, { id: 'D-012' });
   await post(`${opened[0]}api/answer`, { id: 'D-012', ...ANSWER });
   signals.emit('SIGINT');
   await run;
-  assert.match(out, /Labeled 1 escaped defect\. Skipped 0\. 2 still have no code\./);
+  // One defect was shown and labeled, as the terminal flow would count a quit after one label.
+  assert.deepEqual(JSON.parse(out), { shown: 1, labeled: 1, skipped: 0, open: 2, output: '.exhibit/labels.jsonl' });
+  assert.match(err, /review page/);
   // The server is closed.
   await assert.rejects(fetch(`${opened[0]}api/state`));
 });

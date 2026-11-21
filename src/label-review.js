@@ -20,7 +20,7 @@ const WHAT_LENGTH = 300;
  * each defect in the background, in order: Claude's draft when `draft` is given, and the proposal
  * for known_at_review. `draft`, `issues` and `now` are as in labelDefects.
  *
- * Returns { cwd, prepared, state, answer, summary, idle }:
+ * Returns { cwd, prepared, state, answer, seen, summary, idle }:
  * - `prepared` settles when every defect is prepared. It rejects only on a bug.
  * - `state()` is what the page shows: the items, the categories used so far, and the summary.
  * - `answer(id, body)` acts on one defect. `body.action` is `save`, `skip` (not a bug, or skip it)
@@ -28,6 +28,7 @@ const WHAT_LENGTH = 300;
  *   and draft: 'replaced' when the person threw Claude's draft away. A save adds a line to the
  *   labels file, or replaces the line this page wrote for that defect before. A skip or a later
  *   takes that line out again. It throws a ToolError for an answer it cannot write.
+ * - `seen(id)` records that the page showed defect `id`, for `shown` in the summary.
  * - `summary()` is { run, drafts, draftsText, categories } (see below).
  * - `idle()` resolves when every answer given so far is written.
  */
@@ -54,11 +55,24 @@ export async function createReviewSession({ cwd, draft, issues, now = () => new 
     return run;
   }
 
-  async function answer(id, body) {
+  function find(id) {
     const item = items.find((candidate) => candidate.defect.id === id);
     if (item === undefined) throw new ToolError(`there is no open defect ${id} on this page.`);
+    return item;
+  }
+
+  // The ids of the defects the page showed.
+  const shown = new Set();
+  function seen(id) {
+    shown.add(find(id).defect.id);
+  }
+
+  async function answer(id, body) {
+    const item = find(id);
     const action = body?.action;
     if (!['save', 'skip', 'later'].includes(action)) throw new ToolError(`unknown action ${JSON.stringify(action)}. Use save, skip or later.`);
+    // The person answers only a defect they see, so an answer counts it as shown too.
+    shown.add(id);
     return serial(async () => {
       if (action !== 'save') {
         if (item.line !== null) await removeLine(cwd, id, item.line);
@@ -77,13 +91,14 @@ export async function createReviewSession({ cwd, draft, issues, now = () => new 
     });
   }
 
-  // run: { shown, labeled, skipped, open }, as the terminal flow counts them: `skipped` counts the
-  // defects left as skipped or for later, and `open` the ones still with no line. With a drafter,
+  // run: { shown, labeled, skipped, open }, as the terminal flow counts them: `shown` counts the
+  // defects the page showed, `skipped` the defects left as skipped or for later, and `open` every
+  // defect on the page still with no line. With a drafter,
   // drafts: { run, file } and draftsText say how often the person kept Claude's draft (spec 9.11).
   // categories: categoryCounts of every line in the file.
   function summary() {
     const saved = items.filter((item) => item.saved !== null).map((item) => item.saved);
-    const run = { shown: items.length, labeled: saved.length, skipped: items.filter((item) => item.state === 'skipped' || item.state === 'later').length, open: items.length - saved.length };
+    const run = { shown: shown.size, labeled: saved.length, skipped: items.filter((item) => item.state === 'skipped' || item.state === 'later').length, open: items.length - saved.length };
     const all = [...labels, ...saved];
     const counts = { run, categories: categoryCounts(all) };
     if (draft === undefined) return counts;
@@ -113,7 +128,7 @@ export async function createReviewSession({ cwd, draft, issues, now = () => new 
     };
   }
 
-  return { cwd, prepared, state, answer, summary, idle: () => writes };
+  return { cwd, prepared, state, answer, seen, summary, idle: () => writes };
 }
 
 // The answer as the page sent it, made fit for a labels line: the texts trimmed, and a line break
@@ -154,22 +169,48 @@ function viewOf(defect, byNumber) {
 
 /**
  * One plain line about the bug, from the fix PR: the first sentence under a "Why" heading in its
- * body, or else the first sentence of its first paragraph, with the markdown marks taken out. With
- * no body it is the PR title. It has at most 300 characters.
+ * body, or else the first sentence of its first paragraph, with the markdown marks taken out. A
+ * heading line is never part of a paragraph, even with no blank line after it. With no text in the
+ * body it is the PR title. It has at most 300 characters.
  */
 export function whatWentWrong(fix) {
-  const paragraphs = (fix.body ?? '').split(/\r?\n\s*\r?\n/).map((paragraph) => paragraph.trim()).filter((paragraph) => paragraph !== '');
-  const why = paragraphs.findIndex((paragraph) => /^#+\s*why\b/i.test(paragraph));
-  const first = (why === -1 ? paragraphs : paragraphs.slice(why + 1)).find((paragraph) => !paragraph.startsWith('#'));
+  const blocks = bodyBlocks(fix.body ?? '');
+  const why = blocks.findIndex((block) => block.heading && /^#+\s*why\b/i.test(block.text));
+  // The Why part ends at the next heading, or at the end of the body.
+  const next = blocks.findIndex((block, i) => i > why && block.heading);
+  const whyPart = why === -1 ? [] : blocks.slice(why + 1, next === -1 ? blocks.length : next);
+  const first = whyPart.find((block) => !block.heading) ?? blocks.find((block) => !block.heading);
   if (first === undefined) return fix.title;
-  const plain = first
+  const plain = first.text
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/[`*_]/g, '')
-    .replace(/^\s*(?:[-*>]|\d+\.)\s+/gm, '')
     .replace(/\s+/g, ' ')
     .trim();
   const sentence = plain.split(/(?<=[.!?])\s+/)[0];
   return sentence.length > WHAT_LENGTH ? `${sentence.slice(0, WHAT_LENGTH - 1)}…` : sentence;
+}
+
+// The body as blocks in order: each heading line on its own ({ heading: true, text }), and each
+// run of other lines up to a blank line or a heading as one paragraph ({ heading: false, text }),
+// with the list and quote marks at the start of each line taken off.
+function bodyBlocks(body) {
+  const blocks = [];
+  let lines = [];
+  const flush = () => {
+    if (lines.length > 0) blocks.push({ heading: false, text: lines.join(' ') });
+    lines = [];
+  };
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) {
+      flush();
+      if (line !== '') blocks.push({ heading: true, text: line });
+    } else {
+      lines.push(line.replace(/^(?:[-*>]|\d+\.)\s+/, ''));
+    }
+  }
+  flush();
+  return blocks;
 }
 
 /**

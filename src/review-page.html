@@ -131,6 +131,8 @@ let showSummary = false;
 let poll = null;
 // What the person typed or switched on each defect, kept while they move between defects.
 const forms = new Map();
+// The defects this page told the server it showed, for the count of shown defects.
+const told = new Set();
 
 function el(tag, attrs, ...children) {
   const node = document.createElement(tag);
@@ -193,6 +195,10 @@ function render() {
     return;
   }
   if (location.hash.slice(1) !== entry.id) history.replaceState(null, '', '#' + entry.id);
+  if (!told.has(entry.id)) {
+    told.add(entry.id);
+    post('seen', { id: entry.id }).catch(() => told.delete(entry.id));
+  }
   main.append(fixView(entry), linksView(entry), labelView(entry));
   if (!entry.ready && poll === null) poll = setTimeout(() => { poll = null; load(); }, 1000);
 }
@@ -320,7 +326,7 @@ function summaryView() {
   const { summary } = state;
   const { run } = summary;
   const section = el('section', {}, el('h2', { text: 'Summary' }));
-  section.append(el('p', { text: `This run: ${run.labeled} labeled, ${run.skipped} skipped or left for later, ${run.open} of ${run.shown} still with no label.` }));
+  section.append(el('p', { text: `This run: ${run.labeled} labeled, ${run.skipped} skipped or left for later, ${run.open} of ${state.items.length} still with no label.` }));
   if (summary.draftsText) for (const text of summary.draftsText) section.append(el('p', { class: 'meta', text }));
   const ready = summary.categories.filter((row) => row.rule === 'ready');
   section.append(el('p', { text: ready.length === 0 ? 'No category has two labeled defects from two PRs yet, so none can become a rule.' : `${ready.length} ${ready.length === 1 ? 'category has' : 'categories have'} two or more labeled defects from two or more PRs, so ${ready.length === 1 ? 'it' : 'they'} can become a rule with exhibit policy suggest.` }));

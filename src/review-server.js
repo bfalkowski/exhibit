@@ -48,7 +48,7 @@ export async function startReviewServer(session, { port = 0 } = {}) {
       return response.end(page);
     }
     if (route === 'GET api/state') return send(response, 200, session.state());
-    if (route !== 'POST api/answer' && route !== 'POST api/finish') return send(response, 404, { error: 'Not found.' });
+    if (!['POST api/answer', 'POST api/seen', 'POST api/finish'].includes(route)) return send(response, 404, { error: 'Not found.' });
     if (!/^application\/json\b/.test(request.headers['content-type'] ?? '')) return send(response, 415, { error: 'Send the answer as JSON.' });
     const body = await readJson(request);
     if (body === null) return send(response, 400, { error: 'The answer is not JSON, or it is too long.' });
@@ -58,6 +58,10 @@ export async function startReviewServer(session, { port = 0 } = {}) {
       return undefined;
     }
     try {
+      if (route === 'POST api/seen') {
+        session.seen(body.id);
+        return send(response, 200, {});
+      }
       await session.answer(body.id, body);
     } catch (error) {
       if (!(error instanceof ToolError)) throw error;

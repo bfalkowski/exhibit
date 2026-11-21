@@ -102,7 +102,22 @@ test('skip and later write nothing, and the defect stays open for the next run',
   await session.answer('D-007', { action: 'later' });
   assert.equal(existsSync(labelsPath(cwd)), false);
   assert.deepEqual(session.state().items.map((item) => item.state), ['skipped', 'later', 'open']);
-  assert.deepEqual(session.summary().run, { shown: 3, labeled: 0, skipped: 2, open: 3 });
+  // Two defects were answered, so two were shown. Open counts every defect with no line.
+  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 2, open: 3 });
+});
+
+test('shown counts the defects the page showed, as the terminal flow counts them', async (t) => {
+  const cwd = folderWithHistory(t);
+  const session = await createReviewSession({ cwd, now });
+  await session.prepared;
+  assert.equal(session.summary().run.shown, 0);
+  session.seen('D-012');
+  session.seen('D-012');
+  assert.equal(session.summary().run.shown, 1);
+  // An answer counts its defect as shown, even when the page did not say it showed it.
+  await session.answer('D-007', { action: 'later' });
+  assert.deepEqual(session.summary().run, { shown: 2, labeled: 0, skipped: 1, open: 3 });
+  assert.throws(() => session.seen('D-999'), /no open defect D-999/);
 });
 
 test('lines written before the page are kept, their defects are not shown, and their categories are in the pick list', async (t) => {
@@ -239,4 +254,18 @@ test('whatWentWrong gives one plain line from the fix PR body', () => {
   assert.equal(whatWentWrong({ title: 'Fix the count', body: null }), 'Fix the count');
   assert.equal(whatWentWrong({ title: 'T', body: 'First paragraph with [a link](http://x) and `code`.\n\nSecond.' }), 'First paragraph with a link and code.');
   assert.equal(whatWentWrong({ title: 'T', body: 'x'.repeat(400) }).length, 300);
+});
+
+test('whatWentWrong reads the text under a heading that has no blank line after it', () => {
+  const what = (body) => whatWentWrong({ title: 'The title', body });
+  assert.equal(what('## Why\nThe Board read failed.\n\n## How\nWe added backoff.'), 'The Board read failed.');
+  assert.equal(what('Ticket 148.\n\n## Why\nThe Board read failed.'), 'The Board read failed.');
+  // The sentence under the heading, not the next paragraph.
+  assert.equal(what('## Why\nX.\n\nY.'), 'X.');
+  // With no Why heading, a heading line is left out and the text under it is kept.
+  assert.equal(what('## Summary\nThe count was off.'), 'The count was off.');
+  // An empty Why part does not take a sentence from the next part.
+  assert.equal(what('Ticket 148.\n\n## Why\n\n## How\nWe added backoff.'), 'Ticket 148.');
+  // A list under the heading is read without its marks.
+  assert.equal(what('## Why\n- The cache key was wrong.\n- More.'), 'The cache key was wrong.');
 });
