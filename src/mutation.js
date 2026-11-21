@@ -45,7 +45,7 @@ export function mutationCollector({ runStryker = runStrykerProcess } = {}) {
   return async (requirement, context) => {
     if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker }));
     const runResult = await runs.get(context);
-    const result = judge(runResult, requirement.params.min);
+    const result = judge(runResult, requirement.params.min, context.equivalentMutants ?? []);
     // A test that failed in the coverage run of Exhibit's first Stryker run, and passed in the
     // coverage run of the second, is flaky (spec 9.3 and 9.5).
     return passedInSecondCoverageRun(result.details) ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
@@ -178,6 +178,11 @@ function fixed(status, details, howToFix) {
 
 // The requirement's result for a run and the policy's `min`.
 //
+// `marks` are the mutants that a person marked as equivalent in the policy (spec 9.5). A mutant
+// that survived, or that no test reached, and that has the key of a mark, does not count: it is
+// listed apart in equivalent_mutants, with the mark's reason. A killed mutant counts as killed,
+// mark or not.
+//
 // After a complete run, the catch rate is the rate of every mutant on the changed lines, so it is
 // met when the catch rate reaches min. After a partial run, the mutants are a sample, so it is met
 // only when the lower bound of the 95% interval reaches min. It is failed when the upper bound is
@@ -186,10 +191,14 @@ function fixed(status, details, howToFix) {
 // Stryker tests the mutants file by file, in the order of the code, so a partial sample comes
 // from the first changed lines more than from the last. The interval holds only as well as those
 // mutants stand for the rest.
-export function judge(runResult, min) {
+export function judge(runResult, min, marks = []) {
   if (runResult.fixed) return runResult.fixed;
-  const { mutants, complete, budgetSeconds } = runResult;
-  const tally = counts(mutants);
+  const { complete, budgetSeconds } = runResult;
+  const reasons = new Map(marks.map((mark) => [mutantKey(mark), mark.reason]));
+  const isEquivalent = (mutant) => MARKABLE.has(mutant.status) && reasons.has(mutantKey(mutant));
+  const mutants = runResult.mutants.filter((mutant) => !isEquivalent(mutant));
+  const equivalent = listed(runResult.mutants.filter(isEquivalent), null).map((mutant) => ({ ...mutant, reason: reasons.get(mutantKey(mutant)) }));
+  const tally = { ...counts(mutants), equivalent: equivalent.length };
   const details = {
     ...tally,
     complete,
@@ -201,18 +210,20 @@ export function judge(runResult, min) {
     ...(runResult.failedInFirstRun ? { first_output: runResult.firstOutput, failed_in_first_run: runResult.failedInFirstRun } : {}),
     survivors: listed(mutants, 'Survived'),
     no_coverage_mutants: listed(mutants, 'NoCoverage'),
-    timeout_mutants: listed(mutants, 'Timeout')
+    timeout_mutants: listed(mutants, 'Timeout'),
+    equivalent_mutants: equivalent
   };
   const { n, killed, timeout } = tally;
   const partial = complete ? '' : ` The budget of ${budgetSeconds} seconds ran out after ${n} mutants, so they are a sample.`;
   if (n === 0) {
-    if (complete) return { status: 'met', details: { ...details, reason: 'Stryker made no mutant on the changed lines.' } };
-    return { status: 'missing', details, how_to_fix: `The budget of ${budgetSeconds} seconds (settings.mutation_budget_seconds) ran out before Stryker had tested one mutant, so Exhibit has no catch rate. Raise the budget, or make the tests that reach the changed files faster, and run exhibit check again.` };
+    const none = equivalent.length > 0 ? 'No mutant on the changed lines counts: each one that survived is marked as equivalent in the policy.' : 'Stryker made no mutant on the changed lines.';
+    if (complete) return { status: 'met', details: { ...details, reason: none } };
+    return { status: 'missing', details, how_to_fix: `The budget of ${budgetSeconds} seconds (settings.mutation_budget_seconds) ran out before Stryker had tested one mutant that counts, so Exhibit has no catch rate. Raise the budget, or make the tests that reach the changed files faster, and run exhibit check again.` };
   }
   const rate = (killed + timeout) / n;
   const { low, high } = clopperPearson(killed + timeout, n);
   const shown = `${n - killed - timeout} of ${n} mutants on the changed lines survived, so the catch rate is ${fixedRate(rate)}, with the 95% interval ${fixedRate(low)} to ${fixedRate(high)}.${partial}`;
-  const survivorsHelp = 'For each surviving mutant listed in summary.md, add a test that fails on the mutant and passes on the code. A survivor that cannot change what the code does (an equivalent mutant) needs a person to judge it.';
+  const survivorsHelp = 'For each surviving mutant listed in summary.md, add a test that fails on the mutant and passes on the code. A survivor that cannot change what the code does (an equivalent mutant) needs a person to judge it: a person can mark it under equivalent_mutants in the policy, and later runs on the same code then leave it out (spec 9.5).';
   if (complete ? rate >= min : low >= min) return { status: 'met', details };
   if (complete || high < min) {
     return { status: 'failed', details, how_to_fix: `${shown} The policy's min is ${min}. ${survivorsHelp}` };
@@ -240,17 +251,28 @@ function fixedRate(value) {
   return value.toFixed(2);
 }
 
-// The mutants with one status, as { file, line, mutator, original, replacement }, sorted.
+// The statuses of the mutants that a mark can drop: those that count as survived.
+const MARKABLE = new Set(['Survived', 'NoCoverage']);
+
+// The key of a mutant, or of a mark, that stays the same across runs on the same code (spec 9.5):
+// the file, the text of the line the mutant starts on, the mutator, the code it replaced and the
+// replacement. It has no line number, so a mark still holds when lines above the code move.
+function mutantKey({ file, line_text: lineText, mutator, original, replacement }) {
+  return JSON.stringify([file, lineText, mutator, original, replacement]);
+}
+
+// The mutants with one status, as { file, line, column, line_text, mutator, original,
+// replacement }, sorted. A null status keeps every mutant, with its status.
 function listed(mutants, status) {
   return mutants
-    .filter((mutant) => mutant.status === status)
-    .map(({ file, line, column, mutator, original, replacement }) => ({ file, line, column, mutator, original, replacement }))
+    .filter((mutant) => status === null || mutant.status === status)
+    .map(({ file, line, column, line_text: lineText, mutator, original, replacement, status: was }) => ({ file, line, column, line_text: lineText, mutator, original, replacement, ...(status === null ? { status: was } : {}) }))
     .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.mutator.localeCompare(b.mutator) || a.replacement.localeCompare(b.replacement));
 }
 
-// Gives each mutant from Stryker its path relative to the repo, its line and column, and the code
-// it replaced, read from the head worktree. Long code is cut short, and runs of white space become
-// one space, so each mutant fits on one line of summary.md.
+// Gives each mutant from Stryker its path relative to the repo, its line and column, the text of
+// its first line, and the code it replaced, read from the head worktree. Long code is cut short,
+// and runs of white space become one space, so each mutant fits on one line of summary.md.
 async function describeMutants(root, mutants) {
   const roots = [root, await realpath(root)];
   const texts = new Map();
@@ -262,7 +284,7 @@ async function describeMutants(root, mutants) {
     const { start, end } = mutant.location;
     // Stryker's lines and columns start at 1, and the end column is just past the code.
     const original = lines.slice(start.line - 1, end.line).map((text, i, all) => text.slice(i === 0 ? start.column - 1 : 0, i === all.length - 1 ? end.column - 1 : undefined)).join('\n');
-    described.push({ file, line: start.line, column: start.column, mutator: mutant.mutatorName, original: oneLine(original), replacement: oneLine(mutant.replacement), status: mutant.status });
+    described.push({ file, line: start.line, column: start.column, line_text: oneLine(lines[start.line - 1] ?? ''), mutator: mutant.mutatorName, original: oneLine(original), replacement: oneLine(mutant.replacement), status: mutant.status });
   }
   return described;
 }
@@ -536,6 +558,7 @@ export function describeMutation(details) {
   }
   if (details.complete === false) parts.push(` The budget of ${details.budget_seconds} seconds ran out, so this is a sample.`);
   if (details.not_valid > 0) parts.push(` ${details.not_valid} mutants did not compile or broke the code at load, so they do not count.`);
+  if (details.equivalent > 0) parts.push(` ${details.equivalent} ${details.equivalent === 1 ? 'mutant' : 'mutants'} marked as equivalent in the policy ${details.equivalent === 1 ? 'does' : 'do'} not count.`);
   if (details.failed_in_first_run?.length > 0) {
     const tests = details.failed_in_first_run.map((failure) => failure.test).join(', ');
     const flaky = passedInSecondCoverageRun(details) ? ' They passed there, so they are flaky.' : '';
@@ -546,13 +569,15 @@ export function describeMutation(details) {
     if (!mutants?.length) return;
     lines.push(`  - ${title}:`);
     for (const mutant of mutants.slice(0, LISTED)) {
-      lines.push(`    - ${mutant.file}:${mutant.line} ${mutant.mutator}: \`${mutant.original}\` became \`${mutant.replacement}\``);
+      const why = mutant.reason === undefined ? '' : `. Why: ${mutant.reason.replace(/\s+/g, ' ').trim()}`;
+      lines.push(`    - ${mutant.file}:${mutant.line} ${mutant.mutator}: \`${mutant.original}\` became \`${mutant.replacement}\`${why}`);
     }
     if (mutants.length > LISTED) lines.push(`    - and ${mutants.length - LISTED} more, listed in evidence.json.`);
   };
   show('Survived, though a test ran the line', details.survivors);
   show('Survived, because no test ran the line', details.no_coverage_mutants);
   show('Killed by a timeout, so check that the mutant really makes the tests hang', details.timeout_mutants);
+  show('Marked as equivalent, so they do not count', details.equivalent_mutants);
   return lines.join('\n');
 }
 
