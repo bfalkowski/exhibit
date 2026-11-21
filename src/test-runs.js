@@ -280,8 +280,9 @@ function runWords(result) {
 // A test whose two runs disagree is flaky. A test that is not in the second run keeps its first
 // status. A run past the time limit (a TimedOut) has no result for a test that had not finished:
 // that test counts as failed there, so it is flaky when it passed on the other run, and keeps the
-// other run's result when that is a fail or a skip. When both runs passed the time limit, the
-// result is a TimedOut too, with the first run's words.
+// other run's result when that is a fail or a skip. When either run passed the time limit, the
+// result is a TimedOut too, with the words of the run that passed it, so the side still counts as
+// one that hung.
 function settle(first, second) {
   const hungFirst = first instanceof TimedOut;
   const hungSecond = second instanceof TimedOut;
@@ -299,7 +300,8 @@ function settle(first, second) {
       tests.set(name, disagree ? 'flaky' : status ?? again);
     }
   }
-  return hungFirst && hungSecond ? new TimedOut(first.message, first.howToFix, tests) : tests;
+  const hung = hungFirst ? first : hungSecond ? second : null;
+  return hung ? new TimedOut(hung.message, hung.howToFix, tests) : tests;
 }
 
 function testName(item, roots) {

@@ -570,3 +570,37 @@ test('when the run with the PR\'s tests passes the time limit, only the PR\'s un
   assert.deepEqual(requirement.details.passed_on_base, ['new.test.js > c']);
   assert.match(requirement.details.base_with_pr_tests_timed_out, /ran past the time limit of 9 seconds/);
 });
+
+// A JUnit file with one failed test, old > flips, that is in no file of the repo.
+const ONE_FAIL = `printf '<testsuites><testsuite name="s"><testcase classname="old" name="flips"><failure message="x"/></testcase></testsuite></testsuites>' > .exhibit/junit.xml; exit 1`;
+
+test('a plain base run that fails once and then hangs counts as a base that hangs: failing-before is missing', async (t) => {
+  // On the plain base only (no staged changes, the old code), the first run fails one test, so
+  // Exhibit runs the command again, and the second run hangs.
+  const command = `if git diff --cached --quiet && grep -q 'a + a + 1' src/math.js; then if [ -e once.mark ]; then sleep 600; fi; touch once.mark; ${ONE_FAIL}; fi; ${NODE_TESTS}`;
+  const fixture = buildRepo(t, command, () => SHORT_LIMIT(command));
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/new-test');
+  const tests = evidence.requirements.find((item) => item.type === 'tests-before-after');
+  assert.equal(tests.status, 'met');
+  assert.deepEqual(tests.details.base, { passed: 0, failed: 1, skipped: 0, flaky: 0 });
+  assert.match(tests.details.base_timed_out.message, /ran past the time limit of 5 seconds on the base/);
+  assert.equal(requirement.status, 'missing');
+  assert.match(requirement.details.base_timed_out.message, /ran past the time limit of 5 seconds on the base/);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log')), false);
+  assertNoWorktreeLeft(fixture);
+});
+
+test('a run with the PR\'s tests that fails once and then hangs still counts the PR\'s unfinished test, and no old test', async (t) => {
+  // On the base with the PR's test files only (staged changes), the first run fails one test that
+  // is not the PR's, and the second run hangs.
+  const command = `if ! git diff --cached --quiet; then if [ -e once.mark ]; then sleep 600; fi; touch once.mark; ${ONE_FAIL}; fi; ${NODE_TESTS}`;
+  const fixture = buildRepo(t, command, () => SHORT_LIMIT(command));
+  const { evidence, requirement } = await runCheck(fixture.repo, 'fix/new-test');
+  assert.equal(requirement.status, 'met');
+  assert.equal(requirement.details.tests.length, 1);
+  assert.match(requirement.details.tests[0].name, NAME('test/double.test.js', 'double doubles'));
+  assert.equal(requirement.details.tests[0].on_base, 'did_not_finish');
+  assert.match(requirement.details.base_with_pr_tests_timed_out, /ran past the time limit of 5 seconds on the base with the PR's test files/);
+  assert.equal(evidence.verdict, 'meets_policy');
+  assertNoWorktreeLeft(fixture);
+});
