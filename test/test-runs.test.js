@@ -177,6 +177,42 @@ test('the gap of a test command that fails names the log with its output', async
   assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), 'utf8'), 'why it broke\n');
 });
 
+test('the gap of a second run that fails names the log of that run', async (t) => {
+  const fixture = buildRepo(t);
+  // A test fails on the head, so the head runs again. The second run finds the mark of the first
+  // one, and exits with no JUnit file.
+  fixture.setBasePolicy(policy(`if [ -f .exhibit/ran ]; then echo "second run broke"; exit 3; fi; touch .exhibit/ran; ${NODE_TESTS}`));
+  const { requirement, gap } = await runCheck(fixture.repo, 'broken');
+  assert.equal(requirement.status, 'error');
+  assert.match(gap.how_to_fix, /on the head \(exit code 3\).*Read its output in \.exhibit\/tests\/head-again\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'head-again.log'), 'utf8'), 'second run broke\n');
+});
+
+test('the run of the base with the PR\'s test files writes its own log, and its gap names it', async (t) => {
+  const fixture = buildRepo(t);
+  // Only the base with the PR's test files has changes that git has staged: Exhibit checks out
+  // the PR's test files there. So only that run fails.
+  const command = `if ! git diff --cached --quiet; then echo "base with the PR tests"; exit 4; fi; ${NODE_TESTS}`;
+  fixture.setBasePolicy(policy(command).replace('    - tests-before-after\n', '    - tests-before-after\n    - failing-before\n'));
+  const { evidence } = await runCheck(fixture.repo, 'flaky');
+  const gap = evidence.gaps.find((item) => item.type === 'failing-before');
+  assert.equal(gap.status, 'error');
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-pr-tests-first\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log'), 'utf8'), 'base with the PR tests\n');
+});
+
+test('a log that Exhibit cannot open is thrown as it is, not read as a command the shell could not find', async (t) => {
+  const fixture = buildRepo(t);
+  // A folder in the place of the log, so opening it to write fails.
+  mkdirSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), { recursive: true });
+  const sha = (ref) => fixture.git('rev-parse', ref).trim();
+  await assert.rejects(
+    runTestsOnBaseAndHead({ cwd: fixture.repo, base: sha('start'), head: sha('good'), settings: { test_command: NODE_TESTS, test_results: '.exhibit/junit.xml' } }),
+    (error) => error.code === 'EISDIR' && error.name !== 'TestRunError'
+  );
+  assertNoWorktreeLeft(fixture);
+});
+
 test('a test command that is not found gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
   fixture.setBasePolicy(policy('exhibit-no-such-test-command --run'));

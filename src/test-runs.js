@@ -196,8 +196,10 @@ async function shell(command, cwd, env, timeoutSeconds, logFile) {
   delete clean.NODE_TEST_CONTEXT;
   try {
     return await runInGroup(command, { cwd, env: clean, logFile, timeoutMs: timeoutSeconds * 1000 });
-  } catch {
-    // The shell itself could not start. Count it as a command the shell could not find.
+  } catch (error) {
+    // The shell itself could not start. Count it as a command the shell could not find. Any other
+    // error, such as one from opening the log, is not about the command, so it goes up as it is.
+    if (!String(error.syscall ?? '').startsWith('spawn')) throw error;
     return { code: 127, signal: null, timedOut: false };
   }
 }
