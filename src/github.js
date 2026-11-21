@@ -280,10 +280,13 @@ function nextLink(header) {
 
 // A reply from GitHub that is not OK. `status` is its HTTP status, so a caller can tell a problem
 // with one request, such as a 502, from one that stops every request, such as a refused token.
+// `limited` is true when the reply is a rate limit, so a 403 that is a rate limit can be told from
+// a 403 that refuses access.
 export class GitHubReplyError extends ToolError {
-  constructor(message, status) {
+  constructor(message, status, limited = false) {
     super(message);
     this.status = status;
+    this.limited = status === 429 || limited;
   }
 
   // True when every later request would fail too: a refused token (401), a missing permission
@@ -293,11 +296,17 @@ export class GitHubReplyError extends ToolError {
   }
 }
 
+// True when `error` is GitHub's answer that one repo cannot be read, not a refused token or a
+// rate limit, which stop every later request too.
+function canNotRead(error) {
+  return error instanceof GitHubReplyError && error.status !== 401 && !error.limited;
+}
+
 // `limited` is true when the reply is still a rate limit after the waits.
 async function apiError(response, url, permission, limited = false) {
   const detail = await messageOf(response);
   const what = `GitHub answered ${response.status}${detail ? ` (${detail})` : ''} for ${new URL(url).pathname}`;
-  return new GitHubReplyError(`${what}.${advice(response.status, permission, limited)}`, response.status);
+  return new GitHubReplyError(`${what}.${advice(response.status, permission, limited)}`, response.status, limited);
 }
 
 // `permission` is one permission, or a list of them. `limited` is true for a known rate limit.
@@ -440,7 +449,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // for each PR and each of those lists. mergedPulls keeps what it read, so pullFiles, pullReviews,
 // pullComments, pullFileCount and ciResults read from it, and send a query only for a list with
 // more than one page, or for a PR or commit that mergedPulls did not read.
-// SZZ's methods (defaultBranch, pullsForCommit and issue) use the REST API, with the reply cache.
+// SZZ's methods (defaultBranch, sameRepo, pullsForCommit and issue) use the REST API, with the reply cache.
 // The methods return small forge-neutral shapes, not GitHub's own objects, so history and SZZ
 // read the same fields from any forge, and a caller does not depend on which API gave them:
 // - mergedPulls, pullsForCommit and pull give PRs: { number, title, body, author, labels,
@@ -453,6 +462,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
 // - issue: { createdAt, isPull }, or null.
 // - defaultBranch: the branch name.
+// - sameRepo: true or false.
 // - upsertComment, for exhibit publish --comment: { action, url }.
 export function createGitHubForge({ repo, ...client }) {
   const github = createGitHub(client);
@@ -461,6 +471,20 @@ export function createGitHubForge({ repo, ...client }) {
   const pullRequests = { permission: PERMISSIONS.pullRequests };
   // The permissions that the GraphQL queries for history need.
   const forHistory = { permission: [PERMISSIONS.pullRequests, PERMISSIONS.checks, PERMISSIONS.commitStatuses] };
+
+  // Answers that need one request at most per run: this repo's own reply, and sameRepo's answer
+  // for each name, lower case. A request that fails is not kept, so the next call asks again.
+  const answers = new Map();
+  async function once(key, ask) {
+    if (!answers.has(key)) answers.set(key, ask());
+    try {
+      return await answers.get(key);
+    } catch (error) {
+      answers.delete(key);
+      throw error;
+    }
+  }
+  const thisRepo = () => once('repo', () => github.getOne(base));
 
   // What GraphQL gave for each PR, by number, and the first page of CI results for each commit.
   const pulls = new Map();
@@ -594,7 +618,40 @@ export function createGitHubForge({ repo, ...client }) {
     pull: async (number) => fromRestPull(await github.getOne(`${base}/pulls/${number}`, pullRequests)),
 
     async defaultBranch() {
-      return (await github.getOne(base)).default_branch;
+      return (await thisRepo()).default_branch;
+    },
+
+    // Returns true when the repo name `named` ("owner/name") leads to this repo, as the repo's
+    // old name does after a rename or a transfer. GitHub answers GET /repos/{old name} with a
+    // redirect to the repo, and fetch follows it. The id stays the same after a rename or a
+    // transfer, so the two replies are one repo when their ids match. Each name costs one request
+    // at most, in upper or lower case, except after a 5xx.
+    // A name that the token cannot read is another repo: GitHub does not know it, or refuses it,
+    // such as a private repo behind SAML SSO (403) or a repo blocked for legal reasons (451). So
+    // a stray mention of such a repo never stops the run. A 5xx is another repo too, but that
+    // answer is not kept, so the next call asks again. A refused token (401) and a rate limit
+    // still throw, because every later request would fail too.
+    async sameRepo(named) {
+      const key = named.toLowerCase();
+      if (key === repo.toLowerCase()) return true;
+      try {
+        return await once(`same ${key}`, async () => {
+          let found;
+          try {
+            found = await github.getOne(`/repos/${named}`);
+          } catch (error) {
+            if (canNotRead(error) && error.status < 500) return false;
+            throw error;
+          }
+          return found.id === (await thisRepo()).id;
+        });
+      } catch (error) {
+        // A 5xx gets here, from the named repo or from this repo's own reply. Both give false for
+        // this fix. The inner catch answers every 4xx for the named repo, and a 4xx on this repo's
+        // own reply is thrown.
+        if (canNotRead(error) && error.status >= 500) return false;
+        throw error;
+      }
     },
 
     // The PRs that hold the commit `sha`. GitHub answers 422 for a commit it does not know, such
