@@ -1,0 +1,104 @@
+{
+  "exhibit_version": "0.1.0",
+  "policy": {
+    "path": "evidence.yml",
+    "sha256": "92b8614fd44348060557cf6f5980affefedd2f429ca506d026a337a4aa6d6909"
+  },
+  "repo": "bfalkowski/exhibit",
+  "pr": 321,
+  "base": "26a07d913ac853e729da063125f14d2784c8fce6",
+  "head": "0175a53545c9dd5e27d8c153c80d845eb758c249",
+  "classification": {
+    "kinds": [
+      "docs",
+      "source",
+      "tooling"
+    ],
+    "risk": "high",
+    "fix": false,
+    "fix_signal": null,
+    "feature": false,
+    "merge_without_reading": "never",
+    "used_default": false,
+    "policy_changed": false,
+    "signals_from": "pr"
+  },
+  "requirements": [
+    {
+      "type": "probe",
+      "params": {
+        "name": "links",
+        "run": "node scripts/check-links.js README.md CLAUDE.md docs examples"
+      },
+      "kinds": [
+        "docs"
+      ],
+      "status": "met",
+      "details": {
+        "exit_code": 0,
+        "timed_out": false,
+        "timeout_seconds": 600,
+        "output": ".exhibit/probes/links/output.log",
+        "artifacts": [],
+        "missing_artifacts": []
+      },
+      "author": "builder",
+      "duration_ms": 58
+    },
+    {
+      "type": "tests-before-after",
+      "params": {},
+      "kinds": [
+        "source",
+        "tooling"
+      ],
+      "status": "met",
+      "details": {
+        "base": {
+          "passed": 748,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "head": {
+          "passed": 755,
+          "failed": 0,
+          "skipped": 0,
+          "flaky": 0
+        },
+        "failed_on_head": []
+      },
+      "author": "builder",
+      "duration_ms": 140776
+    },
+    {
+      "type": "failing-before",
+      "params": {
+        "when": [
+          "fix"
+        ]
+      },
+      "kinds": [
+        "source"
+      ],
+      "status": "skipped",
+      "details": {
+        "reason": "The policy asks for it only on a fix, and this change is not classified as one, so it is not needed. This does not stop meets_policy."
+      },
+      "author": "builder",
+      "duration_ms": 0
+    }
+  ],
+  "verdict": "meets_policy",
+  "gaps": [],
+  "checks_by_author": {
+    "builder": 2,
+    "hidden": 0
+  },
+  "flaky_tests": [],
+  "environment": {
+    "node": "20.x",
+    "os": "linux"
+  },
+  "created_at": "2026-11-21T07:58:39.757Z"
+}
