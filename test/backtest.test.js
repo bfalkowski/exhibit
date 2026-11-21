@@ -215,6 +215,46 @@ test('bodyStatus maps a section to met, missing or unknown for each type of requ
   assert.equal(bodyStatus(probe, 'Checked the manual by hand.'), 'missing');
 });
 
+// Ticket 363: the rules read real PR bodies, so prose must not count as a claim, and the common
+// ways that real bodies say "it failed before" must count.
+test('bodyStatus does not count a command or a failure that a "not" or "no" denies', () => {
+  const tests = { type: 'tests-before-after', params: {} };
+  assert.equal(bodyStatus(tests, 'I did not run pytest.'), 'missing');
+  assert.equal(bodyStatus(tests, "I didn't run npm test, and never ran go test."), 'missing');
+  assert.equal(bodyStatus(tests, 'I did not run the browser tests. npm test: 40 of 40 pass.'), 'met');
+  assert.equal(bodyStatus(tests, 'Not checked by hand, but npm test passes.'), 'met');
+  // A command must stand as whole words.
+  assert.equal(bodyStatus(tests, 'Ran pytests.py by hand.'), 'missing');
+  assert.equal(bodyStatus(tests, 'Ran make checker.', { test_command: 'make check' }), 'missing');
+  assert.equal(bodyStatus(tests, 'npm run test:browser: 28 of 28 pass.'), 'met');
+  const probe = { type: 'probe', params: { name: 'app', run: 'cd app && make' } };
+  assert.equal(bodyStatus(probe, 'We did not make any probe run.'), 'missing');
+  assert.equal(bodyStatus(probe, 'The remake script is new.'), 'missing');
+  assert.equal(bodyStatus(probe, 'Ran `make`: built clean.'), 'met');
+  const failing = { type: 'failing-before', params: {} };
+  assert.equal(bodyStatus(failing, 'No test failed before or after.'), 'missing');
+  assert.equal(bodyStatus(failing, 'It never failed before the change.'), 'missing');
+  assert.equal(bodyStatus(failing, 'Nothing changed, and before the change no test failed.'), 'missing');
+});
+
+test('bodyStatus counts the ways real bodies say a test failed before the change', () => {
+  const failing = { type: 'failing-before', params: {} };
+  assert.equal(bodyStatus(failing, 'The test shows a failure before the fix.'), 'met');
+  assert.equal(bodyStatus(failing, 'On main it fails: radius 7.0.'), 'met');
+  assert.equal(bodyStatus(failing, 'It fails on main ("Activity is not on the Floor").'), 'met');
+  assert.equal(bodyStatus(failing, 'With the old relay/autopilot.js put back, it fails at the first step.'), 'met');
+  assert.equal(bodyStatus(failing, 'The new assertion fails without the code it guards.'), 'met');
+  assert.equal(bodyStatus(failing, 'Red first: I ran the new test. It failed on the first case.'), 'met');
+  assert.equal(bodyStatus(failing, 'Before the change, the first case timed out waiting for the prompt.'), 'met');
+  // "red" must be the word, and a pass on the old code is no failure.
+  assert.equal(bodyStatus(failing, 'The red bar is gone. The new test also passes on main.'), 'missing');
+  assert.equal(bodyStatus(failing, 'npm test passes without failures.'), 'missing');
+  // From PR 98 and PR 100 of the Building58 history: a count of 0, and a before word in a test's name.
+  assert.equal(bodyStatus(failing, '`npm test`: exit 0, every file 0 fail (one file skips 2 tests, as on main).'), 'missing');
+  assert.equal(bodyStatus(failing, 'With both opened by hand, the test fails at "the old Lead".'), 'missing');
+  assert.equal(bodyStatus(failing, 'I ran both against main and both failed.'), 'met');
+});
+
 test('share gives k of n with its 95% interval, and null for n = 0', () => {
   assert.equal(share(0, 0), null);
   const { k, n, rate, low, high } = share(2, 3);
