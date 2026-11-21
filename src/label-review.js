@@ -190,6 +190,9 @@ export function whatWentWrong(fix) {
   return sentence.length > WHAT_LENGTH ? `${sentence.slice(0, WHAT_LENGTH - 1)}…` : sentence;
 }
 
+// A markdown heading: one to six # marks, then a space or the end of the line. "#148" is not one.
+const HEADING = /^#{1,6}(?:\s|$)/;
+
 // The body as blocks in order: each heading line on its own ({ heading: true, text }), and each
 // run of other lines up to a blank line or a heading as one paragraph ({ heading: false, text }),
 // with the list and quote marks at the start of each line taken off.
@@ -202,7 +205,7 @@ function bodyBlocks(body) {
   };
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim();
-    if (line === '' || line.startsWith('#')) {
+    if (line === '' || HEADING.test(line)) {
       flush();
       if (line !== '') blocks.push({ heading: true, text: line });
     } else {

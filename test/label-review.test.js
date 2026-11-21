@@ -268,4 +268,9 @@ test('whatWentWrong reads the text under a heading that has no blank line after 
   assert.equal(what('Ticket 148.\n\n## Why\n\n## How\nWe added backoff.'), 'Ticket 148.');
   // A list under the heading is read without its marks.
   assert.equal(what('## Why\n- The cache key was wrong.\n- More.'), 'The cache key was wrong.');
+  // A heading needs a space after its # marks, so an issue number at the start of a line is text.
+  assert.equal(what('#148 broke the board read. It failed.'), '#148 broke the board read.');
+  assert.equal(what('## Why\n#148 broke the board read.'), '#148 broke the board read.');
+  assert.equal(what('#Why\nNot a heading.'), '#Why Not a heading.');
+  assert.equal(what('##\nThe text.'), 'The text.');
 });
