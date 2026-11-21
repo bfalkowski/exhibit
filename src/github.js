@@ -466,7 +466,7 @@ const NO_ITEMS = { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] 
 // - pullReviews: { state, author, at }, where at is null for a review that is still pending.
 // - pullComments: { body, author, at }.
 // - ciResults: { name, conclusion, url }, check runs first, then commit statuses.
-// - issue: { createdAt, isPull }, or null.
+// - issue: { createdAt, isPull, title, body }, or null. title and body are null when empty.
 // - defaultBranch: the branch name.
 // - sameRepo: true or false.
 // - upsertComment, for exhibit publish --comment: { action, url }.
@@ -720,7 +720,8 @@ export function createGitHubForge({ repo, ...client }) {
     async issue(number) {
       const found = await github.getOne(`${base}/issues/${number}`, { emptyOn: [404, 410] });
       if (found === null) return null;
-      return { createdAt: typeof found.created_at === 'string' ? found.created_at : null, isPull: Boolean(found.pull_request) };
+      const text = (value) => (typeof value === 'string' && value !== '' ? value : null);
+      return { createdAt: text(found.created_at), isPull: Boolean(found.pull_request), title: text(found.title), body: text(found.body) };
     }
   };
 }

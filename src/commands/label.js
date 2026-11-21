@@ -4,6 +4,8 @@ import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import { DEFAULT_MODEL, createDrafter } from '../claude.js';
 import { draftAgreementText } from '../draft-agreement.js';
+import { GITHUB_FORGE } from '../github.js';
+import { cacheFolder, createReplyCache } from '../github-cache.js';
 import { ANSWER_LIMITS, LABELS, QUIT, SKIP, labelDefects } from '../labels.js';
 import { ToolError } from '../tool-error.js';
 
@@ -24,7 +26,9 @@ function plural(n, word, words = `${word}s`) {
 // evidence that would have caught it. Each answer goes to .exhibit/labels.jsonl at once (spec
 // 8.4). With --json, the defects and the questions go to stderr, and stdout gets only the summary
 // at the end. With --claude, Claude drafts a code and a category for each defect first (spec 9.11),
-// with ANTHROPIC_API_KEY and the model in EXHIBIT_CLAUDE_MODEL.
+// with ANTHROPIC_API_KEY and the model in EXHIBIT_CLAUDE_MODEL. With GITHUB_TOKEN, it reads the
+// issues that each fix PR closes, so a follow-up ticket's words count when it proposes
+// known_at_review.
 export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr, now }) {
   const options = parseOptions(argv);
   const screen = options.json ? stderr : stdout;
@@ -36,7 +40,7 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
   const keyboard = createKeyboard({ input: stdin, output: screen });
   let summary;
   try {
-    summary = await labelDefects({ cwd, ask: keyboard.ask, draft, now });
+    summary = await labelDefects({ cwd, ask: keyboard.ask, draft, issues: issueReader({ env, fetch, screen }), now });
   } finally {
     keyboard.close();
   }
@@ -53,6 +57,33 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
     ? 'Every escaped defect has a code now.'
     : `${summary.open} still ${plural(summary.open, 'has', 'have')} no code. Run exhibit label again to label ${plural(summary.open, 'it', 'them')}.`;
   stdout.write(`\nLabeled ${summary.labeled} escaped ${plural(summary.labeled, 'defect')}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+}
+
+// Reads the issues that a fix PR closes, from GitHub, with the reply cache (spec 8.6). Returns
+// undefined without GITHUB_TOKEN: then only the fix PR's title and body count. An issue that
+// GitHub cannot give is left out, with one warning, and labeling goes on.
+function issueReader({ env, fetch, screen }) {
+  const token = env[GITHUB_FORGE.tokenEnv];
+  if (!token) return undefined;
+  const folder = cacheFolder({ env });
+  const cache = createReplyCache({ dir: folder, token });
+  const forges = new Map();
+  return async (numbers, fix) => {
+    const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/\d+$/.exec(fix.url)?.[1];
+    if (repo === undefined) return [];
+    if (!forges.has(repo)) forges.set(repo, GITHUB_FORGE.connect({ repo, token, fetch, cache }));
+    const found = [];
+    for (const number of numbers) {
+      try {
+        const issue = await forges.get(repo).issue(number);
+        if (issue !== null && !issue.isPull) found.push({ number, title: issue.title, body: issue.body });
+      } catch (error) {
+        if (!(error instanceof ToolError)) throw error;
+        screen.write(`exhibit: warning: could not read issue ${number}, which fix PR ${fix.number} closes, so its words do not count: ${error.message}\n`);
+      }
+    }
+    return found;
+  };
 }
 
 // With --claude, how often the person kept Claude's draft, in this run and in the whole file.
@@ -108,7 +139,7 @@ function createKeyboard({ input, output }) {
     }
   }
 
-  async function ask(defect, { categories, text, position, open, draft, draftError, draftStopped }) {
+  async function ask(defect, { categories, text, position, open, draft, draftError, draftStopped, review }) {
     if (!introduced) {
       output.write(`${open} escaped ${plural(open, 'defect has', 'defects have')} no code yet. For each one, keep or reject each SZZ link, then type what went wrong, its category, and the evidence that would have caught it. ` +
         `Each label is saved as soon as you give it. Type s to skip a defect for now, or q at any question to quit.\n`);
@@ -134,8 +165,26 @@ function createKeyboard({ input, output }) {
     if (answer === QUIT || answer === SKIP) return answer;
     const caught = await question('Would have caught it: the evidence that would have caught this bug.', { field: 'would_have_caught' });
     if (caught === null) return QUIT;
+    const known = await knownAtReview(review);
+    if (known === QUIT) return QUIT;
     output.write(`Saved ${defect.id}.\n`);
-    return { ...answer, would_have_caught: caught, rejected_prs: rejected };
+    return { ...answer, would_have_caught: caught, rejected_prs: rejected, known_at_review: known };
+  }
+
+  // Asks whether review saw the defect and left it for a later ticket: a deferral (spec 8.4).
+  // An empty answer keeps Exhibit's proposal. Returns true, false, null or QUIT.
+  async function knownAtReview(review) {
+    const proposed = review?.known_at_review ?? null;
+    const why = proposed === true
+      ? `Exhibit proposes yes, because ${review.where} says: "${review.sentence}", and SZZ blamed PR ${review.pr}.`
+      : 'Exhibit found no sign of it, so it proposes unknown.';
+    const typed = await question(`Known at review: did review see this bug and leave it for a later ticket? ${why}\n  y for yes (a deferral), n for no, u for unknown. Press Enter to keep ${proposed === true ? 'yes' : 'unknown'}.`, {
+      emptyOk: true,
+      check: (answer) => (['y', 'n', 'u'].includes(answer.toLowerCase()) ? null : 'Please type y, n or u, or press Enter.')
+    });
+    if (typed === null) return QUIT;
+    if (typed === '') return proposed;
+    return { y: true, n: false, u: null }[typed.toLowerCase()];
   }
 
   // Asks for the code and the category with no draft. Returns { code, category }, SKIP or QUIT.

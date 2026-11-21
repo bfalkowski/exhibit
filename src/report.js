@@ -9,8 +9,9 @@ export const HISTORY_REPORT = { markdown: '.exhibit/report.md', html: '.exhibit/
 export const BACKTEST_REPORT = { markdown: '.exhibit/backtest.md', html: '.exhibit/backtest.html' };
 
 // The rule for weak history (spec 8.5). The history is weak when it has fewer than `minFixPrs`
-// fix PRs, when SZZ linked none of them or did not run, or when fewer than half of the escaped
-// defects have a link with a confidence of `strongConfidence` or more.
+// fix PRs, when SZZ linked none of them or did not run, when every linked defect is a deferral,
+// or when fewer than half of the escaped defects have a link with a confidence of
+// `strongConfidence` or more.
 export const WEAK_HISTORY = { minFixPrs: 10, strongConfidence: 0.5 };
 
 // The most lines the report shows for one link. history.jsonl has them all.
@@ -75,7 +76,7 @@ function funnelBlocks(counts, labels) {
   const blocks = [heading(2, 'Defects left at each step'), list([
     item(`Merged PRs read: ${counts.merged_prs}`),
     item(`Fix PRs: ${counts.fix_prs}`),
-    item(`Fix PRs with an SZZ link, the escaped defects: ${or(counts.szz_linked, 'SZZ did not run')}`),
+    item(`Fix PRs with an SZZ link: ${or(counts.szz_linked, 'SZZ did not run')}`),
     item(`Defects labeled with exhibit label: ${or(counts.labeled, noLabels)}`),
     item(`Defects with at least one link that a person kept: ${or(counts.kept, noLabels)}`)
   ])];
@@ -90,31 +91,40 @@ function reportBlocks(lines, { repo, szzRan, fixSignals, labels }) {
   const caught = fixes.filter(caughtBeforeRelease);
   const noLink = szzRan ? fixes.filter((line) => !caughtBeforeRelease(line) && !(line.szz?.links.length > 0)) : [];
   const skipped = szzRan ? fixes.filter((line) => line.szz === null).length : 0;
-  const strong = defects.filter((line) => line.szz.links[0].confidence >= WEAK_HISTORY.strongConfidence).length;
+  const deferredPrs = deferrals(labels);
+  const deferred = defects.filter((fix) => deferredPrs.has(fix.number));
+  // A deferral is no escaped defect, so the rule for weak history counts only the others.
+  const escaped = defects.filter((fix) => !deferredPrs.has(fix.number));
+  const strong = escaped.filter((line) => line.szz.links[0].confidence >= WEAK_HISTORY.strongConfidence).length;
 
   const blocks = [heading(1, `Escaped defects in ${repo}`)];
-  blocks.push(paragraph(summary({ prs: lines.length, fixes: fixes.length, defects: defects.length, skipped, szzRan, repo })));
+  blocks.push(paragraph(summary({ prs: lines.length, fixes: fixes.length, defects: defects.length, deferred: deferred.length, skipped, szzRan, repo })));
   blocks.push(...funnelBlocks(funnel(lines, { szzRan, labels }), labels));
 
   blocks.push(heading(2, 'How sure Exhibit is'));
-  const reasons = weakReasons({ fixes: fixes.length, defects: defects.length, strong, szzRan, fixSignals });
+  const reasons = weakReasons({ fixes: fixes.length, linked: defects.length, escaped: escaped.length, strong, szzRan, fixSignals });
   if (reasons.length > 0) {
     const lead = defects.length > 0 ? 'The history is weak, so read these links as leads, not answers.' : 'The history is weak, so Exhibit does not guess what got through.';
     blocks.push(paragraph(lead), list(reasons.map((reason) => item(reason))));
   } else {
     blocks.push(paragraph(
-      `Exhibit is fairly sure of these links. The history has ${fixes.length} fix PRs, and ${strong} of the ${defects.length} escaped defects ${strong === 1 ? 'has' : 'have'} a link that holds at least half of the fix's counted lines. ` +
+      `Exhibit is fairly sure of these links. The history has ${fixes.length} fix PRs, and ${strong} of the ${escaped.length} escaped defects ${strong === 1 ? 'has' : 'have'} a link that holds at least half of the fix's counted lines. ` +
       'SZZ is still a guess from git blame, so read the lines under each defect before you act on it.'
     ));
   }
   blocks.push(paragraph(
     `Exhibit calls the history weak when it has fewer than ${WEAK_HISTORY.minFixPrs} fix PRs, when SZZ links none of them or did not run, ` +
-    `or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
+    `when every linked defect is a deferral, or when fewer than half of the escaped defects have a link with a confidence of ${WEAK_HISTORY.strongConfidence} or more.`
   ));
 
-  if (defects.length > 0) {
-    blocks.push(heading(2, `Escaped defects (${defects.length})`));
-    for (const fix of defects) blocks.push(...defectBlocks(fix, byNumber));
+  if (escaped.length > 0) {
+    blocks.push(heading(2, `Escaped defects (${escaped.length})`));
+    for (const fix of escaped) blocks.push(...defectBlocks(fix, byNumber));
+  }
+  if (deferred.length > 0) {
+    blocks.push(heading(2, `Deferred at review (${deferred.length})`));
+    blocks.push(paragraph('For each of these, the label says review saw the bug and left it for a later ticket. That is a deferral: the review worked, and a person chose to fix it later. So it is not an escaped defect, and never a policy miss.'));
+    for (const fix of deferred) blocks.push(...defectBlocks(fix, byNumber));
   }
   if (noLink.length > 0) {
     blocks.push(heading(2, `Fix PRs with no escaped defect found (${noLink.length})`));
@@ -128,24 +138,37 @@ function reportBlocks(lines, { repo, szzRan, fixSignals, labels }) {
   return blocks;
 }
 
-function summary({ prs, fixes, defects, skipped, szzRan, repo }) {
+// The fix PRs whose label says review saw the bug and left it for a later ticket
+// (known_at_review: true). Each fix PR counts by its first line, as in the funnel.
+function deferrals(labels) {
+  const first = new Map();
+  if (labels.state === 'read') for (const label of labels.lines) if (!first.has(label.fix_pr)) first.set(label.fix_pr, label);
+  return new Set([...first.values()].filter((label) => label.known_at_review === true).map((label) => label.fix_pr));
+}
+
+function summary({ prs, fixes, defects, deferred, skipped, szzRan, repo }) {
   const read = `Exhibit read ${prs} merged PRs.`;
   if (fixes === 0) return `${read} None of them is a fix PR, so there are no escaped defects to find.`;
   const counted = `${read} ${fixes === 1 ? '1 of them is a fix PR.' : `${fixes} of them are fix PRs.`}`;
   if (!szzRan) return `${counted} SZZ did not run, because history ran outside a clone of the repo. So this report cannot show escaped defects. Run exhibit history inside a clone of ${repo}.`;
   const skip = skipped > 0 ? ` SZZ skipped ${skipped} of them.` : '';
   if (defects === 0) return `${counted} SZZ linked none of the ${fixes} fix PRs to the PR that brought the bug.${skip}`;
-  return `${counted} SZZ linked ${defects} of them to the PRs that brought their bugs. These are the escaped defects below.${skip}`;
+  const linked = `${counted} SZZ linked ${defects} of them to the PRs that brought their bugs.`;
+  if (deferred === 0) return `${linked} These are the escaped defects below.${skip}`;
+  const left = defects - deferred;
+  return `${linked} Review saw ${deferred} of them and left ${deferred === 1 ? 'it' : 'them'} for a later ticket, so ${left} ${left === 1 ? 'is an escaped defect' : 'are escaped defects'}.${skip}`;
 }
 
 // The reasons the history is weak, in plain words, or an empty list when it is not weak.
-function weakReasons({ fixes, defects, strong, szzRan, fixSignals }) {
+// `linked` counts the fix PRs with an SZZ link, and `escaped` those of them that are no deferral.
+function weakReasons({ fixes, linked, escaped, strong, szzRan, fixSignals }) {
   if (fixes === 0) return [`There are no fix PRs. Check that the fix signals match how this repo marks a fix. They are now ${joinWords(fixSignals)}.`];
   const reasons = [];
   if (fixes < WEAK_HISTORY.minFixPrs) reasons.push(`Only ${fixes} fix ${fixes === 1 ? 'PR' : 'PRs'}. Exhibit needs at least ${WEAK_HISTORY.minFixPrs} to say how often bugs get through.`);
   if (!szzRan) reasons.push('SZZ did not run, so there are no links to judge.');
-  else if (defects === 0) reasons.push('SZZ linked no fix PR to the PR that brought its bug.');
-  else if (strong * 2 < defects) reasons.push(`Only ${strong} of ${defects} escaped defects ${strong === 1 ? 'has' : 'have'} a link that holds at least half of the fix's counted lines.`);
+  else if (linked === 0) reasons.push('SZZ linked no fix PR to the PR that brought its bug.');
+  else if (escaped === 0) reasons.push('Every linked defect is a deferral, so there are no escaped defects to judge.');
+  else if (strong * 2 < escaped) reasons.push(`Only ${strong} of ${escaped} escaped defects ${strong === 1 ? 'has' : 'have'} a link that holds at least half of the fix's counted lines.`);
   return reasons;
 }
 

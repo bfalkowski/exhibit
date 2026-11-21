@@ -68,8 +68,8 @@ test('scripted answers give the expected labels file', async (t) => {
   assert.deepEqual(asked.map((a) => a.id), ['D-012', 'D-007', 'D-006']);
   assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 1, open: 1 });
   assert.deepEqual(readLabels(cwd), [
-    { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math used percent as money', category: 'arithmetic', would_have_caught: 'A test with a 10% discount on 50', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' },
-    { id: 'D-006', fix_pr: 6, introducing_prs: [1], rejected_prs: [], code: 'Tax rounded before the total', category: 'arithmetic', would_have_caught: 'A test that pins the rounding', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' }
+    { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math used percent as money', category: 'arithmetic', would_have_caught: 'A test with a 10% discount on 50', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' },
+    { id: 'D-006', fix_pr: 6, introducing_prs: [1], rejected_prs: [], code: 'Tax rounded before the total', category: 'arithmetic', would_have_caught: 'A test that pins the rounding', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' }
   ]);
   for (const line of readLabels(cwd)) assert.deepEqual(checkLabelLine(line), [], line.id);
 });
@@ -133,7 +133,7 @@ test('a code longer than 200 characters is refused', async (t) => {
 
 test('the answer limits are the lengths that the labels schema allows', () => {
   assert.deepEqual(ANSWER_LIMITS, { code: 200, category: 60, would_have_caught: 500 });
-  const line = (fields) => ({ id: 'D-004', fix_pr: 4, introducing_prs: [1], code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-01-01T00:00:00Z', ...fields });
+  const line = (fields) => ({ id: 'D-004', fix_pr: 4, introducing_prs: [1], code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-01-01T00:00:00Z', ...fields });
   for (const [field, limit] of Object.entries(ANSWER_LIMITS)) {
     assert.deepEqual(checkLabelLine(line({ [field]: 'x'.repeat(limit) })), [], field);
     assert.notDeepEqual(checkLabelLine(line({ [field]: 'x'.repeat(limit + 1) })), [], field);
@@ -157,7 +157,7 @@ test('a new line starts on its own line when the file does not end with a line b
 });
 
 test('the labels schema checks that the id matches fix_pr', () => {
-  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' };
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' };
   assert.deepEqual(checkLabelLine(line), []);
   assert.deepEqual(checkLabelLine({ ...line, id: 'D-013' }), ['/id: must be D-012, the id of fix PR 12']);
   assert.deepEqual(checkLabelLine({ ...line, labeled_by: 'robot' }), ['/labeled_by: does not match ^(person|claude_draft_confirmed|claude_draft_edited)$']);
@@ -198,7 +198,7 @@ test('a rejected PR that is not a link of the defect is refused', async (t) => {
 });
 
 test('the labels schema checks that szz_link_rejected matches rejected_prs', () => {
-  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [11], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: true, labeled_at: '2026-11-19T10:00:00.000Z' };
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [11], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: true, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' };
   assert.deepEqual(checkLabelLine(line), []);
   assert.deepEqual(checkLabelLine({ ...line, szz_link_rejected: false }), ['/szz_link_rejected: must be true, because rejected_prs is not empty']);
   assert.deepEqual(checkLabelLine({ ...line, rejected_prs: [] }), ['/szz_link_rejected: must be false, because rejected_prs is empty']);
@@ -344,7 +344,7 @@ test('with the recorded 401 reply, exhibit sends one request, and the next defec
 });
 
 test('the labels schema checks that a Claude label has its draft, and that a confirmed label matches it', () => {
-  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: DRAFT.code, category: DRAFT.category, would_have_caught: 'c', labeled_by: 'claude_draft_confirmed', claude_draft: DRAFT, szz_link_rejected: false, labeled_at: '2026-11-19T10:00:00.000Z' };
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: DRAFT.code, category: DRAFT.category, would_have_caught: 'c', labeled_by: 'claude_draft_confirmed', claude_draft: DRAFT, szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' };
   assert.deepEqual(checkLabelLine(line), []);
   const noDraft = { ...line };
   delete noDraft.claude_draft;
@@ -360,4 +360,79 @@ test('replacing the draft with the same words still gives person, because the pe
   const [line] = readLabels(cwd);
   assert.deepEqual([line.labeled_by, line.code, line.claude_draft], ['person', DRAFT.code, DRAFT]);
   assert.deepEqual(checkLabelLine(line), []);
+});
+
+// The shop history with fix PR 12 given `title`, and its SZZ links moved to the PRs in `blamed`.
+function followUpHistory({ title, blamed, body = null }) {
+  return shopText().trimEnd().split('\n').map((row) => {
+    const line = JSON.parse(row);
+    if (line.number !== 12) return row + '\n';
+    const links = line.szz.links.slice(0, blamed.length).map((link, i) => ({ ...link, pr: blamed[i] }));
+    return JSON.stringify({ ...line, title, body, szz: { ...line.szz, links } }) + '\n';
+  }).join('');
+}
+
+// An answer source that labels the first defect with `reply`, records its context, then quits.
+function firstOnly(reply) {
+  const seen = [];
+  return { seen, ask: async (defect, context) => (seen.push(context), seen.length === 1 ? { ...answer('Left for later', 'deferral', 'The review that saw it'), ...reply } : 'quit') };
+}
+
+test('a fix PR titled "Follow-ups from the review of PR 46" with an SZZ link to PR 46 proposes known_at_review true, with the sentence', async (t) => {
+  const cwd = folderWithHistory(t, followUpHistory({ title: 'Follow-ups from the review of PR 46', blamed: [46] }));
+  const { ask, seen } = firstOnly({});
+  await labelDefects({ cwd, ask, now: () => NOW });
+  assert.deepEqual(seen[0].review, { known_at_review: true, pr: 46, where: 'the fix PR title', sentence: 'Follow-ups from the review of PR 46' });
+  const [line] = readLabels(cwd);
+  assert.deepEqual([line.id, line.known_at_review], ['D-012', true]);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('the person can change the proposed true to false', async (t) => {
+  const cwd = folderWithHistory(t, followUpHistory({ title: 'Follow-ups from the review of PR 46', blamed: [46] }));
+  const { ask, seen } = firstOnly({ known_at_review: false });
+  await labelDefects({ cwd, ask, now: () => NOW });
+  assert.equal(seen[0].review.known_at_review, true);
+  const [line] = readLabels(cwd);
+  assert.equal(line.known_at_review, false);
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('a follow-up title that names PR 46, when SZZ blamed only PR 50, does not propose true', async (t) => {
+  const cwd = folderWithHistory(t, followUpHistory({ title: 'Follow-ups from the review of PR 46', blamed: [50] }));
+  const { ask, seen } = firstOnly({});
+  await labelDefects({ cwd, ask, now: () => NOW });
+  assert.deepEqual(seen[0].review, { known_at_review: null });
+  assert.equal(readLabels(cwd)[0].known_at_review, null);
+});
+
+test('a fix with no follow-up sentence proposes null, and the person can set it', async (t) => {
+  const cwd = folderWithHistory(t);
+  const { ask, seen } = firstOnly({});
+  await labelDefects({ cwd, ask, now: () => NOW });
+  assert.deepEqual(seen[0].review, { known_at_review: null });
+  assert.equal(readLabels(cwd)[0].known_at_review, null);
+  const set = folderWithHistory(t);
+  await labelDefects({ cwd: set, ask: firstOnly({ known_at_review: true }).ask, now: () => NOW });
+  assert.equal(readLabels(set)[0].known_at_review, true);
+});
+
+test('an issue that the fix PR closes counts, when the answer source can read it', async (t) => {
+  const cwd = folderWithHistory(t, followUpHistory({ title: '81: Small fixes', body: 'Closes #80.', blamed: [7, 11] }));
+  const asked = [];
+  const issues = async (numbers) => (asked.push(numbers), [{ number: 80, title: 'Follow-ups from the review of PR 7', body: null }]);
+  const { ask, seen } = firstOnly({});
+  await labelDefects({ cwd, ask, issues, now: () => NOW });
+  assert.deepEqual(asked, [[80]]);
+  assert.equal(seen[0].review.where, 'the title of issue 80 that the fix PR closes');
+  assert.equal(readLabels(cwd)[0].known_at_review, true);
+});
+
+test('every labels line needs known_at_review: true, false or null', () => {
+  const line = { id: 'D-012', fix_pr: 12, introducing_prs: [1], rejected_prs: [], code: 'a', category: 'b', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' };
+  for (const known of [true, false, null]) assert.deepEqual(checkLabelLine({ ...line, known_at_review: known }), []);
+  const missing = { ...line };
+  delete missing.known_at_review;
+  assert.deepEqual(checkLabelLine(missing), ['/: misses the field known_at_review']);
+  assert.equal(checkLabelLine({ ...line, known_at_review: 'yes' }).length, 1);
 });

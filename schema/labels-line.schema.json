@@ -4,7 +4,7 @@
   "title": "One line of .exhibit/labels.jsonl",
   "description": "One labeled escaped defect (spec section 8.4). exhibit label checks each line against this schema before it writes the line.",
   "type": "object",
-  "required": ["id", "fix_pr", "introducing_prs", "code", "category", "would_have_caught", "labeled_by", "szz_link_rejected", "labeled_at"],
+  "required": ["id", "fix_pr", "introducing_prs", "code", "category", "would_have_caught", "labeled_by", "szz_link_rejected", "known_at_review", "labeled_at"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^D-\\d{3,}$", "description": "D- and the fix PR number, with zeros in front to make at least three digits, such as D-004 for PR 4 and D-1234 for PR 1234. exhibit label also checks that it matches fix_pr." },
@@ -27,6 +27,7 @@
       }
     },
     "szz_link_rejected": { "type": "boolean", "description": "true when the person rejected at least one SZZ link of the defect. exhibit label also checks that it is true exactly when rejected_prs is not empty." },
+    "known_at_review": { "type": ["boolean", "null"], "description": "true when review saw the defect and left it for a later ticket: a deferral, not an escaped defect. false when review did not see it. null when nobody knows. exhibit label proposes true when the fix PR, or an issue it closes, says it follows up the review of a PR that SZZ blamed, and null otherwise. The person confirms or changes it." },
     "labeled_at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" }
   }
 }

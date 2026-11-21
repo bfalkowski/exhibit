@@ -192,7 +192,7 @@ test('outside a clone, the report says that SZZ did not run', () => {
     assert.ok(text.includes('SZZ did not run, because history ran outside a clone of the repo. So this report cannot show escaped defects. Run exhibit history inside a clone of fixture/shop.'), text);
     assert.ok(text.includes('The history is weak'));
     // The rule names this case, as spec 8.5 does.
-    assert.ok(text.includes('Exhibit calls the history weak when it has fewer than 10 fix PRs, when SZZ links none of them or did not run, or when fewer than half of the escaped defects have a link with a confidence of 0.5 or more.'), text);
+    assert.ok(text.includes('Exhibit calls the history weak when it has fewer than 10 fix PRs, when SZZ links none of them or did not run, when every linked defect is a deferral, or when fewer than half of the escaped defects have a link with a confidence of 0.5 or more.'), text);
     assert.deepEqual(factsIn(text).defects, []);
   }
 });
@@ -249,8 +249,8 @@ test('a revert link shows "revert" as its evidence, in place of blame lines, in 
 });
 
 // A labels line for the fix PR `fixPr`, that keeps the links in `kept` and rejects the rest.
-function labelLine(fixPr, { kept = [], rejected = [] }) {
-  return { id: `D-${String(fixPr).padStart(3, '0')}`, fix_pr: fixPr, introducing_prs: kept, rejected_prs: rejected, code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: rejected.length > 0, labeled_at: '2026-11-21T00:00:00.000Z' };
+function labelLine(fixPr, { kept = [], rejected = [], known = null }) {
+  return { id: `D-${String(fixPr).padStart(3, '0')}`, fix_pr: fixPr, introducing_prs: kept, rejected_prs: rejected, code: 'c', category: 'c', would_have_caught: 'c', labeled_by: 'person', szz_link_rejected: rejected.length > 0, known_at_review: known, labeled_at: '2026-11-21T00:00:00.000Z' };
 }
 
 // The steps of the funnel, as "name: count", in the order the report shows them.
@@ -264,7 +264,7 @@ test('the funnel counts a defect whose links were all rejected as labeled, but n
   assert.deepEqual(funnelSteps(markdownText(markdown)), [
     'Merged PRs read: 14',
     'Fix PRs: 7',
-    'Fix PRs with an SZZ link, the escaped defects: 4',
+    'Fix PRs with an SZZ link: 4',
     'Defects labeled with exhibit label: 2',
     'Defects with at least one link that a person kept: 1'
   ]);
@@ -293,7 +293,7 @@ test('outside a clone, the funnel stops at the fix PRs, because SZZ did not run'
   const labels = { state: 'read', lines: [labelLine(12, { kept: [1] })] };
   assert.deepEqual(funnel(shopLines(), { szzRan: false, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: null, labeled: null, kept: null, labels: 'read' });
   assert.deepEqual(funnelSteps(markdownText(report(shopLines(), { szzRan: false, labels }).markdown)).slice(2), [
-    'Fix PRs with an SZZ link, the escaped defects: SZZ did not run',
+    'Fix PRs with an SZZ link: SZZ did not run',
     'Defects labeled with exhibit label: SZZ did not run',
     'Defects with at least one link that a person kept: SZZ did not run'
   ]);
@@ -315,4 +315,54 @@ test('two label lines for one fix PR count it once, by its first line, so the fu
   // as in exhibit label. Here the first line rejects every link, and the second keeps one.
   const labels = { state: 'read', lines: [labelLine(7, { rejected: [2, 3] }), labelLine(7, { kept: [2], rejected: [3] })] };
   assert.deepEqual(funnel(shopLines(), { szzRan: true, labels }), { merged_prs: 14, fix_prs: 7, szz_linked: 4, labeled: 1, kept: 0, labels: 'read' });
+});
+
+test('a deferral goes in "Deferred at review", and is left out of the escaped-defect count on the first screen', () => {
+  // The shop history has 4 linked fix PRs: 14, 12, 7 and 6. Review saw the bug that PR 12 fixed,
+  // and left it for a later ticket. PR 7's label says review did not see its bug.
+  const labels = { state: 'read', lines: [labelLine(12, { kept: [1, 11], known: true }), labelLine(7, { kept: [2, 3], known: false })] };
+  const { markdown, html } = report(shopLines(), { labels });
+  const text = markdownText(markdown);
+  const firstScreen = text.slice(0, text.indexOf('How sure Exhibit is'));
+  assert.match(firstScreen, /SZZ linked 4 of them to the PRs that brought their bugs\. Review saw 1 of them and left it for a later ticket, so 3 are escaped defects\./);
+  assert.match(firstScreen, /Fix PRs with an SZZ link: 4/);
+  assert.doesNotMatch(firstScreen, /escaped defects: 4/);
+  const escaped = text.slice(text.indexOf('Escaped defects (3)'), text.indexOf('Deferred at review (1)'));
+  assert.deepEqual([...escaped.matchAll(/Fix PR (\d+): /g)].map((m) => Number(m[1])), [14, 7, 6]);
+  const deferred = text.slice(text.indexOf('Deferred at review (1)'));
+  assert.match(deferred, /review saw the bug and left it for a later ticket/);
+  assert.deepEqual([...deferred.matchAll(/^Fix PR (\d+): /gm)].map((m) => Number(m[1])), [12]);
+  assert.equal(htmlText(html).includes('Deferred at review (1)'), true);
+});
+
+test('with no deferral, the report has no "Deferred at review" group', () => {
+  const labels = { state: 'read', lines: [labelLine(12, { kept: [1] })] };
+  const text = markdownText(report(shopLines(), { labels }).markdown);
+  assert.doesNotMatch(text, /Deferred at review/);
+  assert.match(text, /Escaped defects \(4\)/);
+});
+
+test('the rule for weak history does not count a deferral', () => {
+  const strong = (number) => fixLine(number, { confidence: 0.5 });
+  const low = (number) => fixLine(number, { confidence: 0.25 });
+  const base = Array.from({ length: 8 }, (_, i) => fixLine(20 + i, { confidence: 0 }));
+  // 2 of 4 defects strong is not weak. With strong fix PR 1 deferred, 1 of the 3 escaped defects
+  // is strong, so it is weak.
+  const lines = [strong(1), strong(2), low(3), low(4), ...base];
+  assert.equal(factsIn(markdownText(report(lines).markdown)).weak, false);
+  const labels = { state: 'read', lines: [labelLine(1, { kept: [1], known: true })] };
+  const { markdown } = report(lines, { labels });
+  assert.match(markdown, /Only 1 of 3 escaped defects has a link that holds at least half of the fix's counted lines/);
+});
+
+test('when every linked defect is a deferral, the history is weak, with no "0 of the 0"', () => {
+  // 11 fix PRs, and SZZ linked only fix PR 1. Its label says review saw it.
+  const lines = [fixLine(1, { confidence: 1 }), ...Array.from({ length: 10 }, (_, i) => fixLine(20 + i, { confidence: 0 }))];
+  assert.equal(factsIn(markdownText(report(lines).markdown)).weak, false);
+  const labels = { state: 'read', lines: [labelLine(1, { kept: [1], known: true })] };
+  const { markdown } = report(lines, { labels });
+  assert.equal(factsIn(markdownText(markdown)).weak, true);
+  assert.match(markdown, /Every linked defect is a deferral, so there are no escaped defects to judge\./);
+  assert.doesNotMatch(markdown, /0 of the 0/);
+  assert.match(markdown, /Exhibit calls the history weak when .*when every linked defect is a deferral, or when/);
 });
