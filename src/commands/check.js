@@ -9,7 +9,7 @@ import { MUTATION_DIR } from '../mutation.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
-import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe, stopAllGroups } from '../probe.js';
+import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe, stopAllGroups, stopped } from '../probe.js';
 import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
 
@@ -48,6 +48,8 @@ export async function check(argv, { env, cwd, fetch, stdout, stderr = process.st
   try {
     return await runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow });
   } catch (error) {
+    // A stop came (spec 9.6). The signal handler ends the run, so write no summary for it.
+    if (stopped()) return waitForever();
     const message = describeError(error);
     await mkdir(join(cwd, '.exhibit'), { recursive: true })
       .then(() => writeFile(join(cwd, OUTPUT.summary), renderErrorSummary(message, { shadow })))
@@ -101,6 +103,9 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     stopOnSignal.off();
     await headWorktree.remove();
   }
+  // A stop can come after the last probe has ended, while the other collectors still finish. The
+  // signal handler then removes the head worktree and exits, so this run writes nothing (spec 9.6).
+  if (stopped()) return waitForever();
   const problems = checkExhibit(exhibit);
   if (problems.length > 0) throw new ToolError(`the exhibit does not fit its schema, so ${OUTPUT.evidence} was not written:\n  ${problems.join('\n  ')}\nReport this as an Exhibit issue.`);
 
@@ -140,6 +145,11 @@ function onStopSignal(cleanUp) {
   const signals = ['SIGINT', 'SIGTERM'];
   for (const signal of signals) process.on(signal, handler);
   return { off: () => signals.forEach((signal) => process.off(signal, handler)) };
+}
+
+// A promise that never settles. After a stop, the run waits on it, and the signal handler exits.
+function waitForever() {
+  return new Promise(() => {});
 }
 
 // The collector for probe requirements. Each probe runs in the head worktree, made clean again

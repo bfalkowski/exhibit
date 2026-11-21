@@ -545,6 +545,31 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   });
 }
 
+// A stop can come after the last probe has ended, while the collectors still finish. The handler
+// is then still removing the head worktree, and the run must not write an exhibit (spec 9.6). A
+// real signal hits this case only by chance, so here a collector calls stopAllGroups, as the
+// handler does, and the run goes on. stopAllGroups sets state that lasts for the whole process,
+// so the run is in a process of its own, which exits after 1 second.
+test('after a stop, check writes no evidence.json or summary.md, even when the collectors finish', (t) => {
+  const fixture = buildRepo(t);
+  const checkModule = fileURLToPath(new URL('../src/commands/check.js', import.meta.url));
+  const probeModule = fileURLToPath(new URL('../src/probe.js', import.meta.url));
+  const script = `
+    import { check } from ${JSON.stringify(checkModule)};
+    import { stopAllGroups } from ${JSON.stringify(probeModule)};
+    const collectors = {
+      'tests-before-after': async () => { stopAllGroups(); return { status: 'met' }; },
+      mutation: async () => ({ status: 'met' })
+    };
+    check(['--base', 'start', '--head', 'fix/src'], { env: {}, cwd: ${JSON.stringify(fixture.repo)}, stdout: process.stdout, collectors });
+    setTimeout(() => process.exit(0), 1000);
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
+  assert.equal(out, '');
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+  assert.equal(existsSync(join(fixture.repo, '.exhibit', 'summary.md')), false);
+});
+
 test('each probe starts in a clean head worktree, so it cannot see the files of the probe before it', (t) => {
   const fixture = buildRepo(t);
   withProbes(fixture, [

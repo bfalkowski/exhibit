@@ -83,6 +83,11 @@ export function stopAllGroups() {
   for (const killGroup of liveGroups) killGroup();
 }
 
+// True after stopAllGroups, so the caller can stop too, and write nothing for a stopped run.
+export function stopped() {
+  return stopping;
+}
+
 // Runs `command` with sh in a new process group, and waits until it exits or the time runs out.
 // Then it kills the whole group. Gives back { code, signal, timedOut }. With `args`, `command` is
 // a program that runs with those arguments, and no shell. `env` is the env of the command, and the
