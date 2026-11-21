@@ -66,7 +66,7 @@ test('scripted answers give the expected labels file', async (t) => {
 
   // The fixture's escaped defects, newest fix first, as the report lists them.
   assert.deepEqual(asked.map((a) => a.id), ['D-012', 'D-007', 'D-006']);
-  assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 1, open: 1 });
+  assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 1, open: 1, relinked: 0, new_links: 0 });
   assert.deepEqual(readLabels(cwd), [
     { id: 'D-012', fix_pr: 12, introducing_prs: [1, 11], rejected_prs: [], code: 'Discount math used percent as money', category: 'arithmetic', would_have_caught: 'A test with a 10% discount on 50', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' },
     { id: 'D-006', fix_pr: 6, introducing_prs: [1], rejected_prs: [], code: 'Tax rounded before the total', category: 'arithmetic', would_have_caught: 'A test that pins the rounding', labeled_by: 'person', szz_link_rejected: false, known_at_review: null, labeled_at: '2026-11-19T10:00:00.000Z' }
@@ -99,11 +99,11 @@ test('quitting after two of five defects leaves two lines, and the next run show
   const first = scripted([answer('one', 'cat', 'test one'), answer('two', 'cat', 'test two'), 'quit']);
   const summary = await labelDefects({ cwd, ask: first.ask, now: () => NOW });
   assert.deepEqual(first.asked.map((a) => a.id), ['D-105', 'D-104', 'D-103']);
-  assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 0, open: 3 });
+  assert.deepEqual(summary, { shown: 3, labeled: 2, skipped: 0, open: 3, relinked: 0, new_links: 0 });
   assert.deepEqual(readLabels(cwd).map((line) => line.id), ['D-105', 'D-104']);
 
   const second = scripted(['skip', 'skip', 'skip']);
-  assert.deepEqual(await labelDefects({ cwd, ask: second.ask, now: () => NOW }), { shown: 3, labeled: 0, skipped: 3, open: 3 });
+  assert.deepEqual(await labelDefects({ cwd, ask: second.ask, now: () => NOW }), { shown: 3, labeled: 0, skipped: 3, open: 3, relinked: 0, new_links: 0 });
   assert.deepEqual(second.asked.map((a) => a.id), ['D-103', 'D-102', 'D-101']);
 });
 
@@ -111,7 +111,7 @@ test('with every defect labeled, label asks nothing', async (t) => {
   const cwd = folderWithHistory(t);
   await labelDefects({ cwd, ask: scripted([answer('a', 'x', 'b'), answer('c', 'x', 'd'), answer('e', 'x', 'f')]).ask, now: () => NOW });
   const again = scripted([]);
-  assert.deepEqual(await labelDefects({ cwd, ask: again.ask, now: () => NOW }), { shown: 0, labeled: 0, skipped: 0, open: 0 });
+  assert.deepEqual(await labelDefects({ cwd, ask: again.ask, now: () => NOW }), { shown: 0, labeled: 0, skipped: 0, open: 0, relinked: 0, new_links: 0 });
 });
 
 test('a line that fails the labels schema is refused, and the file keeps its earlier lines', async (t) => {
@@ -185,7 +185,7 @@ test('rejecting one of two links leaves one introducing PR and records the other
 test('rejecting every link still saves the defect, with no introducing PR', async (t) => {
   const cwd = folderWithHistory(t);
   const { ask } = scripted([{ ...answer('Discount math used percent as money', 'arithmetic', 'A test with a 10% discount on 50'), rejected_prs: [1, 11] }, 'quit']);
-  assert.deepEqual(await labelDefects({ cwd, ask, now: () => NOW }), { shown: 2, labeled: 1, skipped: 0, open: 2 });
+  assert.deepEqual(await labelDefects({ cwd, ask, now: () => NOW }), { shown: 2, labeled: 1, skipped: 0, open: 2, relinked: 0, new_links: 0 });
   const [line] = readLabels(cwd);
   assert.deepEqual([line.id, line.introducing_prs, line.rejected_prs, line.szz_link_rejected], ['D-012', [], [1, 11], true]);
   assert.deepEqual(checkLabelLine(line), []);
@@ -435,4 +435,142 @@ test('every labels line needs known_at_review: true, false or null', () => {
   delete missing.known_at_review;
   assert.deepEqual(checkLabelLine(missing), ['/: misses the field known_at_review']);
   assert.equal(checkLabelLine({ ...line, known_at_review: 'yes' }).length, 1);
+});
+
+// A labels line for the shop fixture, as exhibit label writes it, with `introducing` kept and
+// `rejected` rejected.
+const shopLabel = (fixPr, introducing, rejected = []) => ({ id: defectId(fixPr), fix_pr: fixPr, introducing_prs: introducing, rejected_prs: rejected, code: `Code ${fixPr}`, category: 'arithmetic', would_have_caught: 'A test', labeled_by: 'person', szz_link_rejected: rejected.length > 0, known_at_review: null, labeled_at: '2026-11-01T10:00:00.000Z' });
+const writeLabels = (cwd, lines) => writeFileSync(labelsPath(cwd), lines.map((line) => JSON.stringify(line) + '\n').join(''));
+
+// An answer source for the new links of a labeled defect, that gives `answers` in order.
+function scriptedLinks(answers) {
+  const asked = [];
+  const askLinks = async (defect, context) => {
+    asked.push({ id: defect.id, links: defect.links.map((link) => link.pr), label: context.label, text: context.text, position: context.position, count: context.count });
+    if (asked.length > answers.length) throw new Error(`asked about the new links of ${defect.id}, but the script has no answer left`);
+    return answers[asked.length - 1];
+  };
+  return { askLinks, asked };
+}
+
+test('a labeled defect with a new SZZ link is shown again with only that link, and the answer goes into the same line', async (t) => {
+  const cwd = folderWithHistory(t);
+  // D-012 was labeled when SZZ linked it only to PR 1. SZZ now links it to PR 11 too.
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+  const before = readLabels(cwd);
+  const { ask, asked: askedOpen } = scripted([]);
+  const { askLinks, asked } = scriptedLinks([{ rejected_prs: [] }]);
+
+  const summary = await labelDefects({ cwd, ask, askLinks, now: () => NOW });
+
+  assert.deepEqual(askedOpen, []);
+  assert.deepEqual(asked.map((a) => [a.id, a.links, a.position, a.count]), [['D-012', [11], 1, 1]]);
+  assert.deepEqual(asked[0].label, before[0]);
+  // The text shows only the new link's evidence.
+  assert.match(asked[0].text, /PR 11/);
+  assert.doesNotMatch(asked[0].text, /PR 1\b/);
+  assert.deepEqual(summary, { shown: 1, labeled: 0, skipped: 0, open: 0, relinked: 1, new_links: 0 });
+  // The same line, in the same place, with the new link kept. The other fields stay.
+  assert.deepEqual(readLabels(cwd), [{ ...before[0], introducing_prs: [1, 11] }, before[1], before[2]]);
+});
+
+test('a rejected new link goes to rejected_prs, and szz_link_rejected becomes true', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+  const before = readLabels(cwd);
+  const { askLinks } = scriptedLinks([{ rejected_prs: [11] }]);
+
+  await labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW });
+
+  const [line] = readLabels(cwd);
+  assert.deepEqual(line, { ...before[0], rejected_prs: [11], szz_link_rejected: true });
+  assert.deepEqual(checkLabelLine(line), []);
+});
+
+test('a link that the label kept or rejected is not new, and a kept PR that SZZ no longer links stays', async (t) => {
+  const cwd = folderWithHistory(t);
+  // D-012 rejected PR 11 and kept PR 1. D-007 kept PR 9, which SZZ no longer links, and has no
+  // answer for PRs 2 and 3. D-006 was written before rejected_prs existed.
+  const old = shopLabel(6, [1]);
+  delete old.rejected_prs;
+  writeLabels(cwd, [shopLabel(12, [1], [11]), shopLabel(7, [9]), old]);
+  const before = readLabels(cwd);
+  const { askLinks, asked } = scriptedLinks([{ rejected_prs: [3] }]);
+
+  const summary = await labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW });
+
+  assert.deepEqual(asked.map((a) => [a.id, a.links]), [['D-007', [2, 3]]]);
+  assert.equal(summary.relinked, 1);
+  assert.deepEqual(readLabels(cwd), [before[0], { ...before[1], introducing_prs: [9, 2], rejected_prs: [3], szz_link_rejected: true }, before[2]]);
+});
+
+test('defects with no line come first, then the labeled defects with new links, and q stops both', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1])]);
+  const { ask, asked: askedOpen } = scripted([answer('A code', 'arithmetic', 'A test'), 'quit']);
+  const { askLinks, asked } = scriptedLinks([]);
+
+  const summary = await labelDefects({ cwd, ask, askLinks, now: () => NOW });
+
+  assert.deepEqual(askedOpen.map((a) => a.id), ['D-007', 'D-006']);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(summary, { shown: 2, labeled: 1, skipped: 0, open: 1, relinked: 0, new_links: 1 });
+  assert.deepEqual(readLabels(cwd).map((line) => line.id), ['D-012', 'D-007']);
+});
+
+test('a skip or a quit at a new link leaves the line as it was, and the next run asks again', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, []), shopLabel(6, [1])]);
+  const text = readFileSync(labelsPath(cwd), 'utf8');
+
+  const first = await labelDefects({ cwd, ask: scripted([]).ask, askLinks: scriptedLinks(['skip', 'quit']).askLinks, now: () => NOW });
+  assert.deepEqual(first, { shown: 2, labeled: 0, skipped: 0, open: 0, relinked: 0, new_links: 2 });
+  assert.equal(readFileSync(labelsPath(cwd), 'utf8'), text);
+
+  const { askLinks, asked } = scriptedLinks(['quit']);
+  await labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW });
+  assert.deepEqual(asked.map((a) => a.id), ['D-012']);
+});
+
+test('without an answer source for new links, the labeled defects are only counted', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+  const summary = await labelDefects({ cwd, ask: scripted([]).ask, now: () => NOW });
+  assert.deepEqual(summary, { shown: 0, labeled: 0, skipped: 0, open: 0, relinked: 0, new_links: 1 });
+});
+
+test('only the first line of a defect gets the new links, as only the first line counts', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1]), { ...shopLabel(12, [1, 11]), code: 'A second line' }]);
+  const before = readLabels(cwd);
+  const { askLinks, asked } = scriptedLinks([{ rejected_prs: [] }]);
+
+  await labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW });
+
+  assert.deepEqual(asked.map((a) => [a.id, a.links]), [['D-012', [11]]]);
+  assert.deepEqual(readLabels(cwd), [{ ...before[0], introducing_prs: [1, 11] }, before[1], before[2], before[3]]);
+});
+
+test('when the line changed while the person answered, the answer is not written and the change stays', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+  let edited;
+  const askLinks = async () => {
+    // Someone edits the line by hand while the question is on screen.
+    writeLabels(cwd, [{ ...shopLabel(12, [1]), code: 'Edited by hand' }, shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+    edited = readFileSync(labelsPath(cwd), 'utf8');
+    return { rejected_prs: [] };
+  };
+
+  await assert.rejects(labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW }), (error) => error instanceof ToolError && /D-012 .*changed/.test(error.message));
+  assert.equal(readFileSync(labelsPath(cwd), 'utf8'), edited);
+});
+
+test('a new link answer that rejects a PR that is not a new link is refused', async (t) => {
+  const cwd = folderWithHistory(t);
+  writeLabels(cwd, [shopLabel(12, [1]), shopLabel(7, [2, 3]), shopLabel(6, [1])]);
+  const text = readFileSync(labelsPath(cwd), 'utf8');
+  const { askLinks } = scriptedLinks([{ rejected_prs: [1] }]);
+  await assert.rejects(labelDefects({ cwd, ask: scripted([]).ask, askLinks, now: () => NOW }), (error) => error instanceof ToolError && /PR 1 is not a new link of D-012/.test(error.message));
+  assert.equal(readFileSync(labelsPath(cwd), 'utf8'), text);
 });

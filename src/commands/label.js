@@ -27,7 +27,8 @@ function plural(n, word, words = `${word}s`) {
 // Shows each escaped defect in .exhibit/history.jsonl that has no label yet, with its SZZ
 // evidence. The person keeps or rejects each SZZ link, then gives a code, a category and the
 // evidence that would have caught it. Each answer goes to .exhibit/labels.jsonl at once (spec
-// 8.4). With --json, the defects and the questions go to stderr, and stdout gets only the summary
+// 8.4). Then it shows each labeled defect that SZZ now links to a PR its line neither keeps nor
+// rejects, and asks only to keep or reject each new link. With --json, the defects and the questions go to stderr, and stdout gets only the summary
 // at the end. With --claude, Claude drafts a code and a category for each defect first (spec 9.11),
 // with ANTHROPIC_API_KEY and the model in EXHIBIT_CLAUDE_MODEL. With GITHUB_TOKEN, it reads the
 // issues that each fix PR closes, so a follow-up ticket's words count when it proposes
@@ -54,7 +55,7 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
   } else {
     const keyboard = createKeyboard({ input: stdin, output: screen });
     try {
-      summary = await labelDefects({ cwd, ask: keyboard.ask, draft, issues, now });
+      summary = await labelDefects({ cwd, ask: keyboard.ask, askLinks: keyboard.askLinks, draft, issues, now });
     } finally {
       keyboard.close();
     }
@@ -64,14 +65,25 @@ export async function label(argv, { cwd, env = {}, fetch, stdin, stdout, stderr,
     stdout.write(JSON.stringify({ ...summary, output: LABELS }) + '\n');
     return;
   }
+  const links = newLinksText(summary, options.review);
   if (summary.shown === 0) {
-    stdout.write(`Every escaped defect has a code already. The labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+    stdout.write(`Every escaped defect has a code already. ${links}The labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
     return;
   }
   const left = summary.open === 0
     ? 'Every escaped defect has a code now.'
     : `${summary.open} still ${plural(summary.open, 'has', 'have')} no code. Run exhibit label again to label ${plural(summary.open, 'it', 'them')}.`;
-  stdout.write(`\nLabeled ${summary.labeled} escaped ${plural(summary.labeled, 'defect')}. Skipped ${summary.skipped}. ${left}\nThe labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+  const labeled = summary.labeled > 0 || summary.skipped > 0 || summary.open > 0 ? `Labeled ${summary.labeled} escaped ${plural(summary.labeled, 'defect')}. Skipped ${summary.skipped}. ${left}\n` : '';
+  stdout.write(`\n${labeled}${links}The labels are in ${LABELS}.\n${draftsText(summary.drafts)}`);
+}
+
+// What the end of the run says about labeled defects with new SZZ links (spec 8.4), or ''. The
+// review page does not ask about them, so with --review it says to run exhibit label without it.
+function newLinksText({ relinked, new_links: left }, review) {
+  const answered = relinked > 0 ? `Answered the new links of ${relinked} labeled ${plural(relinked, 'defect')}. ` : '';
+  if (left === 0) return relinked > 0 ? `${answered}Every labeled defect has an answer for each SZZ link now.\n` : '';
+  if (review) return `${left} labeled ${plural(left, 'defect has', 'defects have')} new SZZ links that nobody kept or rejected yet. Run exhibit label without --review to answer them.\n`;
+  return `${answered}${left} labeled ${plural(left, 'defect')} still ${plural(left, 'has', 'have')} new SZZ links. Run exhibit label again to answer them.\n`;
 }
 
 // Runs the review page until the person presses Finish, or SIGINT comes. Returns the summary in
@@ -290,6 +302,29 @@ function createKeyboard({ input, output }) {
     return /^\d+$/.test(picked) ? categories[Number(picked) - 1] : picked;
   }
 
+  // Asks about the new SZZ links of a defect that has a line already (spec 8.4): only k, r or s for
+  // each new link. Returns { rejected_prs }, SKIP or QUIT.
+  let introducedLinks = false;
+  async function askLinks(defect, { text, label, position, count }) {
+    if (!introducedLinks) {
+      output.write(`\n${count} labeled ${plural(count, 'defect has', 'defects have')} new SZZ links that nobody kept or rejected yet. For each new link, keep it or reject it. The rest of the label stays as it is.\n`);
+      introducedLinks = true;
+    }
+    const prs = (numbers) => `${plural(numbers.length, 'PR')} ${numbers.join(', ')}`;
+    const kept = label.introducing_prs.length > 0 ? `Its label keeps ${prs(label.introducing_prs)}` : 'Its label keeps no PR';
+    const rejected = (label.rejected_prs ?? []).length > 0 ? ` and rejects ${prs(label.rejected_prs)}` : '';
+    output.write(`\n${defect.id}, labeled as "${label.code}", ${position} of ${count} with new links\n${text}\n${kept}${rejected}. SZZ now links it to ${prs(defect.introducing_prs)} too.\n`);
+    const rejectedNow = [];
+    for (const link of defect.links) {
+      const choice = await keepOrReject(link);
+      if (choice === null) return QUIT;
+      if (choice === 's') return SKIP;
+      if (choice === 'r') rejectedNow.push(link.pr);
+    }
+    output.write(`Saved the new links of ${defect.id}.\n`);
+    return { rejected_prs: rejectedNow };
+  }
+
   // Returns k to keep the link, r to reject it, s to skip the defect, or null to quit.
   async function keepOrReject(link) {
     for (;;) {
@@ -302,7 +337,7 @@ function createKeyboard({ input, output }) {
     }
   }
 
-  return { ask, close: () => reader.close() };
+  return { ask, askLinks, close: () => reader.close() };
 }
 
 // The message for an answer longer than `field` may be in the labels schema, or null. It counts

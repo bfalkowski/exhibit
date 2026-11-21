@@ -87,7 +87,7 @@ test('Finish on the page ends the server\'s run with the summary', async (t) => 
   await post(`${server.url}api/answer`, { id: 'D-012', ...ANSWER });
   const reply = await post(`${server.url}api/finish`, {});
   assert.equal(reply.status, 200);
-  assert.deepEqual((await reply.json()).run, { shown: 1, labeled: 1, skipped: 0, open: 2 });
+  assert.deepEqual((await reply.json()).run, { shown: 1, labeled: 1, skipped: 0, open: 2, relinked: 0, new_links: 0 });
   await server.finished;
 });
 
@@ -117,7 +117,7 @@ test('exhibit label --review opens the page, writes what the page sends, and pri
   await post(`${url}api/finish`, {});
   const code = await new Promise((resolve) => child.on('close', resolve));
   assert.equal(code, 0, stderr);
-  assert.deepEqual(JSON.parse(stdout), { shown: 3, labeled: 1, skipped: 1, open: 2, output: '.exhibit/labels.jsonl' });
+  assert.deepEqual(JSON.parse(stdout), { shown: 3, labeled: 1, skipped: 1, open: 2, relinked: 0, new_links: 0, output: '.exhibit/labels.jsonl' });
   const lines = readLabels(cwd);
   assert.equal(lines.length, 1);
   assert.deepEqual(checkLabelLine(lines[0]), []);
@@ -138,7 +138,7 @@ test('Ctrl+C stops the page and prints the summary; the browser opener gets the 
   signals.emit('SIGINT');
   await run;
   // One defect was shown and labeled, as the terminal flow would count a quit after one label.
-  assert.deepEqual(JSON.parse(out), { shown: 1, labeled: 1, skipped: 0, open: 2, output: '.exhibit/labels.jsonl' });
+  assert.deepEqual(JSON.parse(out), { shown: 1, labeled: 1, skipped: 0, open: 2, relinked: 0, new_links: 0, output: '.exhibit/labels.jsonl' });
   assert.match(err, /review page/);
   // The server is closed.
   await assert.rejects(fetch(`${opened[0]}api/state`));
@@ -165,5 +165,8 @@ test('--review with every defect labeled starts no page, and --no-open needs --r
   await label(['--review'], { cwd, env: {}, stdout: { write: (text) => { out += text; } }, signals: new EventEmitter(), openBrowser: (url) => opened.push(url) });
   assert.deepEqual(opened, []);
   assert.match(out, /^Every escaped defect has a code already/);
+  // Those lines keep and reject no link, so each SZZ link is new. The page does not ask about new
+  // links, so it says where to answer them.
+  assert.match(out, /3 labeled defects have new SZZ links that nobody kept or rejected yet\. Run exhibit label without --review to answer them\./);
   await assert.rejects(label(['--no-open'], { cwd, env: {}, stdout: { write() {} } }), /--no-open works only with --review/);
 });
