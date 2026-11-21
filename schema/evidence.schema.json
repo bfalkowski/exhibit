@@ -30,6 +30,12 @@
           "minLength": 1,
           "description": "The JUnit XML file that the test command writes."
         },
+        "test_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "description": "The time limit for one run of the test command (spec 9.3), at most 86400 (one day). A run that takes longer is stopped, with every process it started, and the requirement is error. Absent means 1800."
+        },
         "fix_signals": {
           "type": [
             "array",

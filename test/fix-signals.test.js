@@ -84,6 +84,26 @@ test('title_after_key: a word shaped like a key is skipped as a key, so "FIX-12:
   }
 });
 
+test('title_after_key: skips a bare key followed by a period and a space, as Apache projects write it', () => {
+  const signals = ['title_after_key:fix'];
+  for (const title of ['ZOOKEEPER-123. Fix the crash', 'HADOOP-19000.  fix the parser', 'T-170. T-171: Fix', '#79. Fix the crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), { fix: true, fix_signal: 'title_after_key:fix' }, title);
+  }
+  for (const title of ['ZOOKEEPER-5076. Upgrade JDK to 17 for the Owasp build', 'T-170. Add prefix fixer']) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), notFix, title);
+  }
+});
+
+test('title_after_key: a period with no space after it keeps the key, so "T-170.Fix" is not a fix', () => {
+  for (const title of ['T-170.Fix the crash', 'T-170.fix', '#79.Fix the crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_key:fix']), notFix, title);
+  }
+});
+
+test('title_after_key: a word shaped like a key after a real key is skipped too, so "T-170: fix-12: crash" is not a fix', () => {
+  assert.deepEqual(classifyFix(pr({ title: 'T-170: fix-12: crash' }), ['title_after_key:fix']), notFix);
+});
+
 test('branch: matches a branch that starts with the prefix, in any case', () => {
   const signals = ['branch:fix/'];
   assert.deepEqual(classifyFix(pr({ branch: 'fix/crash' }), signals), { fix: true, fix_signal: 'branch:fix/' });

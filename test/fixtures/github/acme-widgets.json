@@ -1,5 +1,5 @@
 {
-  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null}": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null,\"first\":50}": {
     "status": 200,
     "headers": {},
     "body": {
@@ -338,7 +338,7 @@
       }
     }
   },
-  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"pulls-1\"}": {
+  "graphql MergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"pulls-1\",\"first\":50}": {
     "status": 200,
     "headers": {},
     "body": {
@@ -708,7 +708,7 @@
       }
     }
   },
-  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null}": {
+  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":null,\"first\":50}": {
     "status": 200,
     "headers": {},
     "body": {
@@ -1047,7 +1047,7 @@
       }
     }
   },
-  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"recent-1\"}": {
+  "graphql RecentMergedPulls {\"owner\":\"acme\",\"name\":\"widgets\",\"after\":\"recent-1\",\"first\":50}": {
     "status": 200,
     "headers": {},
     "body": {

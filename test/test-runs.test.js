@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -79,7 +79,15 @@ function buildRepo(t) {
   git('checkout', '-q', '-b', 'flaky', 'start');
   commit({ 'test/flaky.test.js': FLAKY_TEST }, 'flaky');
   git('checkout', '-q', 'main');
-  return { repo, home, git };
+  // Commits `text` as the policy on top of start, and moves the tag start there, because exhibit
+  // check reads the policy from the base commit (spec 8.1). The branches keep their changed files.
+  const setBasePolicy = (text) => {
+    git('checkout', '-q', '--detach', 'start');
+    commit({ 'evidence.yml': text }, 'base policy');
+    git('tag', '-f', 'start');
+    git('checkout', '-q', 'main');
+  };
+  return { repo, home, git, setBasePolicy };
 }
 
 async function runCheck(repo, head) {
@@ -133,7 +141,7 @@ test('a test that fails once and then passes is flaky, and does not fail the req
 
 test('a test command that writes no JUnit file gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, '.exhibit/elsewhere.xml'));
+  fixture.setBasePolicy(policy(NODE_TESTS, '.exhibit/elsewhere.xml'));
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
   assert.match(gap.how_to_fix, /wrote no JUnit file at \.exhibit\/elsewhere\.xml/);
@@ -142,9 +150,72 @@ test('a test command that writes no JUnit file gives error, and verdict error', 
   assertNoWorktreeLeft(fixture);
 });
 
+test('each run of the test command writes its output to a log in .exhibit/tests', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy(`echo "out from $(git rev-parse --short HEAD)"; echo "err line" >&2; ${NODE_TESTS}`));
+  const sha = (ref) => fixture.git('rev-parse', '--short', ref).trim();
+  const logs = join(fixture.repo, '.exhibit', 'tests');
+  // A log from an earlier check that this run does not write must not stay behind.
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(logs, 'base-again.log'), 'old');
+  const { requirement } = await runCheck(fixture.repo, 'broken');
+  assert.equal(requirement.status, 'failed');
+  // A test fails on the head, so the head runs twice. The base passes, so it runs once.
+  assert.equal(readFileSync(join(logs, 'base-first.log'), 'utf8').split('\n').slice(0, 2).join('\n'), `out from ${sha('start')}\nerr line`);
+  assert.equal(existsSync(join(logs, 'base-again.log')), false);
+  for (const run of ['first', 'again']) {
+    assert.equal(readFileSync(join(logs, `head-${run}.log`), 'utf8').split('\n').slice(0, 2).join('\n'), `out from ${sha('broken')}\nerr line`);
+  }
+});
+
+test('the gap of a test command that fails names the log with its output', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy('echo "why it broke"; exit 3'));
+  const { requirement, gap } = await runCheck(fixture.repo, 'good');
+  assert.equal(requirement.status, 'error');
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), 'utf8'), 'why it broke\n');
+});
+
+test('the gap of a second run that fails names the log of that run', async (t) => {
+  const fixture = buildRepo(t);
+  // A test fails on the head, so the head runs again. The second run finds the mark of the first
+  // one, and exits with no JUnit file.
+  fixture.setBasePolicy(policy(`if [ -f .exhibit/ran ]; then echo "second run broke"; exit 3; fi; touch .exhibit/ran; ${NODE_TESTS}`));
+  const { requirement, gap } = await runCheck(fixture.repo, 'broken');
+  assert.equal(requirement.status, 'error');
+  assert.match(gap.how_to_fix, /on the head \(exit code 3\).*Read its output in \.exhibit\/tests\/head-again\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'head-again.log'), 'utf8'), 'second run broke\n');
+});
+
+test('the run of the base with the PR\'s test files writes its own log, and its gap names it', async (t) => {
+  const fixture = buildRepo(t);
+  // Only the base with the PR's test files has changes that git has staged: Exhibit checks out
+  // the PR's test files there. So only that run fails.
+  const command = `if ! git diff --cached --quiet; then echo "base with the PR tests"; exit 4; fi; ${NODE_TESTS}`;
+  fixture.setBasePolicy(policy(command).replace('    - tests-before-after\n', '    - tests-before-after\n    - failing-before\n'));
+  const { evidence } = await runCheck(fixture.repo, 'flaky');
+  const gap = evidence.gaps.find((item) => item.type === 'failing-before');
+  assert.equal(gap.status, 'error');
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-pr-tests-first\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-pr-tests-first.log'), 'utf8'), 'base with the PR tests\n');
+});
+
+test('a log that Exhibit cannot open is thrown as it is, not read as a command the shell could not find', async (t) => {
+  const fixture = buildRepo(t);
+  // A folder in the place of the log, so opening it to write fails.
+  mkdirSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), { recursive: true });
+  const sha = (ref) => fixture.git('rev-parse', ref).trim();
+  await assert.rejects(
+    runTestsOnBaseAndHead({ cwd: fixture.repo, base: sha('start'), head: sha('good'), settings: { test_command: NODE_TESTS, test_results: '.exhibit/junit.xml' } }),
+    (error) => error.code === 'EISDIR' && error.name !== 'TestRunError'
+  );
+  assertNoWorktreeLeft(fixture);
+});
+
 test('a test command that is not found gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), policy('exhibit-no-such-test-command --run'));
+  fixture.setBasePolicy(policy('exhibit-no-such-test-command --run'));
   const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'error');
   assert.match(gap.how_to_fix, /could not run on the base: the shell could not find it \(exit code 127\)/);
@@ -153,9 +224,99 @@ test('a test command that is not found gives error, and verdict error', async (t
   assertNoWorktreeLeft(fixture);
 });
 
+// Adds the branch hang, with a test that never ends, and sets the base policy's time limit to
+// `seconds`. node --test runs each test file in a child process. The hanging test writes the pid
+// of that child to the file that this gives back, so a test can see that Exhibit stopped the
+// children too, not only the shell.
+function addHangBranch(fixture, seconds) {
+  const pidFile = join(dirname(fixture.repo), 'hang.pid');
+  const HANG_TEST = `import { test } from 'node:test';
+import { writeFileSync } from 'node:fs';
+test('never ends', () => new Promise(() => {
+  writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+  setInterval(() => {}, 1000);
+}));
+`;
+  fixture.git('checkout', '-q', '-b', 'hang', 'start');
+  writeFileSync(join(fixture.repo, 'test', 'hang.test.js'), HANG_TEST);
+  fixture.git('add', 'test/hang.test.js');
+  fixture.git('commit', '-q', '-m', 'hang');
+  fixture.git('checkout', '-q', 'main');
+  fixture.setBasePolicy(policy().replace('settings:\n', `settings:\n  test_timeout_seconds: ${seconds}\n`));
+  return pidFile;
+}
+
+// Waits until `check` gives true, for at most `ms` milliseconds.
+async function waitFor(check, ms, what) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) assert.fail(`waited ${ms} ms for ${what}`);
+    await new Promise((done) => setTimeout(done, 50));
+  }
+}
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+};
+
+test('a test that never ends hits the time limit: Exhibit stops it and its children, gives error, and removes the worktrees', async (t) => {
+  const fixture = buildRepo(t);
+  const pidFile = addHangBranch(fixture, 5);
+
+  const started = Date.now();
+  const { code, evidence, requirement, gap } = await runCheck(fixture.repo, 'hang');
+  assert.ok(Date.now() - started < 60_000, 'exhibit check stopped soon after the time limit');
+  assert.equal(requirement.status, 'error');
+  assert.match(requirement.details.message, /ran past the time limit of 5 seconds on the head/);
+  assert.match(gap.how_to_fix, /ran past the time limit of 5 seconds \(settings\.test_timeout_seconds\) on the head/);
+  assert.match(gap.how_to_fix, /raise settings\.test_timeout_seconds in evidence\.yml/);
+  assert.equal(evidence.verdict, 'error');
+  assert.equal(code, 2);
+  assertNoWorktreeLeft(fixture);
+
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, `the test process ${pid} still runs`);
+});
+
+// A terminal runs exhibit check in a process group of its own. Ctrl-C sends SIGINT to that
+// group, and closing the terminal sends SIGHUP. The test command runs in a group of its own, so
+// it does not get those signals, and Exhibit must stop it itself.
+for (const [why, signal] of [['Ctrl-C', 'SIGINT'], ['kill', 'SIGTERM'], ['closing the terminal', 'SIGHUP']]) {
+  test(`${why} (${signal}) on exhibit check stops the test command and its children too`, async (t) => {
+    const fixture = buildRepo(t);
+    const pidFile = addHangBranch(fixture, 600);
+    const bin = new URL('../bin/exhibit.js', import.meta.url).pathname;
+    // Exhibit ends by the signal before it removes its worktrees, so the temp folder is the
+    // fixture's folder, which the test removes.
+    const env = gitEnv(fixture.home, { TMPDIR: dirname(fixture.repo) });
+    const exhibit = spawn(process.execPath, [bin, 'check', '--base', 'start', '--head', 'hang'], { cwd: fixture.repo, env, detached: true, stdio: 'ignore' });
+    const exited = new Promise((done) => exhibit.once('exit', (code, signal) => done({ code, signal })));
+    t.after(() => {
+      if (exhibit.exitCode === null && exhibit.signalCode === null) process.kill(-exhibit.pid, 'SIGKILL');
+    });
+    await waitFor(() => existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '', 60_000, 'the hanging test to start');
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    t.after(() => {
+      if (alive(pid)) process.kill(pid, 'SIGKILL');
+    });
+
+    process.kill(-exhibit.pid, signal);
+    const exit = await exited;
+    assert.equal(exit.signal, signal, 'exhibit check still ends by the signal, as before');
+    await waitFor(() => !alive(pid), 5_000, `the test process ${pid} to stop`);
+  });
+}
+
 test('a policy with no test command gives missing, so a person must check the tests', async (t) => {
   const fixture = buildRepo(t);
-  writeFileSync(join(fixture.repo, 'evidence.yml'), 'version: 3\ndefault:\n  risk: low\n  needs: [tests-before-after]\n');
+  fixture.setBasePolicy('version: 3\ndefault:\n  risk: low\n  needs: [tests-before-after]\n');
   const { evidence, requirement, gap } = await runCheck(fixture.repo, 'good');
   assert.equal(requirement.status, 'missing');
   assert.match(gap.how_to_fix, /settings\.test_command/);
@@ -168,7 +329,7 @@ test('a results path outside the worktree gives error, and Exhibit touches no fi
   const outside = join(dirname(fixture.repo), 'keep.xml');
   writeFileSync(outside, 'keep');
   for (const results of ['../keep.xml', outside, './', 'a/..//']) {
-    writeFileSync(join(fixture.repo, 'evidence.yml'), policy(NODE_TESTS, results));
+    fixture.setBasePolicy(policy(NODE_TESTS, results));
     const { code, requirement, gap } = await runCheck(fixture.repo, 'good');
     assert.equal(requirement.status, 'error');
     assert.match(gap.how_to_fix, /not a file inside the repo/);

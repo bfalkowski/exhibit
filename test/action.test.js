@@ -55,7 +55,7 @@ test('no step decides anything: the steps are install, run, summary and upload, 
   assert.deepEqual(conditions, [null, null, "${{ !cancelled() && inputs.command == 'check' }}", "${{ !cancelled() && inputs.command == 'check' }}"]);
   const upload = action.runs.steps[3];
   assert.equal(upload.uses, 'actions/upload-artifact@v4');
-  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/mutation/']);
+  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/tests/', '.exhibit/mutation/']);
   // The run step ends by handing over to the CLI, so its exit code is the step's exit code.
   assert.match(runStep.run.trimEnd(), /\nexec node "\$GITHUB_ACTION_PATH\/bin\/exhibit\.js" "\$\{args\[@\]\}"$/);
 });
@@ -162,8 +162,20 @@ function realRepo(t) {
   git('commit', '-q', '-m', 'notes');
   const head = git('rev-parse', 'HEAD').trim();
   const fixture = join(dir, 'github.json');
-  const pull = { number: 7, title: 'Add notes', body: null, labels: [], base: { sha: base, ref: 'main' }, head: { sha: head, ref: 'notes' } };
-  writeFileSync(fixture, JSON.stringify({ '/repos/owner/name/pulls/7': { status: 200, body: pull } }));
+  const recordPull = (baseSha) => {
+    const pull = { number: 7, title: 'Add notes', body: null, labels: [], base: { sha: baseSha, ref: 'main' }, head: { sha: head, ref: 'notes' } };
+    writeFileSync(fixture, JSON.stringify({ '/repos/owner/name/pulls/7': { status: 200, body: pull } }));
+  };
+  recordPull(base);
+  // A new base commit with a bad policy, and PR 7 now says that is its base. exhibit check reads
+  // the policy from the base commit (spec 8.1), so the run fails with verdict error.
+  const breakPolicy = () => {
+    git('checkout', '-q', '--detach', base);
+    writeFileSync(join(repo, 'evidence.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+    git('commit', '-q', '-am', 'bad policy');
+    recordPull(git('rev-parse', 'HEAD').trim());
+    git('checkout', '-q', head);
+  };
   writeFileSync(join(binDir, 'node'), `#!/bin/sh\nexec '${process.execPath}' --import '${preload}' "$@"\n`);
   chmodSync(join(binDir, 'node'), 0o755);
   const stepSummary = join(dir, 'step-summary.md');
@@ -176,17 +188,17 @@ function realRepo(t) {
     assert.equal(shown.status, 0, shown.stderr);
     return { status: run.status, stderr: run.stderr, summary: readFileSync(stepSummary, 'utf8') };
   };
-  return { repo, runAction };
+  return { runAction, breakPolicy };
 }
 
 test('shadow mode: needs_person and error both pass the step, and the job summary shows the verdict', (t) => {
-  const { repo, runAction } = realRepo(t);
+  const { runAction, breakPolicy } = realRepo(t);
   const needsPerson = runAction({ enforce: 'false' });
   assert.equal(needsPerson.status, 0, needsPerson.stderr);
   assert.match(needsPerson.summary, /^# Exhibit check: needs a person\n\nVerdict: \*\*needs_person\*\* \(exit code 0\)\.\n\nShadow mode/);
   assert.match(needsPerson.summary, /probe lint/);
 
-  writeFileSync(join(repo, 'evidence.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+  breakPolicy();
   const error = runAction({ enforce: 'false' });
   assert.equal(error.status, 0, error.stderr);
   assert.match(error.summary, /^# Exhibit check: Exhibit failed\n\nVerdict: \*\*error\*\* \(exit code 0\)\.\n\nShadow mode/);
@@ -194,12 +206,12 @@ test('shadow mode: needs_person and error both pass the step, and the job summar
 });
 
 test('enforce mode: needs_person and error both fail the step, and the job summary shows the verdict', (t) => {
-  const { repo, runAction } = realRepo(t);
+  const { runAction, breakPolicy } = realRepo(t);
   const needsPerson = runAction({ enforce: 'true' });
   assert.equal(needsPerson.status, 1, needsPerson.stderr);
   assert.match(needsPerson.summary, /^# Exhibit check: needs a person\n\nVerdict: \*\*needs_person\*\* \(exit code 1\)\.\n\nBase /);
 
-  writeFileSync(join(repo, 'evidence.yml'), 'kinds:\n  x:\n    risk: extreme\n');
+  breakPolicy();
   const error = runAction({ enforce: 'true' });
   assert.equal(error.status, 2);
   assert.match(error.summary, /^# Exhibit check: Exhibit failed\n\nVerdict: \*\*error\*\* \(exit code 2\)\.\n\nExhibit could not finish/);

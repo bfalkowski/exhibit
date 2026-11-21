@@ -240,6 +240,41 @@ test('the GitHub forge gives CI results in one shape: check runs first, then com
   assert.deepEqual((await forge.ciResults('c'.repeat(39) + '1')), [{ name: 'test', conclusion: null, url: null }]);
 });
 
+// The commit statuses on the last head commit of PR 352 in codecov/example-python, as GitHub's
+// status check rollup gave them on 2026-11-20: A to Z by context. The REST combined status lists
+// them oldest first, by id: project, org, account, coverage-patch, coverage-project. Two of them
+// have the same createdAt, so only the id in the node id puts them in the REST order.
+const ROLLUP_352 = [
+  ['SC_kwDOAXN2Ks8AAAAM7nC2YA', '2026-10-04T07:07:23Z', 'cov_gh_py_acct_account-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nC0Jw', '2026-10-04T07:07:21Z', 'cov_gh_py_acct_org-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nCzPQ', '2026-10-04T07:07:21Z', 'cov_gh_py_acct_project-pythonPipBuildTestHostedLin...'],
+  ['SC_kwDOAXN2Ks8AAAAM7nDpeQ', '2026-10-04T07:07:58Z', 'coverage-patch'],
+  ['SC_kwDOAXN2Ks8AAAAM7nDq5Q', '2026-10-04T07:07:59Z', 'coverage-project']
+];
+
+// A fetch that answers the CommitCi query with the status check rollup `nodes`, on one page.
+function rollupFetch(nodes) {
+  return async () => new Response(JSON.stringify({ data: { rateLimit: { cost: 1 }, repository: { object: { statusCheckRollup: { contexts: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } } }), { status: 200 });
+}
+const statusNode = ([id, createdAt, context]) => ({ __typename: 'StatusContext', id, createdAt, context, state: 'SUCCESS', targetUrl: null });
+
+test('ciResults lists commit statuses oldest first, by id within the same second, as the REST combined status does', async () => {
+  const forge = createGitHubForge({ repo: 'codecov/example-python', token: 't', fetch: rollupFetch(ROLLUP_352.map(statusNode)) });
+  assert.deepEqual((await forge.ciResults('fb2c8d651fb9422e982a27000b73a35934dd8d89')).map((result) => result.name), [
+    'cov_gh_py_acct_project-pythonPipBuildTestHostedLin...',
+    'cov_gh_py_acct_org-pythonPipBuildTestHostedLin...',
+    'cov_gh_py_acct_account-pythonPipBuildTestHostedLin...',
+    'coverage-patch',
+    'coverage-project'
+  ]);
+});
+
+test('ciResults keeps GitHub order for statuses with the same createdAt and ids it cannot read', async () => {
+  const nodes = [['old-style-b', '2026-10-04T07:07:21Z', 'b'], ['old-style-a', '2026-10-04T07:07:21Z', 'a'], ['SC_x', '2026-10-04T07:07:20Z', 'first']].map(statusNode);
+  const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: rollupFetch(nodes) });
+  assert.deepEqual((await forge.ciResults('c'.repeat(40))).map((result) => result.name), ['first', 'b', 'a']);
+});
+
 test('the GitHub forge gives PRs, files, reviews and comments in forge-neutral shapes', async () => {
   const forge = createGitHubForge({ repo: 'acme/widgets', token: 't', fetch: await widgets() });
   const merged = await forge.mergedPulls();

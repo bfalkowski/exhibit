@@ -1,16 +1,26 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parseJUnit } from './junit.js';
+import { runInGroup } from './probe.js';
 
 const run = promisify(execFile);
 const LISTED = 20;
 
+// The time limit for one run of the test command when the policy does not set
+// settings.test_timeout_seconds: 30 minutes.
+export const DEFAULT_TEST_TIMEOUT_SECONDS = 1800;
+
+// The folder in the clone for the output of each run of the test command, such as
+// .exhibit/tests/head-first.log.
+export const TESTS_DIR = '.exhibit/tests';
+
 // A test run that could not give results. `status` is the requirement status it leads to:
-// `missing` when the policy gives no test command, and `error` when the command could not run or
-// wrote no JUnit file. `howToFix` says what to do, in plain words.
+// `missing` when the policy gives no test command, and `error` when the command could not run,
+// wrote no JUnit file, or ran past the time limit settings.test_timeout_seconds. `howToFix` says
+// what to do, in plain words.
 export class TestRunError extends Error {
   name = 'TestRunError';
   constructor(status, message, howToFix) {
@@ -24,7 +34,10 @@ export class TestRunError extends Error {
 //
 // For each side it makes a clean git worktree of the commit, runs settings.test_command in it,
 // and reads the JUnit XML at settings.test_results. When a test fails, it runs the command once
-// more. It removes each worktree when the side is done, also when the run fails.
+// more. Each run has the time limit settings.test_timeout_seconds. When a run passes it, Exhibit
+// stops the command and every process it started. It removes each worktree when the side is done,
+// also when the run fails or is stopped. The output of each run goes to a log in TESTS_DIR in the
+// clone: base-first.log, base-again.log, head-first.log and head-again.log.
 //
 // It gives back { base, head }: for each side a Map from a test's name to its status, `passed`,
 // `failed`, `skipped` or `flaky`. A test is flaky when its two runs disagree. The name is the
@@ -32,10 +45,10 @@ export class TestRunError extends Error {
 // that the JUnit file leaves out is left out.
 // It throws a TestRunError when a side cannot give results.
 export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, env = process.env }) {
-  const { command, results } = checkSettings(settings);
+  const { command, results, timeoutSeconds } = checkSettings(settings);
   return {
-    base: await runSide({ cwd, sha: base, side: 'base', command, results, env }),
-    head: await runSide({ cwd, sha: head, side: 'head', command, results, env })
+    base: await runSide({ cwd, sha: base, side: 'base', command, results, timeoutSeconds, env }),
+    head: await runSide({ cwd, sha: head, side: 'head', command, results, timeoutSeconds, env })
   };
 }
 
@@ -43,10 +56,11 @@ export async function runTestsOnBaseAndHead({ cwd, base, head, settings = {}, en
 // worktree of the base, puts in each path of `paths` as it is on the head, removes each one that
 // the head does not have, and then runs the tests as runTestsOnBaseAndHead does. So a test that
 // the PR added or changed runs against the old code. It gives back one Map, like one side of
-// runTestsOnBaseAndHead, and throws a TestRunError when the run cannot give results.
+// runTestsOnBaseAndHead, and throws a TestRunError when the run cannot give results. Its logs are
+// base-pr-tests-first.log and base-pr-tests-again.log.
 export async function runTestsOnBaseWithPrTests({ cwd, base, head, paths, settings = {}, env = process.env }) {
-  const { command, results } = checkSettings(settings);
-  return runSide({ cwd, sha: base, side: 'base with the PR\'s test files', tag: 'base-pr-tests', command, results, env, overlay: { sha: head, paths } });
+  const { command, results, timeoutSeconds } = checkSettings(settings);
+  return runSide({ cwd, sha: base, side: 'base with the PR\'s test files', tag: 'base-pr-tests', command, results, timeoutSeconds, env, overlay: { sha: head, paths } });
 }
 
 function checkSettings(settings) {
@@ -64,10 +78,13 @@ function checkSettings(settings) {
     throw new TestRunError('error', `settings.test_results is not a path in the worktree: ${results}`,
       `settings.test_results in evidence.yml is "${results}", which is not a file inside the repo. Exhibit removes that file before each run, so it must be a path in the repo, such as .exhibit/junit.xml. Change it, and run exhibit check again.`);
   }
-  return { command, results };
+  return { command, results, timeoutSeconds: settings.test_timeout_seconds ?? DEFAULT_TEST_TIMEOUT_SECONDS };
 }
 
-async function runSide({ cwd, sha, side, tag = side, command, results, env, overlay }) {
+async function runSide({ cwd, sha, side, tag = side, command, results, timeoutSeconds, env, overlay }) {
+  const logs = join(cwd, TESTS_DIR);
+  await mkdir(logs, { recursive: true });
+  const log = (run) => ({ file: join(logs, `${tag}-${run}.log`), shown: `${TESTS_DIR}/${tag}-${run}.log` });
   const folder = await mkdtemp(join(tmpdir(), `exhibit-${tag}-`));
   try {
     try {
@@ -78,9 +95,9 @@ async function runSide({ cwd, sha, side, tag = side, command, results, env, over
     }
     if (overlay) await putFiles(folder, overlay);
     const roots = [folder, await realpath(folder)];
-    const first = await runOnce({ folder, roots, side, command, results, env });
+    const first = await runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log: log('first') });
     if (![...first.values()].includes('failed')) return first;
-    const second = await runOnce({ folder, roots, side, command, results, env });
+    const second = await runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log: log('again') });
     return settle(first, second);
   } finally {
     await removeWorktree(cwd, folder);
@@ -98,16 +115,23 @@ async function putFiles(folder, { sha, paths }) {
   await Promise.all(paths.filter((path) => !there.has(path)).map((path) => rm(join(folder, path), { force: true })));
 }
 
-// One run of the test command, read from its JUnit file.
-async function runOnce({ folder, roots, side, command, results, env }) {
+// One run of the test command, read from its JUnit file. The command's output goes to `log.file`,
+// and each how_to_fix names it as `log.shown`.
+async function runOnce({ folder, roots, side, command, results, timeoutSeconds, env, log }) {
   const file = resolve(folder, results);
   await rm(file, { force: true });
   await mkdir(dirname(file), { recursive: true });
-  const exit = await shell(command, folder, env);
+  const exit = await shell(command, folder, env, timeoutSeconds, log.file);
+  const read = `Read its output in ${log.shown}`;
+
+  if (exit.timedOut) {
+    throw new TestRunError('error', `the test command ran past the time limit of ${timeoutSeconds} seconds on the ${side}, so Exhibit stopped it`,
+      `The test command "${command}" ran past the time limit of ${timeoutSeconds} seconds (settings.test_timeout_seconds) on the ${side}, so Exhibit stopped it and every process it started. A test may hang, for example one that waits for a server or for input. ${read} to see where it stops. If the tests only need more time, raise settings.test_timeout_seconds in evidence.yml.`);
+  }
 
   if (exit.code === 127) {
     throw new TestRunError('error', `the test command could not run on the ${side}: the shell could not find it (exit code 127)`,
-      `The test command "${command}" could not run on the ${side}: the shell could not find it (exit code 127). Check settings.test_command in evidence.yml, and that the tools it needs are installed.`);
+      `The test command "${command}" could not run on the ${side}: the shell could not find it (exit code 127). ${read}. Check settings.test_command in evidence.yml, and that the tools it needs are installed.`);
   }
   let xml;
   try {
@@ -115,13 +139,13 @@ async function runOnce({ folder, roots, side, command, results, env }) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     throw new TestRunError('error', `the test command wrote no JUnit file at ${results} on the ${side} (${exitWords(exit)})`,
-      `The test command "${command}" ran on the ${side} (${exitWords(exit)}), but it wrote no JUnit file at ${results}. Make the command write JUnit XML to settings.test_results, for example with node --test --test-reporter=junit --test-reporter-destination=${results}.`);
+      `The test command "${command}" ran on the ${side} (${exitWords(exit)}), but it wrote no JUnit file at ${results}. ${read}. Make the command write JUnit XML to settings.test_results, for example with node --test --test-reporter=junit --test-reporter-destination=${results}.`);
   }
   let cases;
   try {
     cases = parseJUnit(xml);
   } catch (error) {
-    throw new TestRunError('error', `could not read ${results} on the ${side}: ${error.message}`, `Exhibit could not read ${results} on the ${side}: ${error.message}. Make the test command write JUnit XML there.`);
+    throw new TestRunError('error', `could not read ${results} on the ${side}: ${error.message}`, `Exhibit could not read ${results} on the ${side}: ${error.message}. ${read}. Make the test command write JUnit XML there.`);
   }
   const tests = new Map();
   for (const item of cases) {
@@ -132,7 +156,7 @@ async function runOnce({ folder, roots, side, command, results, env }) {
   }
   if (exit.code !== 0 && ![...tests.values()].includes('failed')) {
     throw new TestRunError('error', `the test command failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test`,
-      `The test command "${command}" failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test, so Exhibit cannot tell what broke. Run the command in a clean checkout of the ${side} to see why it fails.`);
+      `The test command "${command}" failed on the ${side} (${exitWords(exit)}), but ${results} names no failing test, so Exhibit cannot tell what broke. ${read} to see why it fails.`);
   }
   return tests;
 }
@@ -160,17 +184,24 @@ function testName(item, roots) {
   return [file, item.classname, item.name].filter((part) => part !== '').join(' > ');
 }
 
-// Runs the command in a shell. It drops NODE_TEST_CONTEXT, which node:test sets when Exhibit
-// itself runs under node:test. With it, a node:test run in the command sends its results to that
-// parent run and writes no JUnit file.
-function shell(command, cwd, env) {
+// Runs the command in a shell, in a process group of its own, as a probe runs (spec 9.6). When it
+// runs past `timeoutSeconds`, Exhibit kills the whole group, so no process of the tests keeps
+// running, and gives back timedOut: true. It kills the group after a normal exit too. The
+// command's standard output and standard error go to `logFile`.
+// It drops NODE_TEST_CONTEXT, which node:test sets when Exhibit itself runs under node:test. With
+// it, a node:test run in the command sends its results to that parent run and writes no JUnit
+// file.
+async function shell(command, cwd, env, timeoutSeconds, logFile) {
   const clean = { ...env };
   delete clean.NODE_TEST_CONTEXT;
-  return new Promise((done) => {
-    const child = spawn(command, { cwd, env: clean, shell: true, stdio: 'ignore' });
-    child.on('error', () => done({ code: 127, signal: null }));
-    child.on('close', (code, signal) => done({ code, signal }));
-  });
+  try {
+    return await runInGroup(command, { cwd, env: clean, logFile, timeoutMs: timeoutSeconds * 1000 });
+  } catch (error) {
+    // The shell itself could not start. Count it as a command the shell could not find. Any other
+    // error, such as one from opening the log, is not about the command, so it goes up as it is.
+    if (!String(error.syscall ?? '').startsWith('spawn')) throw error;
+    return { code: 127, signal: null, timedOut: false };
+  }
 }
 
 function exitWords(exit) {

@@ -29,7 +29,13 @@ export async function readPolicy(cwd, path = DEFAULT_POLICY) {
     if (error.code === 'ENOENT') return withDefaults({});
     throw new ToolError(`could not read ${path}: ${error.message}`);
   }
+  return parsePolicy(text, path);
+}
 
+// Checks the text of a policy file as readPolicy does, and returns the same result. `text` is
+// null when there is no file. exhibit check uses it for the policy in the base commit (spec 8.1).
+export function parsePolicy(text, path = DEFAULT_POLICY) {
+  if (text === null) return withDefaults({});
   let policy;
   try {
     policy = parse(text);
