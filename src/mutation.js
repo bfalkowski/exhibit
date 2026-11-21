@@ -185,7 +185,12 @@ export function judge(runResult, min) {
 // The interval rounds outward, so it never looks narrower than it is.
 function counts(mutants) {
   const tally = { killed: 0, timeout: 0, survived: 0, no_coverage: 0, not_valid: 0, ignored: 0 };
-  for (const mutant of mutants) tally[COUNTED[mutant.status] ?? 'not_valid'] += 1;
+  for (const mutant of mutants) {
+    // Stryker is pinned, so a status it did not have when Exhibit was written means an upgrade
+    // that Exhibit does not understand yet. Fail loudly rather than count the mutant wrong.
+    if (!Object.hasOwn(COUNTED, mutant.status)) throw new ToolError(`Stryker gave a mutant the status "${mutant.status}", which Exhibit does not know. Report this as an Exhibit issue.`);
+    tally[COUNTED[mutant.status]] += 1;
+  }
   const n = tally.killed + tally.timeout + tally.survived + tally.no_coverage;
   if (n === 0) return { ...tally, n, catch_rate: null, interval_95: null };
   const { low, high } = clopperPearson(tally.killed + tally.timeout, n);
@@ -244,8 +249,17 @@ export async function changedLines(cwd, base, head) {
   const diff = await gitText(cwd, ['diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', `${base}...${head}`]);
   const files = new Map();
   let current = null;
+  // A file's header runs from its "diff --git" line to its first hunk. An added line whose text
+  // starts with "++ " prints as "+++ ...", so a "+++ " line names a file only in the header.
+  let inHeader = false;
   for (const line of diff.split('\n')) {
-    if (line.startsWith('+++ ')) {
+    if (line.startsWith('diff --git ')) {
+      inHeader = true;
+      current = null;
+      continue;
+    }
+    if (line.startsWith('@@ ')) inHeader = false;
+    if (inHeader && line.startsWith('+++ ')) {
       const target = line.slice(4);
       current = target === '/dev/null' ? null : unquote(target).replace(/^b\//, '');
       continue;
@@ -395,29 +409,38 @@ async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, logFi
       logFile,
       timeoutMs: budgetSeconds * 1000
     });
-    // A kill can stop the reporter in the middle of its last line, so a last line that is cut
-    // short is left out. Any other bad line is a fault, and throws.
-    const texts = (await readFile(resultsFile, 'utf8')).split('\n');
-    const lines = texts.flatMap((line, i) => {
-      if (line === '') return [];
-      try {
-        return [JSON.parse(line)];
-      } catch (error) {
-        if (i === texts.length - 1 && outcome.timedOut) return [];
-        throw new ToolError(`Exhibit's Stryker reporter wrote a line that is not JSON: ${error.message}`);
-      }
-    });
-    const done = lines.some((line) => line.done === true);
-    return {
-      mutants: lines.filter((line) => line.done !== true),
-      complete: done && outcome.code === 0,
-      timedOut: outcome.timedOut && !done,
-      code: outcome.code,
-      signal: outcome.signal
-    };
+    return readOutcome(await readFile(resultsFile, 'utf8'), outcome);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+// What a Stryker run gave: the reporter's file `text`, one JSON line for each mutant and a last
+// done line, and the `outcome` of the process ({ code, signal, timedOut }).
+//
+// The run is complete when the reporter wrote its done line and Stryker exited 0, or when the
+// budget ran out after the done line: every mutant was then tested, and only Stryker's exit was
+// cut short. A kill can stop the reporter in the middle of its last line, so a last line that is
+// cut short is left out. Any other bad line is a fault, and throws.
+export function readOutcome(text, outcome) {
+  const texts = text.split('\n');
+  const lines = texts.flatMap((line, i) => {
+    if (line === '') return [];
+    try {
+      return [JSON.parse(line)];
+    } catch (error) {
+      if (i === texts.length - 1 && outcome.timedOut) return [];
+      throw new ToolError(`Exhibit's Stryker reporter wrote a line that is not JSON: ${error.message}`);
+    }
+  });
+  const done = lines.some((line) => line.done === true);
+  return {
+    mutants: lines.filter((line) => line.done !== true),
+    complete: done && (outcome.code === 0 || outcome.timedOut),
+    timedOut: outcome.timedOut && !done,
+    code: outcome.code,
+    signal: outcome.signal
+  };
 }
 
 async function gitText(cwd, args) {

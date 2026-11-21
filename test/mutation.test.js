@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildExhibit, renderSummary } from '../src/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
-import { changedLines, judge, mutationCollector, testsThatReach } from '../src/mutation.js';
+import { changedLines, judge, mutationCollector, readOutcome, testsThatReach } from '../src/mutation.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -103,7 +103,7 @@ function buildRepo(t, { policyText = policy(), heads }) {
     git('commit', '-q', '-m', message);
   };
   git('init', '-q', '-b', 'main');
-  commit({ 'evidence.yml': policyText, 'package.json': '{ "type": "module", "private": true }\n', 'src/inside.js': OLD_CODE, 'README.md': 'hi\n' }, 'start');
+  commit({ 'evidence.yml': policyText, 'package.json': '{ "type": "module", "private": true }\n', 'src/inside.js': OLD_CODE, 'src/twice.js': OLD_CODE, 'README.md': 'hi\n' }, 'start');
   git('tag', 'start');
   for (const [name, files] of Object.entries(heads)) {
     git('checkout', '-q', '-b', name, 'start');
@@ -293,10 +293,13 @@ test('changedLines gives the added and changed lines of the head, and leaves out
   const context = collectorRepo(t, {
     'src/inside.js': '// a note\n' + NEW_CODE.replace('}\n', ''),
     'src/new.js': 'export const a = 1;\nexport const b = 2;\n',
+    // An added line that starts with "++ " prints as "+++ i;", which looks like a file header.
+    // The hunk after it must still count for src/twice.js.
+    'src/twice.js': 'let i = 0;\n++ i;\nexport function inside(root, path) {\n  return path.startsWith(root);\n// b\n}\n',
     'README.md': ''
   });
   const lines = await changedLines(context.cwd, context.base, context.head);
-  assert.deepEqual(Object.fromEntries(lines), { 'src/inside.js': [[1, 1], [3, 3]], 'src/new.js': [[1, 2]] });
+  assert.deepEqual(Object.fromEntries(lines), { 'src/inside.js': [[1, 1], [3, 3]], 'src/new.js': [[1, 2]], 'src/twice.js': [[1, 2], [5, 5]] });
 });
 
 test('testsThatReach follows relative imports and requires, and file names in strings', async (t) => {
@@ -320,4 +323,25 @@ test('testsThatReach follows relative imports and requires, and file names in st
   const tests = ['test/four.test.js', 'test/one.test.js', 'test/three.test.js', 'test/two.test.js'];
   assert.deepEqual(await testsThatReach(root, tests, ['src/a.js']), ['test/one.test.js', 'test/two.test.js']);
   assert.deepEqual(await testsThatReach(root, tests, ['src/server.js']), ['test/three.test.js']);
+});
+
+test('a run is complete when the done line is there and Stryker exited 0, or the budget ran out after the done line', () => {
+  const mutant = JSON.stringify({ fileName: '/r/a.js', location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } }, mutatorName: 'X', replacement: 'y', status: 'Killed' });
+  const done = `${mutant}\n{"done":true}\n`;
+  assert.equal(readOutcome(done, { code: 0, signal: null, timedOut: false }).complete, true);
+  // The budget ran out after the reporter wrote its done line, before Stryker exited.
+  const late = readOutcome(done, { code: null, signal: 'SIGKILL', timedOut: true });
+  assert.equal(late.complete, true);
+  assert.equal(late.mutants.length, 1);
+  // Stryker failed after its done line: not complete, so the collector gives error.
+  assert.equal(readOutcome(done, { code: 1, signal: null, timedOut: false }).complete, false);
+  // The budget cut the last line short: that line is left out, and the run is partial.
+  const cut = readOutcome(`${mutant}\n${mutant.slice(0, 20)}`, { code: null, signal: 'SIGKILL', timedOut: true });
+  assert.deepEqual([cut.mutants.length, cut.complete, cut.timedOut], [1, false, true]);
+  // A broken line without a timeout is a fault.
+  assert.throws(() => readOutcome(`${mutant.slice(0, 20)}\n`, { code: 0, signal: null, timedOut: false }), /not JSON/);
+});
+
+test('a status that Exhibit does not know throws, so an upgrade cannot count mutants wrong', () => {
+  assert.throws(() => judge(ran(mutants('Exploded', 1), true), 0.5), /status "Exploded"/);
 });
