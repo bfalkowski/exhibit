@@ -94,6 +94,7 @@ runs:
           .exhibit/evidence.json
           .exhibit/summary.md
           .exhibit/probes/
+          .exhibit/tests/
           .exhibit/mutation/
         include-hidden-files: true
         if-no-files-found: warn

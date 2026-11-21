@@ -150,6 +150,33 @@ test('a test command that writes no JUnit file gives error, and verdict error', 
   assertNoWorktreeLeft(fixture);
 });
 
+test('each run of the test command writes its output to a log in .exhibit/tests', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy(`echo "out from $(git rev-parse --short HEAD)"; echo "err line" >&2; ${NODE_TESTS}`));
+  const sha = (ref) => fixture.git('rev-parse', '--short', ref).trim();
+  const logs = join(fixture.repo, '.exhibit', 'tests');
+  // A log from an earlier check that this run does not write must not stay behind.
+  mkdirSync(logs, { recursive: true });
+  writeFileSync(join(logs, 'base-again.log'), 'old');
+  const { requirement } = await runCheck(fixture.repo, 'broken');
+  assert.equal(requirement.status, 'failed');
+  // A test fails on the head, so the head runs twice. The base passes, so it runs once.
+  assert.equal(readFileSync(join(logs, 'base-first.log'), 'utf8').split('\n').slice(0, 2).join('\n'), `out from ${sha('start')}\nerr line`);
+  assert.equal(existsSync(join(logs, 'base-again.log')), false);
+  for (const run of ['first', 'again']) {
+    assert.equal(readFileSync(join(logs, `head-${run}.log`), 'utf8').split('\n').slice(0, 2).join('\n'), `out from ${sha('broken')}\nerr line`);
+  }
+});
+
+test('the gap of a test command that fails names the log with its output', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(policy('echo "why it broke"; exit 3'));
+  const { requirement, gap } = await runCheck(fixture.repo, 'good');
+  assert.equal(requirement.status, 'error');
+  assert.match(gap.how_to_fix, /Read its output in \.exhibit\/tests\/base-first\.log\./);
+  assert.equal(readFileSync(join(fixture.repo, '.exhibit', 'tests', 'base-first.log'), 'utf8'), 'why it broke\n');
+});
+
 test('a test command that is not found gives error, and verdict error', async (t) => {
   const fixture = buildRepo(t);
   fixture.setBasePolicy(policy('exhibit-no-such-test-command --run'));
