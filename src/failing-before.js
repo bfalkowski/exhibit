@@ -19,8 +19,10 @@ export function isTestPath(path) {
 // JUnit file names as a test's file. Exhibit runs the tests on the base code with those files
 // put in as they are on the head (context.baseWithPrTests). A test qualifies when:
 // - the PR added or changed it: its file is one of the PR's test files, or its name is not in the
-//   plain base run, or its status there differs from the run with the PR's test files. Only the
-//   PR's test files differ between those two runs, so a test whose result changed is the PR's.
+//   plain base run. A test in a file the PR did not change can fail by chance in the run with the
+//   PR's test files, for example a slow test on a busy machine, so a changed result does not make
+//   it the PR's. Only when the name gives no file (Node 20) does a changed result count: then it is
+//   the one sign of a test that the PR changed in a file the base already had.
 // - it fails in the run with the PR's test files, or its file could not load there. A file that
 //   cannot load, for example because it imports a module the base lacks, shows as one failed test
 //   case named after the file, as node:test writes it. The tests in that file then do not run.
@@ -90,7 +92,9 @@ export async function failingBefore(requirement, context) {
     const onBase = overlay.get(name);
     // With nothing loaded, a test that has no result there gives nothing to compare with the
     // plain base run.
-    const theirs = file !== undefined || !runs.base.has(name) || (!(nothingLoaded && onBase === undefined) && runs.base.get(name) !== onBase);
+    // A changed result counts only for a name that gives no file (Node 20). A name that gives a
+    // file other than the PR's is in a file the PR did not change, so its result changed by chance.
+    const theirs = file !== undefined || !runs.base.has(name) || (!namesAFile(name) && !(nothingLoaded && onBase === undefined) && runs.base.get(name) !== onBase);
     if (!theirs) continue;
     if (onBase === 'failed') {
       tests.push({ name, on_base: 'failed' });
@@ -148,6 +152,13 @@ function prTestFiles(files, head) {
 function namesFile(name, file) {
   const last = name.split(' > ').at(-1);
   return last === file || last.endsWith(`/${file}`);
+}
+
+// Says whether a test's name starts with its file, as the JUnit file of node:test gives it from
+// Node 22 on. Node 20 gives a classname such as `test` there, which does not look like a test file.
+function namesAFile(name) {
+  const first = name.split(' > ')[0];
+  return name.includes(' > ') && isTestPath(first);
 }
 
 function namesWith(tests, status) {
