@@ -1,0 +1,47 @@
+From db42371b2bee1e027d9be0dd709a79eb5de60311 Mon Sep 17 00:00:00 2001
+From: canary <canary@example.invalid>
+Date: Fri, 20 Nov 2026 20:59:12 -0500
+Subject: [PATCH] Fix: a place after a ticket outside the work order goes last
+
+---
+ relay/test/ticket-order.test.js | 11 +++++++++++
+ relay/ticket-order.js           |  4 +++-
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/relay/test/ticket-order.test.js b/relay/test/ticket-order.test.js
+index a77bef9..f17e8af 100644
+--- a/relay/test/ticket-order.test.js
++++ b/relay/test/ticket-order.test.js
+@@ -188,3 +188,14 @@ test('a renumber writes only the tickets that movable lets through', () => {
+   assert.ok(writes.length > 1, 'a renumber');
+   assert.ok(!writes.some(([id]) => id === 'S'), 'the Started ticket keeps its rank');
+ });
++
++test('a place after a target that movable leaves out goes last in the group', () => {
++  const list = [
++    { id: 'A', status: 'ready', priority: 'normal', rank: 1000 },
++    { id: 'S', status: 'started', priority: 'normal', rank: 1500 },
++    { id: 'B', status: 'ready', priority: 'normal', rank: 2000 },
++    { id: 'C', status: 'triage', priority: 'normal', rank: 3000 },
++  ];
++  const movable = (x) => x.status === 'triage' || x.status === 'ready';
++  assert.deepStrictEqual(placeNear(list, list[0], list[1], true, movable), [['A', 3000 + 1000]]);
++});
+diff --git a/relay/ticket-order.js b/relay/ticket-order.js
+index 3722ab8..e13cc0f 100644
+--- a/relay/ticket-order.js
++++ b/relay/ticket-order.js
+@@ -35,7 +35,9 @@ function lastRank(list, priority, now) {
+ const STEP = 1000;
+ function placeNear(list, moving, target, after, movable) {
+   const group = groupOf(list, moving.priority || 'normal').filter((t) => t.id !== moving.id && (!movable || movable(t)));
+-  const at = group.findIndex((t) => t.id === target.id) + (after ? 1 : 0);
++  // A target outside the group, such as a Started ticket that movable leaves out, puts it last.
++  const i = group.findIndex((t) => t.id === target.id);
++  const at = (i < 0 ? group.length - 1 : i) + (after ? 1 : 0);
+   const prev = group[at - 1], next = group[at];
+   const lo = prev ? placeOf(prev) : null, hi = next ? placeOf(next) : null;
+   let rank = null;
+-- 
+2.39.5 (Apple Git-154)
+
