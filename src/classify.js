@@ -5,12 +5,13 @@ const RISKS = ['low', 'medium', 'high'];
 // Works out what a change needs (spec 8.1 rules and 9.1). `policy` is what readPolicy returns.
 // `files` holds the paths the change touches. `pr` holds what is known about the PR: its title,
 // its label names and its branch name. Without the forge, only the branch is known, and the title
-// and labels are empty.
+// and labels are empty. `added` holds the paths the change adds: new files, not moved ones.
 //
 // It returns { classification, requirements }:
 // - classification.kinds: the kinds whose globs match a changed path, sorted by name.
 // - classification.risk: the highest risk among them, or default's risk when none matches.
-// - classification.fix, fix_signal: from the fix signals. classification.feature: a `feature` label.
+// - classification.fix, fix_signal: from the fix signals. classification.feature: a `feature`
+//   label, or an added path that matches a glob in settings.source_paths (spec 9.1).
 // - classification.merge_without_reading: `allowed` only when every matched kind says `allowed`.
 // - classification.used_default: no kind matched, so default's rules apply. has_default says
 //   whether the policy has a default at all. Without one, the risk is high and nothing is needed,
@@ -21,9 +22,10 @@ const RISKS = ['low', 'medium', 'high'];
 //   A need that two kinds share is one requirement, and `kinds` names both. A failing-before
 //   whose `when` does not fit this change stays in the list with `not_needed`, the reason in
 //   words, so the exhibit can show it as skipped (spec 8.1).
-export function classifyChange(policy, files, pr, policyPath = 'evidence.yml') {
+export function classifyChange(policy, files, pr, policyPath = 'evidence.yml', added = []) {
   const { fix, fix_signal: fixSignal } = classifyFix(pr, policy.settings.fix_signals);
-  const feature = pr.labels.some((label) => label.toLowerCase() === 'feature');
+  const sourcePaths = policy.settings.source_paths ?? [];
+  const feature = pr.labels.some((label) => label.toLowerCase() === 'feature') || added.some((path) => sourcePaths.some((glob) => matchesGlob(path, glob)));
 
   const matched = matchKinds(policy.kinds, files);
   const usedDefault = matched.length === 0;
