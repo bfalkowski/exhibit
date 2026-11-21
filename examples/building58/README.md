@@ -48,9 +48,12 @@ Building58's branch protection covers `main` only, so the publish job can push `
 
 Any other file needs the tests. A PR is a fix when it has the label `bug`, its title starts with "fix" after the ticket key (such as "T-401: Fix the store"), or its branch starts with `fix/`.
 
-The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run.js`) does: six files at a time, and each file with a new empty HOME of its own, so no test reads a room's files under `~/.office-world` or another file's. Exhibit reads the results from a JUnit file, and `run.js` writes none, so the command runs each file with `node --test` and its JUnit reporter, and then joins the files into `.exhibit/junit.xml`. It differs from `npm test` in three ways:
+The test command runs `relay/test/*.test.js` the way `npm test` (`relay/test/run.js`) does: six files at a time, and each file with a new empty HOME of its own, so no test reads a room's files under `~/.office-world` or another file's. Exhibit reads the results from a JUnit file, and `run.js` writes none, so the command runs each file with `node --test` and its JUnit reporter, and then joins the files into `.exhibit/junit.xml`.
 
-- It has no time limit for each file, only for each test (120 seconds). A file that never ends stops the check job at its time limit.
+Each test has a time limit of 120 seconds, and each file one of 600 seconds, as in `run.js`. A file can leave a timer, a relay or a child process running after its last test, and then it never ends. Without the limit for each file, such a file would keep the check job running until its own time limit, and the job would make no exhibit. A short node script in the command, `RUN_FILE`, runs each file. When a file runs past 600 seconds, the script stops it and every process still under it, and writes a JUnit file with one failing test case, such as "relay/test/x.test.js ran past its time limit of 600 seconds". So the joined file names it, and the check says which file hangs. The other files go on. A process whose parent has ended is no longer under the file, so the script does not find it. It runs on until Exhibit stops the whole command, which Exhibit does when the command ends. macOS has no `timeout` command, so the script is in node, and `exhibit check` works the same on a Mac. To try a shorter limit, set `TEST_FILE_SECONDS`. The script reads it as `run.js` does, so a value that is not a number, or 0, gives 600.
+
+The command differs from `npm test` in two ways:
+
 - It does not take the room's settings (`OFFICE_*`, `RELAY_*`, `CLAUDE_CODE_*`) out of the environment. On CI there are none. A session that runs `exhibit check` on its own computer runs it from a room, so it may see different results.
 - It leaves out the browser tests in `relay/test/browser/`.
 
