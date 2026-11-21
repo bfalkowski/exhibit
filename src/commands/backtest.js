@@ -46,13 +46,9 @@ export async function backtestCommand(argv, { cwd, env = process.env, stdout, st
   let rerunInfo = null;
   if (options.rerun) {
     const testSet = testSetOf(lines, options.from);
-    // A defect on a PR that cannot run again makes no leak (spec 9.9). Find those PRs first, so the
-    // rerun runs the policy without the same leaking rules that the report uses after it.
-    const leakNoCommits = await prsWithoutCommits({ cwd, lines: testSet, policy, exhibits: stored.exhibits });
-    const { leaks } = backtest({ lines, labels, policy, exhibits: stored.exhibits, from: options.from, leakNoCommits });
-    const policies = leaks.length === 0 ? [policy] : [policy, withoutRules(policy, leaks.map((leak) => leak.rule))];
+    const { leakNoCommits, policies } = await planRerun({ cwd, lines, labels, policy, exhibits: stored.exhibits, from: options.from, testSet });
     const started = clock();
-    const reruns = await rerunWithStop({ cwd, env, lines: testSet, policies, exhibits: stored.exhibits, budgetSeconds: options.budgetMinutes * 60, clock, stderr });
+    const reruns = await rerunWithStop({ cwd, env, lines: testSet, policies, exhibits: stored.exhibits, budgetSeconds: options.budgetMinutes * 60, clock, stderr, noCommits: leakNoCommits });
     rerunInfo = { budget_minutes: options.budgetMinutes, seconds: Math.round((clock() - started) / 1000), logs: RERUN_DIR };
     result = { ...backtest({ lines, labels, policy, exhibits: stored.exhibits, from: options.from, reruns, leakNoCommits }), counts_before_rerun: before.counts, rerun: rerunInfo };
   }
@@ -88,6 +84,25 @@ export async function backtestCommand(argv, { cwd, env = process.env, stdout, st
   stdout.write(out.join('\n') + '\n');
 }
 
+// Picks what --rerun runs (spec 9.9). A defect on a PR that cannot run again makes no leak. Which
+// PRs cannot run depends on the policies the rerun runs, and those depend on the leaks. So it finds
+// both first. The set of PRs only grows, and the leaks only get fewer, so this ends. The rerun then
+// marks exactly these PRs no_commits, so the report leaves out the same PRs, and uses the same leaks.
+// Gives back { leakNoCommits, leaks, policies }.
+export async function planRerun({ cwd, lines, labels, policy, exhibits, from, testSet, hasCommit }) {
+  const policiesFor = (leaks) => (leaks.length === 0 ? [policy] : [policy, withoutRules(policy, leaks.map((leak) => leak.rule))]);
+  const leaksWith = (leakNoCommits) => backtest({ lines, labels, policy, exhibits, from, leakNoCommits }).leaks;
+  const leakNoCommits = await prsWithoutCommits({ cwd, lines: testSet, policies: [policy], exhibits, hasCommit });
+  let leaks = leaksWith(leakNoCommits);
+  for (;;) {
+    const more = [...(await prsWithoutCommits({ cwd, lines: testSet, policies: policiesFor(leaks), exhibits, hasCommit }))].filter((pr) => !leakNoCommits.has(pr));
+    if (more.length === 0) break;
+    for (const pr of more) leakNoCommits.add(pr);
+    leaks = leaksWith(leakNoCommits);
+  }
+  return { leakNoCommits, leaks, policies: policiesFor(leaks) };
+}
+
 function parseOptions(argv) {
   let values;
   try {
@@ -113,7 +128,7 @@ function parseOptions(argv) {
 // head, made when the first probe asks for it, and removed after the PR. A Ctrl-C, SIGTERM or
 // SIGHUP stops every test run and probe, removes that worktree, and ends Exhibit, as in exhibit
 // check (spec 9.6).
-async function rerunWithStop({ cwd, env, lines, policies, exhibits, budgetSeconds, clock, stderr }) {
+async function rerunWithStop({ cwd, env, lines, policies, exhibits, budgetSeconds, clock, stderr, noCommits }) {
   const timeoutSeconds = policies[0].settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
   let current = null;
   const stop = onStopSignal(() => (current ? current.remove() : Promise.resolve()));
@@ -122,6 +137,7 @@ async function rerunWithStop({ cwd, env, lines, policies, exhibits, budgetSecond
       cwd,
       env,
       lines,
+      noCommits,
       policies,
       exhibits,
       budgetSeconds,

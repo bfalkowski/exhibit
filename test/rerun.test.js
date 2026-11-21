@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { backtest, judge, withoutRules } from '../src/backtest.js';
+import { backtest, judge } from '../src/backtest.js';
+import { planRerun } from '../src/commands/backtest.js';
 import { parsePolicy } from '../src/policy.js';
-import { CHEAP, prsWithoutCommits, rerun } from '../src/rerun.js';
+import { CHEAP, rerun } from '../src/rerun.js';
 
 const POLICY = parsePolicy(`
 version: 3
@@ -218,12 +219,11 @@ default:
   const hasCommit = async (cwd, sha) => sha !== line(2).head_sha;
 
   // The steps of src/commands/backtest.js with --rerun.
-  const leakNoCommits = await prsWithoutCommits({ cwd: folder(t), lines, policy, hasCommit });
+  const { leakNoCommits, leaks, policies } = await planRerun({ cwd: folder(t), lines, labels, policy, exhibits: new Map(), from: null, testSet: lines, hasCommit });
   assert.deepEqual([...leakNoCommits], [2]);
-  const { leaks } = backtest({ lines, labels, policy, leakNoCommits });
   assert.deepEqual(leaks, [{ rule: 'relay', defects: ['D-1'] }]);
   const fake = fakeRun(() => 'met', 1);
-  const reruns = await rerun({ cwd: folder(t), env: {}, lines, policies: [policy, withoutRules(policy, leaks.map((leak) => leak.rule))], budgetSeconds: 1000, collectorsFor: fake.collectorsFor, clock: fake.clock, hasCommit });
+  const reruns = await rerun({ cwd: folder(t), env: {}, lines, policies, budgetSeconds: 1000, collectorsFor: fake.collectorsFor, clock: fake.clock, hasCommit, noCommits: leakNoCommits });
   const result = backtest({ lines, labels, policy, reruns, leakNoCommits });
 
   assert.deepEqual(result.leaks, leaks);
@@ -231,4 +231,39 @@ default:
   const d1 = result.replayed.find((item) => item.id === 'D-1');
   assert.equal(d1.without.verdict, 'meets_policy');
   assert.ok(fake.calls.includes('1 tests-before-after'));
+});
+
+test('a PR that needs a rerun only without the leaking rules, and has no commits, makes no leak (review of 5c50430)', async (t) => {
+  // PR 1's exhibit gives relay's probe, so the full policy wants nothing run on it. Without relay,
+  // PR 1 falls to default and wants its tests, but its head is not in the clone. So D-1 is in no
+  // rate, and it must make no leak either.
+  const policy = parsePolicy(`
+version: 3
+kinds:
+  relay:
+    match: ["src/relay/**"]
+    risk: high
+    needs:
+      - probe: { name: syntax, run: "node --check x" }
+    source: [D-1]
+default:
+  risk: medium
+  needs: [tests-before-after]
+`);
+  const at = (number, path) => ({ ...line(number), files: [{ path, additions: 1, deletions: 1 }] });
+  const lines = [at(1, 'src/relay/1.js'), at(3, 'src/relay/3.js'), { ...at(4, 'src/relay/1.js'), title: 'Fix 4', labels: ['bug'], classification: { fix: true, fix_signal: 'label:bug', kinds: [] }, szz: { blamed_commit: 'a'.repeat(40), links: [{ pr: 1, confidence: 1, lines: [] }], unlinked_lines: [], dropped_lines: [], no_link_reason: null } }];
+  const labels = [{ id: 'D-1', fix_pr: 4, introducing_prs: [1], rejected_prs: [], code: 'x', category: 'Bug', would_have_caught: 'x', labeled_by: 'person', szz_link_rejected: false, known_at_review: false, labeled_at: '2026-03-01T00:00:00Z' }];
+  const exhibits = new Map([[1, { requirements: [{ type: 'probe', params: { name: 'syntax', run: 'node --check x' }, status: 'met' }] }]]);
+  const hasCommit = async (cwd, sha) => sha !== line(1).head_sha;
+
+  const plan = await planRerun({ cwd: folder(t), lines, labels, policy, exhibits, from: null, testSet: lines, hasCommit });
+  assert.deepEqual([...plan.leakNoCommits], [1]);
+  assert.deepEqual(plan.leaks, []);
+  const fake = fakeRun(() => 'met', 1);
+  const reruns = await rerun({ cwd: folder(t), env: {}, lines, policies: plan.policies, exhibits, budgetSeconds: 1000, collectorsFor: fake.collectorsFor, clock: fake.clock, hasCommit, noCommits: plan.leakNoCommits });
+  assert.equal(reruns.get(1).status, 'no_commits');
+  const result = backtest({ lines, labels, policy, exhibits, reruns, leakNoCommits: plan.leakNoCommits });
+  assert.deepEqual(result.leaks, []);
+  assert.equal(result.counts_without_leaks, null);
+  assert.equal(result.counts.all.no_commits, 1);
 });

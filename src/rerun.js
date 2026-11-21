@@ -44,8 +44,11 @@ const LOG_DIRS = [TESTS_DIR, PROBES_DIR, MUTATION_DIR];
  * `collectorsFor(head)` gives { collectors, done }, and done() is awaited after the PR.
  * `onPr(number, result)` is called after each run on a PR, for progress lines. `clock` gives
  * milliseconds, and `hasCommit(cwd, sha)` says whether the clone has a commit.
+ * `noCommits`, when given, is the Set of PRs that the command found with prsWithoutCommits. Each of
+ * them gets `no_commits` and runs nothing, so the backtest after the rerun leaves out the same PRs
+ * that its leaks left out.
  */
-export async function rerun({ cwd, env, lines, policies, exhibits = new Map(), budgetSeconds, collectorsFor, clock = () => performance.now(), hasCommit = commitInClone, onPr = () => {} }) {
+export async function rerun({ cwd, env, lines, policies, exhibits = new Map(), budgetSeconds, collectorsFor, clock = () => performance.now(), hasCommit = commitInClone, onPr = () => {}, noCommits = null }) {
   const started = clock();
   const elapsed = () => (clock() - started) / 1000;
   const mutationSeconds = policies[0].settings?.mutation_budget_seconds ?? DEFAULT_MUTATION_BUDGET_SECONDS;
@@ -58,6 +61,11 @@ export async function rerun({ cwd, env, lines, policies, exhibits = new Map(), b
     const wanted = wantedRequirements(line, policies, exhibits.get(line.number) ?? null);
     const result = { status: 'nothing_to_run', seconds: 0, requirements: [], errors: [], mutation: wanted.some((item) => item.type === 'mutation') ? 'not_reached' : null };
     results.set(line.number, result);
+    if (noCommits?.has(line.number)) {
+      result.status = 'no_commits';
+      result.mutation = null;
+      continue;
+    }
     if (!wanted.some((item) => CHEAP.includes(item.type)) && result.mutation === null) continue;
     if (!(await hasCommit(cwd, line.base_sha)) || !(await hasCommit(cwd, line.head_sha))) {
       result.status = 'no_commits';
@@ -108,14 +116,14 @@ function wantedRequirements(line, policies, exhibit) {
   return [...wanted.values()];
 }
 
-// The test-set PRs that a rerun with `policy` would mark `no_commits`: PRs that want a requirement
-// to run, but whose base or head is not in the clone. The command finds them before the rerun, so
-// the leaks that pick the rerun's policies are the same leaks that the report uses after it (spec
-// 9.9). A rerun with more policies marks these PRs too, and maybe more.
-export async function prsWithoutCommits({ cwd, lines, policy, exhibits = new Map(), hasCommit = commitInClone }) {
+// The test-set PRs that a rerun with `policies` marks `no_commits`: PRs that want a requirement to
+// run, but whose base or head is not in the clone. It makes the same checks as rerun(), so with the
+// same policies it gives the same set. The command finds them before the rerun, so the leaks that
+// pick the rerun's policies are the same leaks that the report uses after it (spec 9.9).
+export async function prsWithoutCommits({ cwd, lines, policies, exhibits = new Map(), hasCommit = commitInClone }) {
   const missing = new Set();
   for (const line of lines) {
-    const wanted = wantedRequirements(line, [policy], exhibits.get(line.number) ?? null);
+    const wanted = wantedRequirements(line, policies, exhibits.get(line.number) ?? null);
     if (!wanted.some((item) => CHEAP.includes(item.type) || item.type === 'mutation')) continue;
     if (!(await hasCommit(cwd, line.base_sha)) || !(await hasCommit(cwd, line.head_sha))) missing.add(line.number);
   }
