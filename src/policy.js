@@ -21,11 +21,12 @@ const PR_NUMBER = /^[1-9]\d*$/;
 // way. It returns the policy with settings.fix_signals filled in: the defaults when there is no
 // file, or when the file does not set them. A file that is not valid YAML, or that breaks a rule
 // of the schema, is a ToolError, so the run exits 2. The message names each bad field.
-export async function readPolicy(cwd, path = DEFAULT_POLICY) {
+export async function readPolicy(cwd, path = DEFAULT_POLICY, { given = false } = {}) {
   let text;
   try {
     text = await readFile(join(cwd, path), 'utf8');
   } catch (error) {
+    if (error.code === 'ENOENT' && given) throw new ToolError(missingPolicy(path, 'there is no such file'));
     if (error.code === 'ENOENT') return withDefaults({});
     throw new ToolError(`could not read ${path}: ${error.message}`);
   }
@@ -162,6 +163,13 @@ function spaceHint(value) {
 
 function isMapping(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The message for a --policy path that names no file. With no --policy, a missing evidence.yml
+// is an empty policy (spec 8.1). A path that --policy names must be there, so a typo is an error,
+// not a policy that asks for nothing.
+export function missingPolicy(path, where) {
+  return `--policy names ${path}, but ${where}. Check the path.`;
 }
 
 // The value of --policy as a path in the repo, with "/" between folders and no "./" at the start,

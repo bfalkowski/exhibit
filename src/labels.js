@@ -66,7 +66,10 @@ export function checkLabelLine(line) {
  * `draft({ id, title, body, text, categories })` is optional: Claude, or a script in a test. It
  * returns { code, category, model } before the defect is shown, and the answer source gets it in
  * `context.draft`. When it throws a DraftError, `context.draft` is null and `context.draftError`
- * holds the message, so the person labels that defect by hand. With a draft, the reply also says
+ * holds the message, so the person labels that defect by hand. When that DraftError has
+ * `stopsDrafting` (a 401, 403 or 404: a bad key or a wrong model), `context.draftStopped` holds
+ * what to fix, and no later defect in this run is sent: each gets `draft`, `draftError` and
+ * `draftStopped` as null, and the person labels it by hand. With a draft, the reply also says
  * `draft: 'confirmed' | 'edited' | 'replaced'`. A replaced draft is always the person's own label,
  * even when they type the draft's words again. Otherwise a reply with the draft's code and
  * category is claude_draft_confirmed, and any other change is claude_draft_edited. The line keeps the draft in `claude_draft` in all three cases.
@@ -91,11 +94,14 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   // needsBreak: add a line break before the next line, so it does not join the file's last line.
   let needsBreak = !endsWithBreak;
   const written = [];
+  // stopped: a draft failed in a way that every later draft would fail too.
+  let stopped = false;
   for (const defect of open) {
     shown += 1;
     const text = `${defectText(defect.fix, history)}The fix PR: ${defect.fix.url}\n`;
-    const { drafted, draftError } = await askForDraft(draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
-    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError });
+    const { drafted, draftError, draftStopped } = await askForDraft(stopped ? undefined : draft, { id: defect.id, title: defect.fix.title, body: defect.fix.body, text, categories: [...categories] });
+    if (draftStopped !== null) stopped = true;
+    const reply = await ask({ id: defect.id, fix_pr: defect.fix_pr, introducing_prs: defect.introducing_prs, links: defect.links }, { categories: [...categories], text, position: shown, open: open.length, draft: drafted, draftError, draftStopped });
     if (reply === QUIT) break;
     if (reply === SKIP) {
       skipped += 1;
@@ -133,14 +139,14 @@ export async function labelDefects({ cwd, ask, draft, now = () => new Date() }) 
   return { ...summary, drafts: { run: draftAgreement(written), file: draftAgreement([...labels, ...written]) } };
 }
 
-// Returns { drafted, draftError }. Both are null when there is no drafter.
+// Returns { drafted, draftError, draftStopped }. All three are null when there is no drafter.
 async function askForDraft(draft, input) {
-  if (draft === undefined) return { drafted: null, draftError: null };
+  if (draft === undefined) return { drafted: null, draftError: null, draftStopped: null };
   try {
-    return { drafted: await draft(input), draftError: null };
+    return { drafted: await draft(input), draftError: null, draftStopped: null };
   } catch (error) {
     if (!(error instanceof DraftError)) throw error;
-    return { drafted: null, draftError: error.message };
+    return { drafted: null, draftError: error.message, draftStopped: error.stopsDrafting ?? null };
   }
 }
 
@@ -175,6 +181,28 @@ async function readLabels(cwd) {
   }
   const labels = parseLines(text, LABELS, checkLabelLine, 'the labels schema. Fix or remove that line, then run exhibit label again');
   return { labels, endsWithBreak: text === '' || text.endsWith('\n') };
+}
+
+/**
+ * Reads labels.jsonl only to count it, for the funnel in the history report (spec 8.5). It never
+ * writes the file. Returns { state: 'none' } when there is no file, { state: 'read', lines }, or
+ * { state: 'unreadable', problem } when the file cannot be read, or a line is not JSON or fails
+ * the labels schema. It does not throw for those, so the history run still succeeds.
+ */
+export async function readLabelsToCount(cwd) {
+  let text;
+  try {
+    text = await readFile(join(cwd, LABELS), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { state: 'none' };
+    return { state: 'unreadable', problem: `could not read ${LABELS}: ${error.message}` };
+  }
+  try {
+    return { state: 'read', lines: parseLines(text, LABELS, checkLabelLine, 'the labels schema. Fix or remove that line, then run exhibit history again') };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { state: 'unreadable', problem: error.message };
+  }
 }
 
 // Parses JSON lines, and refuses the file at the first line that is not JSON or fails `check`.

@@ -1,0 +1,55 @@
+From a4b277c06c7d86a713f676c7f1a359cd8fd9ecbd Mon Sep 17 00:00:00 2001
+From: canary <canary@example.invalid>
+Date: Fri, 20 Nov 2026 20:59:47 -0500
+Subject: [PATCH] Holidays: count the days the decorations still show
+
+---
+ office/holidays.js          | 9 ++++++++-
+ relay/test/holidays.test.js | 8 +++++++-
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/office/holidays.js b/office/holidays.js
+index 044a70b..70d9108 100644
+--- a/office/holidays.js
++++ b/office/holidays.js
+@@ -74,6 +74,13 @@
+     const h = holidayOn(date);
+     return h.showing ? { key: h.key, name: h.name, year: h.year, preview: false } : null;
+   }
+-  const api = { HOLIDAYS, KEYS, easter, thanksgiving, dayOf, holidayOn, shown };
++  // The days the decorations still show, today and the last day included, or 0 when none show.
++  function daysLeft(date) {
++    const h = holidayOn(date);
++    if (!h.showing) return 0;
++    const from = h.from.split('-').map(Number), to = h.to.split('-').map(Number);
++    return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;
++  }
++  const api = { HOLIDAYS, KEYS, easter, thanksgiving, dayOf, holidayOn, shown, daysLeft };
+   if (typeof module !== 'undefined') module.exports = api; else window.OfficeHolidays = api;
+ })();
+diff --git a/relay/test/holidays.test.js b/relay/test/holidays.test.js
+index 27b9b40..01e0654 100644
+--- a/relay/test/holidays.test.js
++++ b/relay/test/holidays.test.js
+@@ -2,7 +2,7 @@
+ 'use strict';
+ const test = require('node:test');
+ const assert = require('node:assert');
+-const { easter, thanksgiving, holidayOn, shown, KEYS } = require('../../office/holidays.js');
++const { easter, thanksgiving, holidayOn, shown, daysLeft, KEYS } = require('../../office/holidays.js');
+ 
+ const on = (s) => { const [y, m, d] = s.split('-').map(Number); return { y, m, d }; };
+ const day = (o) => o.y + '-' + String(o.m).padStart(2, '0') + '-' + String(o.d).padStart(2, '0');
+@@ -78,3 +78,9 @@ test('the switch turns the decorations off, and a preview shows any holiday on a
+   }
+   assert.strictEqual(shown(on('2026-08-15'), true, 'newyear').year, 2027, 'a preview of New Year\'s names the coming year');
+ });
++
++test('days left counts the days the decorations still show', () => {
++  assert.strictEqual(daysLeft(on('2026-11-12')), 16, 'Thanksgiving 2026: the first day, through Nov 27');
++  assert.strictEqual(daysLeft(on('2026-12-11')), 15, 'Christmas: Dec 11 through Dec 25');
++  assert.strictEqual(daysLeft(on('2026-11-03')), 0, 'no decorations, no days');
++});
+-- 
+2.39.5 (Apple Git-154)
+

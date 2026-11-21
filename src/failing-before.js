@@ -1,4 +1,4 @@
-import { TestRunError } from './test-runs.js';
+import { baseErrorDetails, NothingLoaded, TestRunError } from './test-runs.js';
 
 const LISTED = 20;
 
@@ -24,10 +24,21 @@ export function isTestPath(path) {
 // - it fails in the run with the PR's test files, or its file could not load there. A file that
 //   cannot load, for example because it imports a module the base lacks, shows as one failed test
 //   case named after the file, as node:test writes it. The tests in that file then do not run.
+//   Many tools stop the whole command instead, such as `tsc && node --test`, or Go, where one test
+//   file that does not compile stops its package. When that run fails and gives no failing test
+//   (a NothingLoaded), a PR test file counts as not loaded when the JUnit file has no result from
+//   it. A test that is there ran on the base, and counts as in any run. A test that is not there
+//   is the PR's only when its file is a PR test file, or the plain base run does not have it.
+//   Without a file in the names (Node 20), a PR test that is not there counts only when no PR
+//   test is there: else Exhibit cannot tell which file stopped, so a person must check.
 // - it passes on the head.
 // - it is not flaky in any of the three runs.
 //
-// It is `met` with the qualifying tests listed, and `missing` when no test qualifies.
+// It is `met` with the qualifying tests listed, and `missing` when no test qualifies. It is also
+// `missing` when a run on the base gives no results, for example because the PR changes the test
+// tools: then Exhibit cannot show that a test fails on the base, so a person must check. The gap
+// says why the base run failed. A head that gives no results is `error`, as for
+// tests-before-after.
 export async function failingBefore(requirement, context) {
   let runs;
   let overlay;
@@ -35,7 +46,15 @@ export async function failingBefore(requirement, context) {
   try {
     runs = await context.testRuns();
     testFiles = prTestFiles(context.files, runs.head);
-    if (testFiles.length > 0) overlay = await context.baseWithPrTests(testFiles);
+    if (runs.baseError && testFiles.length > 0) return cannotCheck(runs.baseError, testFiles);
+    if (testFiles.length > 0) {
+      try {
+        overlay = await context.baseWithPrTests(testFiles);
+      } catch (error) {
+        if (error instanceof TestRunError && error.status === 'error') return cannotCheck(error, testFiles);
+        throw error;
+      }
+    }
   } catch (error) {
     if (!(error instanceof TestRunError)) throw error;
     return { status: error.status, details: { message: error.message }, how_to_fix: error.howToFix };
@@ -50,9 +69,18 @@ export async function failingBefore(requirement, context) {
     };
   }
 
+  const nothingLoaded = overlay instanceof NothingLoaded ? overlay : null;
+  if (nothingLoaded) overlay = nothingLoaded.tests;
   const flaky = new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky'), ...namesWith(overlay, 'flaky')]);
-  const didNotLoad = testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
   const fileOf = (name) => testFiles.find((file) => name.startsWith(`${file} > `));
+  // With nothing loaded, a test with no file counts as not loaded only when no PR test ran. When
+  // a PR test with no file in its name ran, Exhibit cannot tell which files did not load, so it
+  // names none.
+  const prTestRan = nothingLoaded !== null && [...overlay.keys()].some((name) => fileOf(name) !== undefined || !runs.base.has(name));
+  const filelessPrTestRan = nothingLoaded !== null && [...overlay.keys()].some((name) => fileOf(name) === undefined && !runs.base.has(name));
+  const didNotLoad = nothingLoaded
+    ? (filelessPrTestRan ? [] : testFiles.filter((file) => ![...overlay.keys()].some((name) => fileOf(name) === file)))
+    : testFiles.filter((file) => [...overlay].some(([name, status]) => status === 'failed' && namesFile(name, file)));
 
   const tests = [];
   const passedOnBase = [];
@@ -60,11 +88,13 @@ export async function failingBefore(requirement, context) {
     if (status !== 'passed' || flaky.has(name)) continue;
     const file = fileOf(name);
     const onBase = overlay.get(name);
-    const theirs = file !== undefined || !runs.base.has(name) || runs.base.get(name) !== onBase;
+    // With nothing loaded, a test that has no result there gives nothing to compare with the
+    // plain base run.
+    const theirs = file !== undefined || !runs.base.has(name) || (!(nothingLoaded && onBase === undefined) && runs.base.get(name) !== onBase);
     if (!theirs) continue;
     if (onBase === 'failed') {
       tests.push({ name, on_base: 'failed' });
-    } else if (onBase === undefined && didNotLoad.length > 0 && (file === undefined || didNotLoad.includes(file))) {
+    } else if (onBase === undefined && didNotLoad.length > 0 && (file === undefined ? !prTestRan : didNotLoad.includes(file))) {
       // Without a file in the test's name (Node 20's reporter gives none), Exhibit cannot tell
       // which file the test is in, so it names every PR test file that did not load.
       tests.push({ name, on_base: 'did_not_load', files: file === undefined ? didNotLoad : [file] });
@@ -75,6 +105,7 @@ export async function failingBefore(requirement, context) {
 
   const flakyHere = [...flaky].sort();
   const details = { test_files: testFiles, tests, passed_on_base: passedOnBase, did_not_load_on_base: didNotLoad };
+  if (nothingLoaded) details.base_with_pr_tests_error = nothingLoaded.message;
   if (tests.length > 0) return { status: 'met', details, flaky_tests: flakyHere };
 
   const shown = passedOnBase.slice(0, LISTED).join('; ');
@@ -87,6 +118,16 @@ export async function failingBefore(requirement, context) {
     details,
     flaky_tests: flakyHere,
     how_to_fix: `${why} Add a test that fails without the change and passes with it, and run exhibit check again. A flaky test never counts.`
+  };
+}
+
+// failing-before when a run on the base gave no results: `missing`, with the base's error.
+function cannotCheck(error, testFiles) {
+  return {
+    status: 'missing',
+    details: { test_files: testFiles, tests: [], passed_on_base: [], did_not_load_on_base: [], base_error: baseErrorDetails(error) },
+    flaky_tests: [],
+    how_to_fix: `The tests gave no results on the base, so Exhibit cannot show that a test fails there and passes on the head. ${error.howToFix} If the change adds or changes the test tools, the base cannot run the tests, so a person must check that a test in the change shows the problem.`
   };
 }
 

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGitHubForge } from '../src/github.js';
 import { checkHistoryLine } from '../src/history-schema.js';
-import { addSzz, REVERT_NOT_FOUND, REVERTS_A_REVERT } from '../src/szz.js';
+import { addSzz, REVERT_NOT_FOUND } from '../src/szz.js';
 import { replayFetch } from '../test-support/replay-fetch.js';
 import { buildSzzRepo } from './fixtures/szz-repo.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
@@ -116,20 +116,57 @@ test('a revert that names more than one PR links each one, and splits the confid
   assert.deepEqual(checkHistoryLine(done), []);
 });
 
-test('a re-land with an edited title does not link the revert it takes back', async (t) => {
+test('a re-land with an edited title is no fix: it links nothing, and its szz is null', async (t) => {
   const { repo, lines } = fixtureWithReverts(t);
   const pr15 = lines.at(-2);
   // PR 17 clicks Revert on PR 15, then renames the title, so only the body says what it reverts.
-  const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts fixture/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17` };
+  const reland = { ...pr15, number: 17, title: 'Reland: add the shop entry point', body: 'Reverts fixture/shop#15', merged_at: '2026-02-03T09:00:00Z', url: `https://github.com/${REPO}/pull/17`, classification: { kinds: ['api'], fix: true, fix_signal: 'revert' } };
   const forge = createGitHubForge({ repo: REPO, token: 't', fetch: commitPullsFetch(repo, REPO) });
   const [done] = await addSzz([reland], { dir: repo.dir, forge, known: [...lines, reland] });
-  assert.deepEqual(done.szz, { blamed_commit: null, links: [], unlinked_lines: [], dropped_lines: [], no_link_reason: REVERTS_A_REVERT });
+  // It puts PR 5 back, as a title 'Revert "Revert "' does, so it is no fix (spec 9.1). It keeps its kinds.
+  assert.deepEqual(done.classification, { kinds: ['api'], fix: false, fix_signal: null });
+  assert.equal(done.szz, null);
   assert.deepEqual(checkHistoryLine(done), []);
 
   await t.test('a revert that names a revert and a plain PR links only the plain PR', async () => {
     const both = { ...reland, body: 'Reverts fixture/shop#15\nReverts fixture/shop#2' };
     const [line] = await addSzz([both], { dir: repo.dir, forge, known: [...lines, both] });
     assert.deepEqual(line.szz.links, [revertLink(2)]);
+  });
+
+  await t.test('a revert of a re-land is a fix, and links the re-land, and a revert of that is a re-land', async () => {
+    // PR 18 clicks Revert on the re-land PR 17: the change broke again, so PR 17 brought the bug back.
+    const revertOfReland = { ...reland, number: 18, title: 'Revert "Reland: add the shop entry point"', body: 'Reverts fixture/shop#17', url: `https://github.com/${REPO}/pull/18` };
+    // PR 19 clicks Revert on PR 18, and a person renames the title: it puts the change back once more.
+    const again = { ...reland, number: 19, title: 'Reland again: add the shop entry point', body: 'Reverts fixture/shop#18', url: `https://github.com/${REPO}/pull/19` };
+    const known = [...lines, reland, revertOfReland, again];
+    const [fix, relandAgain] = await addSzz([revertOfReland, again], { dir: repo.dir, forge, known });
+    assert.deepEqual(fix.classification, { kinds: ['api'], fix: true, fix_signal: 'revert' });
+    assert.deepEqual(fix.szz.links, [revertLink(17)]);
+    assert.deepEqual([relandAgain.classification.fix, relandAgain.szz], [false, null]);
+  });
+
+  await t.test('a re-land that names its revert by a branch commit is a re-land in the chain too', async () => {
+    // PR 10 is a merge-commit PR. Here it is a revert of PR 5. PR 17 re-lands it by `git revert`
+    // of one commit on PR 10's branch, not its merge commit, so only the forge maps that commit
+    // to PR 10. PR 18 reverts PR 17, so it takes the change out again.
+    const byNumber = new Map(lines.map((line) => [line.number, line]));
+    const pr10 = { ...byNumber.get(10), title: 'Revert "Add the shop entry point"', body: 'Reverts fixture/shop#5' };
+    const branchCommit = git(repo.dir, ['rev-parse', `${pr10.merge_sha}^2`]);
+    const relandByCommit = { ...reland, body: `This reverts commit ${branchCommit}.` };
+    const revertOfReland = { ...reland, number: 18, title: 'Revert "Reland: add the shop entry point"', body: 'Reverts fixture/shop#17', url: `https://github.com/${REPO}/pull/18` };
+    const known = [...lines.filter((line) => line.number !== 10), pr10, relandByCommit, revertOfReland];
+    const [landed, fix] = await addSzz([relandByCommit, revertOfReland], { dir: repo.dir, forge, known });
+    assert.deepEqual([landed.classification.fix, landed.szz], [false, null]);
+    assert.deepEqual([fix.classification.fix, fix.szz?.links], [true, [revertLink(17)]]);
+  });
+
+  await t.test('a revert of a re-land that names it by its merge commit links it too', async () => {
+    // The re-land is on main as PR 5's squash commit would be, so the history maps that commit to PR 17.
+    const relandOnMain = { ...reland, merge_sha: 'f'.repeat(40) };
+    const revertOfReland = { ...reland, number: 18, title: 'Take back the re-land', body: `This reverts commit ${'f'.repeat(40)}.`, url: `https://github.com/${REPO}/pull/18` };
+    const [fix] = await addSzz([revertOfReland], { dir: repo.dir, forge, known: [...lines, relandOnMain, revertOfReland] });
+    assert.deepEqual([fix.classification.fix, fix.szz?.links], [true, [revertLink(17)]]);
   });
 });
 

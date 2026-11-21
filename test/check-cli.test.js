@@ -236,10 +236,44 @@ test('a policy path that goes through a linked folder is refused, and does not r
   assert.equal(run.status, 2, run.stderr);
   assert.match(run.stderr, /\.github in the base commit [0-9a-f]{7} is a symlink, so \.github\/evidence\.yml goes through it\. Exhibit does not follow it\. Give --policy the path of the real file\./);
   assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'config/evidence.yml']).status, 0);
-  // A path whose folder is not in the base at all is still no policy, not an error.
-  const missing = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', 'nowhere/evidence.yml']);
-  assert.equal(missing.status, 1, missing.stderr);
-  assert.equal(readEvidence(fixture.repo).policy.sha256, null);
+});
+
+// The review of PR 220, finding 4: a --policy path with a typo read as an empty policy, so the
+// run gave needs_person and the gap "No kind in .github/evidnce.yml matches the changed files".
+test('a --policy file that neither the base nor the head commit has exits 2 and says the file is missing', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY, '.github/evidence.yml');
+  for (const path of ['.github/evidnce.yml', 'nowhere/evidence.yml']) {
+    const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', path]);
+    assert.equal(run.status, 2, run.stderr);
+    const message = new RegExp(`--policy names ${path.replaceAll('.', '\\.')}, but neither the base commit [0-9a-f]{7} nor the head commit [0-9a-f]{7} has such a file\\. Check the path\\.`);
+    assert.match(run.stderr, message);
+    assert.equal(existsSync(join(fixture.repo, '.exhibit', 'evidence.json')), false);
+    const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
+    assert.match(summary, /error/);
+    assert.match(summary, message);
+  }
+  // The real path still works.
+  assert.equal(exhibitCheck(fixture, ['--base', 'start', '--head', 'notes', '--policy', '.github/evidence.yml']).status, 0);
+});
+
+// The review of PR 324, finding 1: a repo that starts to use Exhibit adds its policy at the
+// --policy path in the same PR. That PR is a policy change, not a typo.
+test('a --policy file that only the head commit has is the policy change, with an empty policy from the base', (t) => {
+  const fixture = buildRepo(t);
+  const git = (...args) => execFileSync('git', args, { cwd: fixture.repo, env: gitEnv(fixture.home, { GIT_AUTHOR_NAME: 'A', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'A', GIT_COMMITTER_EMAIL: 'a@example.com' }) });
+  git('checkout', '-q', '-b', 'adds-policy', 'start');
+  mkdirSync(join(fixture.repo, '.github'));
+  writeFileSync(join(fixture.repo, '.github', 'evidence.yml'), POLICY);
+  git('add', '.github');
+  git('commit', '-q', '-m', 'add the policy');
+  git('checkout', '-q', 'main');
+  const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'adds-policy', '--policy', '.github/evidence.yml']);
+  assert.equal(run.status, 1, run.stderr);
+  const evidence = readEvidence(fixture.repo);
+  assert.deepEqual(evidence.policy, { path: '.github/evidence.yml', sha256: null });
+  assert.equal(evidence.classification.policy_changed, true);
+  assert.ok(evidence.gaps.some((gap) => gap.type === 'policy-change'));
 });
 
 test('the policy is read from the top of the repo, also when exhibit check runs in a subfolder', (t) => {
@@ -359,6 +393,27 @@ test('check --pr passes the body and the repo to the revert signal', async (t) =
   assert.deepEqual(await signalFor('Reverts lodash/lodash#5000'), [false, null]);
 });
 
+test('check --pr N marks the PR as a fix when fix_signals has pr:N', async (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [pr:7]\n'));
+  const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
+  const fetch = async () => {
+    const pull = { number: 7, title: 'Change the app', labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+    return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await check(['--pr', '7', '--repo', 'owner/name'], { env: { GITHUB_TOKEN: 'test-token' }, cwd: fixture.repo, fetch, stdout: { write() {} } });
+  const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
+  assert.deepEqual([fix, fixSignal], [true, 'pr:7']);
+});
+
+test('check without --pr knows no PR number, so a pr:N signal does not match', (t) => {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(POLICY.replace('version: 3\n', 'version: 3\nsettings:\n  fix_signals: [pr:7]\n'));
+  exhibitCheck(fixture, ['--base', 'start', '--head', 'fix/src']);
+  const { fix, fix_signal: fixSignal } = readEvidence(fixture.repo).classification;
+  assert.deepEqual([fix, fixSignal], [false, null]);
+});
+
 test('a bad argument removes the old evidence.json too, and summary.md says error and why', (t) => {
   const fixture = buildRepo(t);
   mkdirSync(join(fixture.repo, '.exhibit'));
@@ -449,7 +504,7 @@ function withProbes(fixture, probes, settings = '') {
 
 const filesUnder = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).map((name) => join(dir, name)) : []);
 
-test('a probe runs in the head worktree, and summary.md links its output and artifacts', (t) => {
+test('a probe runs in the head worktree, and summary.md names its output and artifacts and says where they are', (t) => {
   const fixture = buildRepo(t);
   withProbes(fixture, [{ name: 'copy notes', run: 'mkdir -p out && cp notes/one.md out/copy.md', artifacts: ['out/copy.md'] }]);
   const run = exhibitCheck(fixture, ['--base', 'start', '--head', 'notes']);
@@ -461,9 +516,11 @@ test('a probe runs in the head worktree, and summary.md links its output and art
   assert.deepEqual(probe.details.artifacts, [{ path: 'out/copy.md', copy: '.exhibit/probes/copy-notes/artifacts/out/copy.md' }]);
   assert.equal(readFileSync(join(fixture.repo, probe.details.artifacts[0].copy), 'utf8'), 'one\n');
   const summary = readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8');
-  assert.match(summary, /- probe copy notes \(from notes\): met\. Output: \[output\.log\]\(probes\/copy-notes\/output\.log\)\. Artifacts: \[out\/copy\.md\]\(probes\/copy-notes\/artifacts\/out\/copy\.md\)\./);
-  // Each link in summary.md points to a file beside it.
-  for (const [, target] of summary.matchAll(/\]\(([^)]+)\)/g)) assert.ok(existsSync(join(fixture.repo, '.exhibit', decodeURI(target))), target);
+  assert.match(summary, /- probe copy notes \(from notes\): met\. Output: `\.exhibit\/probes\/copy-notes\/output\.log`\. Artifacts: `\.exhibit\/probes\/copy-notes\/artifacts\/out\/copy\.md`\./);
+  assert.match(summary, /\n\nThe probe files are in \.exhibit in the repo\. In GitHub Actions, they are in the workflow artifact named exhibit\.\n/);
+  // No relative links: in the GitHub job summary, they lead nowhere. Each path names a real file.
+  assert.doesNotMatch(summary, /\]\(/);
+  for (const [, path] of summary.matchAll(/`(\.exhibit\/probes\/[^`]+)`/g)) assert.ok(existsSync(join(fixture.repo, path)), path);
   // The head worktree is gone after the run.
   const worktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
   assert.equal(worktrees.match(/^worktree /gm).length, 1);
@@ -520,8 +577,8 @@ const isRunning = (pid) => {
 
 // A probe runs in a process group of its own, so a Ctrl-C in the terminal reaches Exhibit, not the
 // probe. Exhibit must stop the probe and remove the head worktree itself.
-for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
-  test(`${signal} while a probe runs stops the probe, removes the head worktree, and exits ${code}`, async (t) => {
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  test(`${signal} while a probe runs stops the probe, removes the head worktree, and ends by the signal`, async (t) => {
     const fixture = buildRepo(t);
     // The file is outside the worktree, so it is still there when the worktree is gone.
     const pidFile = join(dirname(fixture.repo), 'sleep.pid');
@@ -538,7 +595,8 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
 
     child.kill(signal);
     const { status, signalName } = await exited;
-    assert.deepEqual({ status, signalName }, { status: code, signalName: null });
+    // Exhibit ends by the signal, as src/probe.js makes it do, so a shell shows 128 plus its number.
+    assert.deepEqual({ status, signalName }, { status: null, signalName: signal });
     await waitFor(() => !isRunning(sleepPid), 5000, 'the sleep process to stop');
     const worktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) });
     assert.equal(worktrees.match(/^worktree /gm).length, 1, worktrees);
@@ -570,6 +628,19 @@ test('after a stop, check writes no evidence.json or summary.md, even when the c
   assert.equal(existsSync(join(fixture.repo, '.exhibit', 'summary.md')), false);
 });
 
+test('a probe gets the env that check() gets, without NODE_TEST_CONTEXT, as the test command does', async (t) => {
+  const fixture = buildRepo(t);
+  withProbes(fixture, [{ name: 'env', run: 'echo "mark=${PROBE_MARK-unset} context=${NODE_TEST_CONTEXT-unset} outside=${ONLY_IN_EXHIBIT-unset}"' }]);
+  // A variable in Exhibit's own env that the env given to check() does not have.
+  process.env.ONLY_IN_EXHIBIT = 'yes';
+  t.after(() => delete process.env.ONLY_IN_EXHIBIT);
+  const env = { PATH: process.env.PATH, PROBE_MARK: 'from-check', NODE_TEST_CONTEXT: 'child-v8' };
+  const code = await check(['--base', 'start', '--head', 'notes'], { env, cwd: fixture.repo, stdout: { write() {} } });
+  assert.equal(code, 0);
+  const [probe] = readEvidence(fixture.repo).requirements;
+  assert.equal(readFileSync(join(fixture.repo, probe.details.output), 'utf8'), 'mark=from-check context=unset outside=unset\n');
+});
+
 test('each probe starts in a clean head worktree, so it cannot see the files of the probe before it', (t) => {
   const fixture = buildRepo(t);
   withProbes(fixture, [
@@ -588,4 +659,78 @@ test('each probe starts in a clean head worktree, so it cannot see the files of 
   for (const file of filesUnder(join(fixture.repo, '.exhibit'))) {
     if (statSync(file).isFile()) assert.doesNotMatch(readFileSync(file, 'utf8'), /secret-42/, file);
   }
+});
+
+// A base policy whose fix signal is tracker:jira, and whose src kind needs failing-before only on
+// a fix. The forge gives PR 7, whose title names the Jira issue PAY-482. Jira answers from
+// test/fixtures/jira/acme.json, where PAY-482 is a Bug, and with a 503 for PAY-503.
+const JIRA_POLICY = `version: 3
+settings:
+  fix_signals: [label:bug, tracker:jira]
+  jira:
+    site: https://acme.atlassian.net
+kinds:
+  src:
+    match: ["src/**"]
+    risk: medium
+    needs:
+      - failing-before: { when: [fix] }
+`;
+const JIRA_REPLIES = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8'));
+
+async function checkWithJira(t, { title, env, jiraStatus = null }) {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(JIRA_POLICY);
+  const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
+  const asked = [];
+  const fetch = async (url, options) => {
+    const { origin, pathname, search } = new URL(String(url));
+    asked.push({ url: `${origin}${pathname}`, authorization: options?.headers?.authorization });
+    if (origin === 'https://api.github.com') {
+      const pull = { number: 7, title, labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+      return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (jiraStatus) return new Response('{}', { status: jiraStatus, headers: { 'content-type': 'application/json' } });
+    const reply = JIRA_REPLIES[`${pathname}${search}`];
+    if (!reply) return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(reply.body), { status: reply.status, statusText: reply.statusText, headers: { 'content-type': 'application/json' } });
+  };
+  const collectors = { 'failing-before': async () => ({ status: 'met', details: {} }) };
+  const code = await check(['--pr', '7', '--repo', 'acme/widgets'], { env: { GITHUB_TOKEN: 'test-token', ...env }, cwd: fixture.repo, fetch, stdout: { write() {} }, collectors }).catch((error) => error);
+  if (code instanceof Error) return { error: code, asked, summary: readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8') };
+  const evidence = readEvidence(fixture.repo);
+  return { code, asked, evidence, summary: readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8') };
+}
+
+test('check --pr asks Jira for tracker:jira, so a fix that only Jira shows needs failing-before', async (t) => {
+  const { code, asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
+  assert.deepEqual(asked.map((a) => a.url), ['https://api.github.com/repos/acme/widgets/pulls/7', 'https://acme.atlassian.net/rest/api/2/issue/PAY-482']);
+  assert.equal(asked[1].authorization, 'Bearer secret-jira-token');
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [true, 'jira:PAY-482']);
+  assert.deepEqual(evidence.requirements.map((r) => [r.type, r.status]), [['failing-before', 'met']]);
+  assert.equal(code, 0);
+  assert.match(summary, /^- Fix: yes, from the signal jira:PAY-482\. Feature: no\.$/m);
+  assert.doesNotMatch(summary, /secret-jira-token/);
+  assert.deepEqual(checkExhibit(evidence), []);
+});
+
+test('check --pr with tracker:jira and no JIRA_API_TOKEN asks no Jira, and summary.md says so in one line', async (t) => {
+  const { asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {} });
+  assert.deepEqual(asked.map((a) => a.url), ['https://api.github.com/repos/acme/widgets/pulls/7']);
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
+  assert.equal(evidence.requirements[0].status, 'skipped');
+  assert.match(summary, /^- JIRA_API_TOKEN is not set, so the tracker:jira fix signal matched no PR\. Set it to a Jira API token, and for Jira Cloud set JIRA_EMAIL to the email of its account\.$/m);
+});
+
+test('check --pr says in summary.md when Jira could not answer for the PR\'s issue', async (t) => {
+  const { evidence, summary } = await checkWithJira(t, { title: 'PAY-503: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
+  assert.match(summary, /^- The tracker:jira signal could not check PAY-503, so it does not match\. Jira answered 503 /m);
+});
+
+test('check --pr stops with the verdict error when Jira refuses the token', async (t) => {
+  const { error, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' }, jiraStatus: 401 });
+  assert.match(error.message, /Jira answered 401/);
+  assert.match(summary, /^Verdict: \*\*error\*\*/m);
+  assert.doesNotMatch(summary, /secret-jira-token/);
 });

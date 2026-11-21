@@ -1,15 +1,18 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { constants } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
-import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
+import { buildExhibit, COLLECTORS, exitCode, renderErrorSummary, renderSummary } from '../check.js';
 import { MUTATION_DIR } from '../mutation.js';
+import { TESTS_DIR } from '../test-runs.js';
 import { checkExhibit } from '../exhibit-schema.js';
+import { classifyWithTracker } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
-import { DEFAULT_POLICY, parsePolicy, policyPath } from '../policy.js';
+import { connectTracker } from '../jira.js';
+import { DEFAULT_POLICY, missingPolicy, parsePolicy, policyPath } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe, stopAllGroups, stopped } from '../probe.js';
+import { readSkip, SKIP_LABEL, skipApplies } from '../skip.js';
 import { describeError, ToolError } from '../tool-error.js';
 import { worktreeOnDemand } from '../worktree.js';
 
@@ -22,19 +25,28 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // `exhibit check --base REF [--head REF]`, or `exhibit check --pr N --repo owner/name`
 // Classifies the change from base to head, works out what the policy needs, collects the evidence,
 // and writes .exhibit/evidence.json and .exhibit/summary.md (spec 7, 8.2 and 9.8).
-// It returns the exit code: 0 for meets_policy, 1 for needs_person, 2 for error.
+// It returns the exit code: 0 for meets_policy, 1 for needs_person, 2 for error, and 0 for
+// needs_person with a skip.
 //
 // The changed paths come from git, from the merge base of base and head to head, so both commits
 // must be in the clone. With --pr, the forge gives the base, the head, and the PR's title, body,
 // labels and branch for the fix signals. Without it, only the local branch name is known.
+// With --pr and tracker:jira in the fix signals, it asks Jira whether the PR's ticket is a bug
+// (spec 9.1), with the token in JIRA_API_TOKEN. With no token, or when Jira could not answer for
+// that ticket, the signal does not match, and summary.md says why in one line. A refused token
+// or a rate limit stops the run with the verdict error.
 //
 // The policy comes from the base commit, not from the files on disk (spec 8.1). --policy FILE
 // reads it from that path in the repo, in place of evidence.yml.
 //
-// It removes the old evidence.json, summary.md, probe files and mutation logs first. So when the run fails before
+// It removes the old evidence.json, summary.md, probe files, test logs and mutation logs first. So when the run fails before
 // it can write them, no old file is left to be read as this run's verdict. Any failure that is not
 // a verdict then writes a summary.md that says the verdict is error and why, and throws. The CLI
 // prints it and exits 2.
+//
+// With --pr, a PR can carry a skip (src/skip.js): the label exhibit-skip and a line in its body
+// that gives the reason. The exhibit records it, with who added the label, and the verdict stays
+// the same. Without --shadow, a skip on needs_person gives exit code 0 (spec 9.8).
 //
 // --shadow is shadow mode (spec 10): the run is the same, and the files say the same verdict, but
 // the exit code is 0 for every verdict, error too. A failure that is not a verdict is printed here
@@ -42,7 +54,7 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // what went wrong.
 export async function check(argv, { env, cwd, fetch, stdout, stderr = process.stderr, collectors }) {
   // Remove the old files before anything can fail, a bad argument too.
-  await Promise.all([...Object.values(OUTPUT), PROBES, MUTATION_DIR].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
+  await Promise.all([...Object.values(OUTPUT), PROBES, TESTS_DIR, MUTATION_DIR].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
   // Read before the other arguments, so a bad argument in shadow mode gives 0 too.
   const shadow = argv.includes('--shadow');
   try {
@@ -72,24 +84,38 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
     if (!token) throw new ToolError(`${forgeModule.tokenEnv} is not set. --pr reads the PR from ${forgeModule.displayName}, so set it to a token that can read the repo, for example ${forgeModule.tokenExample}.`);
     const forge = forgeModule.connect({ repo: options.repo, token, fetch });
     const pull = await forge.pull(options.pr);
+    const prNumber = options.pr;
     refs = {
       base: pull.baseSha,
       head: pull.headSha,
-      pr: { title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
+      pr: { number: options.pr, title: pull.title ?? '', body: pull.body, labels: pull.labels, branch: pull.headRef ?? '', repo: options.repo },
       signalsFrom: 'pr',
-      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.'
+      hint: `Fetch it first, for example with git fetch origin pull/${options.pr}/head ${pull.baseRef ?? ''}`.trimEnd() + '.',
+      labelAddedBy: () => forge.labelAddedBy(prNumber, SKIP_LABEL)
     };
   } else {
-    refs = { base: options.base, head: options.head, pr: { title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
+    refs = { base: options.base, head: options.head, pr: { number: null, title: '', labels: [], branch: await localBranch(cwd, options) }, signalsFrom: 'branch', hint: 'Check the name, or fetch it first.' };
   }
 
   const base = await commitSha(cwd, refs.base, refs.hint);
   const head = await commitSha(cwd, refs.head, refs.hint);
-  const { policy, policyFile } = await policyAtBase(cwd, base, options.policy);
+  // Only a PR can carry a skip: without --pr, Exhibit knows no labels and no body.
+  const skip = refs.labelAddedBy ? await readSkip(refs.pr, { head, labelAddedBy: refs.labelAddedBy }) : null;
+  const { policy, policyFile } = await policyAtBase(cwd, { base, head }, options.policy, options.policyGiven);
   const files = (await git(cwd, ['diff', '--name-only', '--no-renames', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
   // The new files, for the feature rule (spec 9.1). Here git looks for renames, so a file that
   // only moves is not a new file.
   const added = (await git(cwd, ['diff', '--name-only', '--find-renames', '--diff-filter=A', '-z', `${base}...${head}`])).split('\0').filter((path) => path !== '');
+  // Only with --pr: without it, the title is unknown, and the branch alone is no PR (spec 9.1).
+  const notes = [];
+  let fixed;
+  if (options.pr !== null) {
+    const { tracker, note } = connectTracker(policy.settings, { env, fetch });
+    if (note) notes.push(note);
+    const { classification, problem } = await classifyWithTracker(refs.pr, policy.settings.fix_signals, tracker);
+    if (problem) notes.push(problem);
+    fixed = classification;
+  }
 
   // The head worktree for probes is made only when a probe asks for it, and removed at the end.
   const headWorktree = worktreeOnDemand(cwd, head);
@@ -98,7 +124,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
-    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head }, { collectors: all });
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, fixed, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head, skip }, { collectors: all });
   } finally {
     stopOnSignal.off();
     await headWorktree.remove();
@@ -111,40 +137,47 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
 
   await writeTogether(cwd, [
     [OUTPUT.evidence, JSON.stringify(exhibit, null, 2) + '\n'],
-    [OUTPUT.summary, renderSummary(exhibit, { shadow })]
+    [OUTPUT.summary, renderSummary(exhibit, { shadow, notes })]
   ]);
 
-  const code = shadow ? 0 : EXIT_CODES[exhibit.verdict];
+  const code = exitCode(exhibit, { shadow });
   if (options.json) {
     stdout.write(JSON.stringify({ verdict: exhibit.verdict, exit_code: code, gaps: exhibit.gaps.length, evidence: OUTPUT.evidence, summary: OUTPUT.summary }) + '\n');
   } else {
     const gaps = exhibit.gaps.length === 0 ? 'No gaps.' : `${exhibit.gaps.length} ${exhibit.gaps.length === 1 ? 'gap' : 'gaps'}, listed with how to fix ${exhibit.gaps.length === 1 ? 'it' : 'them'} in ${OUTPUT.summary}.`;
     stdout.write(`Verdict: ${exhibit.verdict}. ${gaps}\nWrote ${OUTPUT.evidence} and ${OUTPUT.summary}.\n`);
     if (shadow) stdout.write('Shadow mode: nothing waits on this verdict, so the exit code is 0.\n');
+    else if (skipApplies(exhibit)) stdout.write(`The PR carries a skip, so the exit code is 0. Reason: ${exhibit.skip.reason}\n`);
   }
   return code;
 }
 
-// While the collectors run, a Ctrl-C (SIGINT) or a SIGTERM stops Exhibit in a clean way (spec
-// 9.6). A probe, settings.mutation_setup and Stryker each run in a process group of their own, so
-// the signal does not reach them, and Node would exit at once without running any finally block.
-// So the handler kills every group that runInGroup started (stopAllGroups), runs `cleanUp`, which
-// removes the head worktree of the probes, and then exits with the usual code for the signal:
-// 128 plus the signal's number, so 130 for SIGINT and 143 for SIGTERM. A second signal while it
-// cleans up changes nothing. `off()` removes the handlers.
+// While the collectors run, a Ctrl-C (SIGINT), a SIGTERM or a closing terminal (SIGHUP) stops
+// Exhibit in a clean way (spec 9.6). A probe, a test run, settings.mutation_setup and Stryker each
+// run in a process group of their own, so the signal does not reach them. src/probe.js kills those
+// groups on its own, but it then ends Exhibit by the signal at once, and no finally block runs. So
+// this handler kills every group that runInGroup started (stopAllGroups), and runs `cleanUp`,
+// which removes the head worktree of the probes. Then it removes its listeners and sends the
+// signal to Exhibit again, so Exhibit ends by that signal, and a shell shows the usual code: 130
+// for SIGINT, 143 for SIGTERM and 129 for SIGHUP. A second signal while it cleans up changes
+// nothing. `off()` removes the handlers.
 function onStopSignal(cleanUp) {
+  const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   let stopping = false;
-  const handler = (signal) => {
+  const off = () => signals.forEach((signal) => process.off(signal, handler));
+  function handler(signal) {
     if (stopping) return;
     stopping = true;
     stopAllGroups();
     cleanUp()
       .catch(() => {})
-      .finally(() => process.exit(128 + constants.signals[signal]));
-  };
-  const signals = ['SIGINT', 'SIGTERM'];
+      .finally(() => {
+        off();
+        process.kill(process.pid, signal);
+      });
+  }
   for (const signal of signals) process.on(signal, handler);
-  return { off: () => signals.forEach((signal) => process.off(signal, handler)) };
+  return { off };
 }
 
 // A promise that never settles. After a stop, the run waits on it, and the signal handler exits.
@@ -154,15 +187,16 @@ function waitForever() {
 
 // The collector for probe requirements. Each probe runs in the head worktree, made clean again
 // before each probe, so no probe sees the files of the one before it. Each keeps its files in its
-// own folder under .exhibit/probes, named after the probe.
+// own folder under .exhibit/probes, named after the probe. Each gets the run's env, as the test
+// command does.
 function probeCollector({ cwd, headWorktree, timeoutSeconds }) {
   const used = new Set();
-  return async (requirement) => {
+  return async (requirement, context) => {
     const folder = folderName(requirement.params.name, used);
     const outPath = `${PROBES}/${folder}`;
     return runProbe(
       { ...requirement.params, hidden: requirement.author === 'hidden' },
-      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds }
+      { worktree: await headWorktree.fresh(), outDir: join(cwd, outPath), outPath, timeoutSeconds, env: context.env }
     );
   };
 }
@@ -217,7 +251,9 @@ async function git(cwd, args) {
 // change the rules that check it (spec 8.1 and 15). A change to the policy file is still a
 // policy-change gap. It returns the policy, as parsePolicy gives it, and policyFile: the path and
 // the SHA-256 of the file's bytes in the base commit, or null when the base has no such file.
-async function policyAtBase(cwd, base, path) {
+// A file that --policy names must be in the base or the head commit. Only in the head, the PR
+// adds the policy, so it gets the policy-change gap. In neither, the path is most likely a typo.
+async function policyAtBase(cwd, { base, head }, path, given) {
   const short = base.slice(0, 7);
   let bytes = null;
   const entry = await treeEntry(cwd, base, path);
@@ -236,6 +272,9 @@ async function policyAtBase(cwd, base, path) {
       const parent = await treeEntry(cwd, base, folder);
       if (parent === null) break;
       if (parent.mode === '120000') throw new ToolError(`${folder} in the base commit ${short} is a symlink, so ${path} goes through it. Exhibit does not follow it. Give --policy the path of the real file.`);
+    }
+    if (given && (await treeEntry(cwd, head, path)) === null) {
+      throw new ToolError(missingPolicy(path, `neither the base commit ${short} nor the head commit ${head.slice(0, 7)} has such a file`));
     }
   }
   try {
@@ -303,5 +342,5 @@ function parseOptions(argv, forgeModule) {
   } else if (values.base === undefined) {
     throw new ToolError(`give --base REF, the commit the change starts from, such as main, or --pr N. ${USAGE}`);
   }
-  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, policy: policyPath(values.policy ?? DEFAULT_POLICY), json: values.json === true };
+  return { base: values.base, head: values.head ?? 'HEAD', pr, repo: values.repo ?? null, policy: policyPath(values.policy ?? DEFAULT_POLICY), policyGiven: values.policy !== undefined, json: values.json === true };
 }

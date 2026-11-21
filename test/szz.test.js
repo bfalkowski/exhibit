@@ -360,7 +360,7 @@ test('SZZ drops lines newer than the bug report that the fix links', async (t) =
 test('SZZ takes the Jira issue\'s created date as the bug report date, when the fix links no GitHub issue', async (t) => {
   // PR 6 fixes a line that PR 1 added in a commit written at 2026-01-05T10:00:00Z. Its fix_signal
   // says the tracker:jira signal found it, by the Bug SHOP-6.
-  async function run(t, created, body = null) {
+  async function run(t, created, body = null, { token = 't', ticket } = {}) {
     const repo = buildSzzRepo();
     t.after(() => repo.cleanup());
     const pulls = commitPullsFetch(repo, REPO);
@@ -371,8 +371,8 @@ test('SZZ takes the Jira issue\'s created date as the bug report date, when the 
       if (pathname.endsWith('/issues/50')) return json(200, { number: 50, created_at: '2026-01-05T11:00:00Z' });
       return pulls(url, init);
     };
-    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token: 't', fetch });
-    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' } };
+    const tracker = createJiraTracker({ settings: { site: 'https://shop.atlassian.net' }, token, fetch });
+    const fix6 = { ...repo.history.find((pr) => pr.number === 6), body, classification: { fix: true, fix_signal: 'jira:SHOP-6' }, ...(ticket ? { ticket } : {}) };
     const [line] = await addSzz([fix6], { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), tracker });
     return line;
   }
@@ -391,6 +391,13 @@ test('SZZ takes the Jira issue\'s created date as the bug report date, when the 
   await t.test('a GitHub issue that the body links wins over the Jira date', async (t) => {
     const { szz } = await run(t, '2026-01-05T09:30:00.000+0000', 'Fixes #50');
     assert.deepEqual(szz.links.map((link) => link.pr), [1]);
+  });
+
+  await t.test('the created date that the line saved in ticket counts, with no Jira request and no token', async (t) => {
+    const ticket = { issue: 'jira:SHOP-6', type: 'Bug', created_at: '2026-01-05T09:30:00.000Z', found_field: null, found: [] };
+    // Jira would say the issue is newer, so only the saved date drops the line.
+    const { szz } = await run(t, '2026-01-05T10:30:00.000+0000', null, { token: undefined, ticket });
+    assert.deepEqual(szz.dropped_lines.map((l) => [l.path, l.line, l.reason]), [['src/cart.js', 4, 'newer than the bug report']]);
   });
 });
 

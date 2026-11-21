@@ -218,8 +218,8 @@ test('without --claude, label needs no ANTHROPIC_API_KEY', (t) => {
 
 // Runs exhibit label --claude with the recorded Anthropic reply in test/fixtures/anthropic/draft.json.
 const anthropicFixture = fileURLToPath(new URL('./fixtures/anthropic/draft.json', import.meta.url));
-const labelWithClaude = (cwd, input, args = []) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude', ...args], {
-  cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: anthropicFixture }
+const labelWithClaude = (cwd, input, args = [], fixture = anthropicFixture) => spawnSync(process.execPath, ['--import', preload, bin, 'label', '--claude', ...args], {
+  cwd, input, encoding: 'utf8', env: { ...process.env, ANTHROPIC_API_KEY: 'test-key', EXHIBIT_TEST_FIXTURE: fixture }
 });
 
 test('--claude shows a marked draft: the person confirms one and edits another', (t) => {
@@ -301,4 +301,18 @@ test('--claude: an edited code that is too long is asked again', (t) => {
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, /A code can have at most 200/);
   assert.deepEqual(readLabels(cwd).map((l) => [l.code, l.labeled_by]), [['Shorter code', 'claude_draft_edited']]);
+});
+
+test('--claude with a bad key says once that drafting stopped, and the person labels the next defect by hand', (t) => {
+  const cwd = withHistory(t, shopText());
+  const badKey = fileURLToPath(new URL('./fixtures/anthropic/bad-key.json', import.meta.url));
+  // D-012 and D-007 by hand, then quit at D-006.
+  const typed = ['k', 'k', 'Count ignored the quantity', 'arithmetic', 'A test that buys 3', 'k', 'k', 'Stock went below zero', 'state', 'A test that sells the last item', 'k', 'q'].join('\n') + '\n';
+  const run = labelWithClaude(cwd, typed, [], badKey);
+  assert.equal(run.status, 0, run.stderr);
+  const said = run.stdout.match(/Claude could not draft/g) ?? [];
+  assert.equal(said.length, 1, run.stdout);
+  assert.match(run.stdout, /Claude could not draft D-012: the Anthropic API answered 401: invalid x-api-key\. Check ANTHROPIC_API_KEY\. Drafting is stopped for the rest of this run/);
+  assert.doesNotMatch(run.stdout, /Claude's draft, not saved yet/);
+  assert.deepEqual(readLabels(cwd).map((l) => [l.id, l.labeled_by, 'claude_draft' in l]), [['D-012', 'person', false], ['D-007', 'person', false]]);
 });

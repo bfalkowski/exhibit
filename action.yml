@@ -20,9 +20,9 @@ inputs:
     required: false
     default: check
   policy:
-    description: The path of the policy file in the repo. It goes to --policy.
+    description: The path of the policy file in the repo. It goes to --policy, and that file must be there. Empty means evidence.yml, and a missing evidence.yml is an empty policy.
     required: false
-    default: evidence.yml
+    default: ''
   data-branch:
     description: For publish, the branch that stores the exhibits. It goes to --data-branch. Empty means settings.data_branch in the policy, or exhibit-data.
     required: false
@@ -32,7 +32,7 @@ inputs:
     required: false
     default: 'false'
   enforce:
-    description: false is shadow mode, and the check step succeeds whatever the verdict (check --shadow). true fails the check step on needs_person and on error, and publish says so in the comment (publish --enforce).
+    description: false is shadow mode, and the check step succeeds whatever the verdict (check --shadow). true fails the check step on needs_person and on error, and publish says so in the comment (publish --enforce). With true, a needs_person PR that carries a skip, the label exhibit-skip and a line in its body that starts with "Exhibit skip:" and gives a reason, passes the check step. A new label or a body edit does not run the check again, so after you add a skip, re-run the check job.
     required: false
     default: 'false'
   token:
@@ -58,6 +58,7 @@ runs:
         INPUT_ENFORCE: ${{ inputs.enforce }}
         GITHUB_TOKEN: ${{ inputs.token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |
         set -euo pipefail
         bad() { echo "::error::The input $1 must be $2, not \"$3\"."; exit 2; }
@@ -65,11 +66,15 @@ runs:
         case "$INPUT_ENFORCE" in true | false) ;; *) bad enforce 'true or false' "$INPUT_ENFORCE" ;; esac
         case "$INPUT_COMMAND" in
           check)
-            args=(check --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --policy "$INPUT_POLICY")
+            args=(check --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY")
+            if [ -n "$INPUT_POLICY" ]; then args+=(--policy "$INPUT_POLICY"); fi
             if [ "$INPUT_ENFORCE" = false ]; then args+=(--shadow); fi
             ;;
           publish)
-            args=(publish --evidence .exhibit/evidence.json --policy "$INPUT_POLICY")
+            # The check job ran the PR's code, which can rewrite evidence.json. --head with --pr and
+            # --repo makes publish refuse an exhibit for another PR or commit than this event's.
+            args=(publish --evidence .exhibit/evidence.json --pr "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA")
+            if [ -n "$INPUT_POLICY" ]; then args+=(--policy "$INPUT_POLICY"); fi
             if [ -n "$INPUT_DATA_BRANCH" ]; then args+=(--data-branch "$INPUT_DATA_BRANCH"); fi
             if [ "$INPUT_COMMENT" = true ]; then args+=(--comment); fi
             if [ "$INPUT_ENFORCE" = true ]; then args+=(--enforce); fi
@@ -87,13 +92,14 @@ runs:
 
     - name: Upload the exhibit
       if: ${{ !cancelled() && inputs.command == 'check' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: exhibit
         path: |
           .exhibit/evidence.json
           .exhibit/summary.md
           .exhibit/probes/
+          .exhibit/tests/
           .exhibit/mutation/
         include-hidden-files: true
         if-no-files-found: warn

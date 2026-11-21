@@ -2,13 +2,22 @@ import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
 import { describeTests, failingBefore } from './failing-before.js';
 import { describeMutation, mutation } from './mutation.js';
-import { runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
+import { describeSkip, skipApplies } from './skip.js';
+import { describeBaseError, runTestsOnBaseAndHead, runTestsOnBaseWithPrTests, testsBeforeAfter } from './test-runs.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const STATUSES = ['met', 'missing', 'failed', 'skipped', 'error'];
 
 // The exit code of exhibit check for each verdict (spec 7 and 9.8).
 export const EXIT_CODES = Object.freeze({ meets_policy: 0, needs_person: 1, error: 2 });
+
+// The exit code of exhibit check for an exhibit (spec 9.8 and 10). In shadow mode it is always
+// 0. In enforce mode it is the verdict's code, except that a skip (src/skip.js) turns
+// needs_person into 0. The verdict itself stays needs_person.
+export function exitCode(exhibit, { shadow = false } = {}) {
+  if (shadow) return 0;
+  return skipApplies(exhibit) ? 0 : EXIT_CODES[exhibit.verdict];
+}
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
 // how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The mutation
@@ -23,9 +32,11 @@ export const COLLECTORS = Object.freeze({
 // Builds the exhibit, the content of evidence.json (spec 8.2), for one change.
 //
 // `change` holds the policy (as readPolicy returns it), `policyFile` ({ path, sha256 }), the
-// changed paths `files`, the paths the change adds `added` (new files, not moved ones), what is known of the PR (`pr`: title, body, labels, branch, repo), where the fix
+// changed paths `files`, the paths the change adds `added` (new files, not moved ones), what is known of the PR (`pr`: number, title, body, labels, branch, repo), where the fix
 // signals came from (`signalsFrom`: `pr` or `branch`), `repo`, `prNumber`, and the `base` and
-// `head` SHAs, and `cwd`, the clone, and `env` for the test command.
+// `head` SHAs, and `cwd`, the clone, and `env` for the test command. `fixed` is { fix, fix_signal }
+// when the caller asked the tracker already (spec 9.1). Without it, the fix signals classify `pr`. `skip` is the skip record
+// from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
 // `settings`, and `testRuns()`, which runs the tests on the base and the head the first time it is
@@ -49,7 +60,7 @@ export const COLLECTORS = Object.freeze({
 // commits.
 export async function buildExhibit(change, { collectors = COLLECTORS, runTests = runTestsOnBaseAndHead, runBaseWithPrTests = runTestsOnBaseWithPrTests, clock = () => performance.now(), now = () => new Date(), environment = currentEnvironment() } = {}) {
   const files = [...new Set(change.files)].sort();
-  const { classification, requirements } = classifyChange(change.policy, files, change.pr, change.policyFile.path, change.added ?? []);
+  const { classification, requirements } = classifyChange(change.policy, files, change.pr, change.policyFile.path, change.added ?? [], change.fixed);
   const policyName = change.policyFile.path;
   const { has_default: hasDefault, ...shown } = classification;
 
@@ -130,6 +141,7 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     requirements: collected,
     verdict,
     gaps,
+    skip: change.skip ?? null,
     checks_by_author: {
       builder: collected.filter((item) => item.author === 'builder' && !notNeeded.has(item)).length,
       hidden: collected.filter((item) => item.author === 'hidden' && !notNeeded.has(item)).length
@@ -180,12 +192,15 @@ export const VERDICT_WORDS = {
 
 // The summary.md for an exhibit: the verdict, the change, each requirement, and each gap with how
 // to fix it, in plain words. It holds no time, so two runs on the same commits give the same file.
-// With `shadow`, it says that the check exits 0 whatever the verdict (spec 10).
-export function renderSummary(exhibit, { shadow = false } = {}) {
+// With `shadow`, it says that the check exits 0 whatever the verdict (spec 10). Each of `notes` is
+// one more line under the change, such as why the tracker:jira signal could not match (spec 9.1).
+export function renderSummary(exhibit, { shadow = false, notes = [] } = {}) {
   const c = exhibit.classification;
   const lines = [];
   lines.push(`# Exhibit check: ${VERDICT_WORDS[exhibit.verdict]}`, '');
-  lines.push(...verdictLines(exhibit.verdict, shadow));
+  lines.push(...verdictLines(exhibit, shadow));
+  const skip = describeSkip(exhibit, { enforce: !shadow });
+  if (skip.length > 0) lines.push(...skip.flatMap((line) => [line, '']));
   const pr = exhibit.pr === null ? '' : ` PR ${exhibit.pr}${exhibit.repo ? ` in ${exhibit.repo}` : ''}.`;
   lines.push(`Base ${exhibit.base.slice(0, 7)}, head ${exhibit.head.slice(0, 7)}.${pr}`, '');
 
@@ -195,6 +210,7 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
   else lines.push('- No kind of change matched the changed files, so the default rules apply.');
   lines.push(`- Risk: ${c.risk}.`);
   lines.push(`- Fix: ${c.fix ? `yes, from the signal ${c.fix_signal}` : 'no'}. Feature: ${c.feature ? 'yes' : 'no'}.`);
+  for (const note of notes) lines.push(`- ${note.charAt(0).toUpperCase()}${note.slice(1)}`);
   if (c.signals_from === 'branch') {
     lines.push('- Exhibit knew only the branch name, not the PR\'s title, body or labels, so a fix or feature that only they show was not seen. Run exhibit check with --pr N to read them from the forge.');
   }
@@ -206,6 +222,9 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
     const name = item.type === 'probe' ? ` ${item.params.name}` : '';
     const hidden = item.author === 'hidden' ? ', hidden check' : '';
     lines.push(`- ${item.type}${name} (from ${item.kinds.join(', ')}${hidden}): ${item.status}.${probeFiles(item)}${otherDetails(item)}`);
+  }
+  if (exhibit.requirements.some((item) => probeFiles(item) !== '')) {
+    lines.push('', 'The probe files are in .exhibit in the repo. In GitHub Actions, they are in the workflow artifact named exhibit.');
   }
   lines.push('');
 
@@ -222,24 +241,34 @@ export function renderSummary(exhibit, { shadow = false } = {}) {
 }
 
 // More words for a requirement's line in summary.md: the tests that failing-before found, why
-// a requirement was not needed, or the catch rate and the surviving mutants.
+// a requirement was not needed, the catch rate and the surviving mutants, or that the base gave
+// no test results.
 function otherDetails(item) {
   if (item.type === 'mutation') return describeMutation(item.details);
+  if (item.type === 'tests-before-after') return describeBaseError(item.details, item.status);
   if (item.type !== 'failing-before') return '';
   if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
   return describeTests(item.details);
 }
 
-// The links to a probe's output and artifacts, for its line in summary.md. The files are under
-// .exhibit, beside summary.md, so each link is relative to that folder. A hidden probe has none.
+// The paths of a probe's output and artifacts, for its line in summary.md. They are plain paths,
+// not links: in the GitHub job summary, a relative link leads nowhere, because the files are in the
+// workflow artifact. A line after the list says where to find them. A hidden probe has none.
 function probeFiles(item) {
   if (item.type !== 'probe' || item.author === 'hidden') return '';
-  const link = (text, path) => `[${text}](${encodeURI(path.replace(/^\.exhibit\//, ''))})`;
   const parts = [];
-  if (item.details.output) parts.push(` Output: ${link('output.log', item.details.output)}.`);
+  if (item.details.output) parts.push(` Output: ${codePath(item.details.output)}.`);
   const artifacts = item.details.artifacts ?? [];
-  if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => link(artifact.path, artifact.copy)).join(', ')}.`);
+  if (artifacts.length > 0) parts.push(` Artifacts: ${artifacts.map((artifact) => codePath(artifact.copy)).join(', ')}.`);
   return parts.join('');
+}
+
+// A path as inline code, with more backticks around it than any run inside it.
+function codePath(path) {
+  const longest = Math.max(0, ...(path.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = longest > 0 ? ' ' : '';
+  return `${fence}${pad}${path}${pad}${fence}`;
 }
 
 // The summary.md for a check that failed before it had a verdict, such as a bad argument, a bad
@@ -247,16 +276,29 @@ function probeFiles(item) {
 // CI, this is the job summary, so a broken setup shows there, in shadow mode too.
 export function renderErrorSummary(message, { shadow = false } = {}) {
   const lines = [`# Exhibit check: ${VERDICT_WORDS.error}`, ''];
-  lines.push(...verdictLines('error', shadow));
-  lines.push('Exhibit could not finish the check, so it wrote no evidence.json. The reason:', '');
-  lines.push(...message.split('\n').map((line) => (line === '' ? '' : `    ${line}`)));
+  lines.push(...verdictLines({ verdict: 'error', skip: null }, shadow));
+  lines.push(REASON_LINE, '');
+  lines.push(...message.split('\n').map((line) => (line === '' ? '' : `${REASON_INDENT}${line}`)));
   return lines.join('\n') + '\n';
 }
 
-// The verdict line, with the exit code that exhibit check gives, and in shadow mode a line that
+const REASON_LINE = 'Exhibit could not finish the check, so it wrote no evidence.json. The reason:';
+const REASON_INDENT = '    ';
+
+// The reason in a summary.md that renderErrorSummary wrote, as it was given, or null when the text
+// is not such a summary. exhibit publish reads it, to post the reason on the PR.
+export function readErrorReason(summary) {
+  const lines = summary.split('\n');
+  const start = lines.indexOf(REASON_LINE);
+  if (start === -1) return null;
+  const reason = lines.slice(start + 1).map((line) => (line.startsWith(REASON_INDENT) ? line.slice(REASON_INDENT.length) : line)).join('\n').trim();
+  return reason === '' ? null : reason;
+}
+
+// The verdict line, with the exit code that exhibit check gives for `exhibit`, and in shadow mode a line that
 // says why that code is 0.
-function verdictLines(verdict, shadow) {
-  const lines = [`Verdict: **${verdict}** (exit code ${shadow ? 0 : EXIT_CODES[verdict]}).`, ''];
+function verdictLines(exhibit, shadow) {
+  const lines = [`Verdict: **${exhibit.verdict}** (exit code ${exitCode(exhibit, { shadow })}).`, ''];
   if (shadow) lines.push('Shadow mode: nothing waits on this verdict, so the check exits 0 whatever it is.', '');
   return lines;
 }

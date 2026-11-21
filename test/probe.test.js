@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runProbe } from '../src/probe.js';
+import { runInGroup, runProbe } from '../src/probe.js';
 
 // A worktree folder for the probe to run in, and an output folder, both removed after the test.
 function setup(t) {
@@ -203,4 +203,23 @@ async function gone(pid) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
+}
+
+// runInGroup is the one place where probes, test runs and mutation runs start, so it is the one
+// place that drops NODE_TEST_CONTEXT. It does so for a shell command, as a probe, the test command
+// and mutation_setup run, and for a program with args, as the Stryker run starts.
+for (const [form, command, args] of [
+  ['a shell command', 'echo "mark=${MARK-unset} context=${NODE_TEST_CONTEXT-unset}"', null],
+  ['a program with args', '/bin/sh', ['-c', 'echo "mark=${MARK-unset} context=${NODE_TEST_CONTEXT-unset}"']]
+]) {
+  test(`runInGroup drops NODE_TEST_CONTEXT from the env of ${form}, and keeps the rest`, async (t) => {
+    const where = setup(t);
+    const logFile = join(where.dir, 'run.log');
+    const env = { PATH: process.env.PATH, MARK: 'kept', NODE_TEST_CONTEXT: 'child-v8' };
+    const outcome = await runInGroup(command, { cwd: where.worktree, logFile, timeoutMs: 10000, env, args });
+    assert.equal(outcome.code, 0);
+    assert.equal(readFileSync(logFile, 'utf8'), 'mark=kept context=unset\n');
+    // The caller's env is not changed.
+    assert.equal(env.NODE_TEST_CONTEXT, 'child-v8');
+  });
 }

@@ -29,6 +29,8 @@ test('action.yml is a composite action with exactly the inputs of spec 10, and t
   assert.equal(action.runs.using, 'composite');
   assert.deepEqual(Object.keys(action.inputs), ['command', 'policy', 'data-branch', 'comment', 'enforce', 'token']);
   assert.equal(action.inputs.command.default, 'check');
+  // Empty, so the run step can tell a given path from the default (spec 10).
+  assert.equal(action.inputs.policy.default, '');
   assert.equal(action.inputs.enforce.default, 'false');
   assert.equal(action.inputs.token.default, '${{ github.token }}');
 });
@@ -41,7 +43,8 @@ test('each input reaches the run step only as an env variable, never pasted into
     INPUT_COMMENT: '${{ inputs.comment }}',
     INPUT_ENFORCE: '${{ inputs.enforce }}',
     GITHUB_TOKEN: '${{ inputs.token }}',
-    PR_NUMBER: '${{ github.event.pull_request.number }}'
+    PR_NUMBER: '${{ github.event.pull_request.number }}',
+    HEAD_SHA: '${{ github.event.pull_request.head.sha }}'
   });
   // An expression in a script is pasted in before bash runs, so a value could become a command.
   for (const step of action.runs.steps) assert.doesNotMatch(step.run ?? '', /\$\{\{/, step.name);
@@ -54,8 +57,11 @@ test('no step decides anything: the steps are install, run, summary and upload, 
   const conditions = action.runs.steps.map((step) => step.if ?? null);
   assert.deepEqual(conditions, [null, null, "${{ !cancelled() && inputs.command == 'check' }}", "${{ !cancelled() && inputs.command == 'check' }}"]);
   const upload = action.runs.steps[3];
-  assert.equal(upload.uses, 'actions/upload-artifact@v4');
-  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/mutation/']);
+  // v6 is the first major that runs on Node 24. The .exhibit folder is hidden, so without
+  // include-hidden-files the artifact would be empty.
+  assert.equal(upload.uses, 'actions/upload-artifact@v6');
+  assert.equal(upload.with['include-hidden-files'], true);
+  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/tests/', '.exhibit/mutation/']);
   // The run step ends by handing over to the CLI, so its exit code is the step's exit code.
   assert.match(runStep.run.trimEnd(), /\nexec node "\$GITHUB_ACTION_PATH\/bin\/exhibit\.js" "\$\{args\[@\]\}"$/);
 });
@@ -63,7 +69,7 @@ test('no step decides anything: the steps are install, run, summary and upload, 
 // Runs the run step's script with bash. `node` is the first `node` on PATH, so a test can put a
 // stand-in there.
 function runScript(script, { inputs = {}, env = {}, cwd, pathDir }) {
-  const all = { command: 'check', policy: 'evidence.yml', 'data-branch': '', comment: 'false', enforce: 'false', ...inputs };
+  const all = { command: 'check', policy: '', 'data-branch': '', comment: 'false', enforce: 'false', ...inputs };
   return spawnSync('bash', ['-c', script], {
     cwd,
     encoding: 'utf8',
@@ -76,6 +82,7 @@ function runScript(script, { inputs = {}, env = {}, cwd, pathDir }) {
       INPUT_ENFORCE: all.enforce,
       GITHUB_TOKEN: 'test-token',
       PR_NUMBER: '7',
+      HEAD_SHA: 'f'.repeat(40),
       GITHUB_REPOSITORY: 'owner/name',
       GITHUB_ACTION_PATH: root,
       ...env,
@@ -106,20 +113,26 @@ const bin = join(root, 'bin', 'exhibit.js');
 
 test('check maps policy to --policy and enforce false to --shadow, with the PR from the event', (t) => {
   const map = stubNode(t);
-  assert.deepEqual(map({}).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
+  // An empty policy input passes no --policy, so a missing evidence.yml stays an empty policy.
+  assert.deepEqual(map({}).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--shadow']);
   assert.deepEqual(map({ enforce: 'true', policy: 'ci/policy.yml' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'ci/policy.yml']);
+  assert.deepEqual(map({ policy: 'evidence.yml' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
   // comment and data-branch are for publish. check does not take them.
-  assert.deepEqual(map({ comment: 'true', 'data-branch': 'store' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--policy', 'evidence.yml', '--shadow']);
+  assert.deepEqual(map({ comment: 'true', 'data-branch': 'store' }).argv, [bin, 'check', '--pr', '7', '--repo', 'owner/name', '--shadow']);
 });
 
 test('publish maps data-branch, comment and enforce to their flags, each on its own', (t) => {
   const map = stubNode(t);
-  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--policy', 'evidence.yml'];
+  // --pr and --repo let publish post the error on the PR when the check wrote no evidence.json.
+  // With --head too, publish stores only an exhibit for the PR event's repo, PR and head.
+  const event = ['--pr', '7', '--repo', 'owner/name', '--head', 'f'.repeat(40)];
+  const base = [bin, 'publish', '--evidence', '.exhibit/evidence.json', ...event];
   assert.deepEqual(map({ command: 'publish' }).argv, base);
+  assert.deepEqual(map({ command: 'publish', policy: 'ci/policy.yml' }).argv, [...base, '--policy', 'ci/policy.yml']);
   assert.deepEqual(map({ command: 'publish', 'data-branch': 'store', comment: 'true', enforce: 'true' }).argv, [...base, '--data-branch', 'store', '--comment', '--enforce']);
   assert.deepEqual(map({ command: 'publish', enforce: 'true' }).argv, [...base, '--enforce']);
   // A value with spaces or a $ stays one argument, and nothing in it runs.
-  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', '--policy', 'my policy $(touch x).yml']);
+  assert.deepEqual(map({ command: 'publish', policy: 'my policy $(touch x).yml' }).argv, [bin, 'publish', '--evidence', '.exhibit/evidence.json', ...event, '--policy', 'my policy $(touch x).yml']);
 });
 
 test('the step exits with the exit code of the CLI', (t) => {
@@ -252,11 +265,27 @@ for (const path of WORKFLOWS) {
     assert.equal(exhibitStep(publish).with.enforce, exhibitStep(workflow.jobs.check).with.enforce);
   });
 
+  // upsertComment lists the comments and posts when it finds none of its own. Two publish runs for
+  // one PR at the same time could both find none and post two comments. One group per PR makes
+  // the second run wait. It does not cancel the run that is going, which may be half done.
+  test(`${path}: two publish jobs for one PR never run at the same time`, () => {
+    assert.deepEqual(workflow.jobs.publish.concurrency, { group: 'exhibit-publish-${{ github.event.pull_request.number }}', 'cancel-in-progress': false });
+  });
+
   test(`${path}: for a PR from a fork, the check job summary says why the publish job is skipped`, () => {
     const note = workflow.jobs.check.steps.find((step) => step.name === 'Say why the publish job is skipped');
     assert.equal(note.if, 'github.event.pull_request.head.repo.full_name != github.repository');
     assert.match(note.run, /This PR comes from a fork\..*publish job is skipped/);
     assert.match(note.run, />> "\$GITHUB_STEP_SUMMARY"/);
+  });
+
+  // checkout@v5 and download-artifact@v7 are the first majors that run on Node 24. An older one
+  // gets GitHub's "Node.js 20 is deprecated" annotation on every run.
+  test(`${path}: both jobs use the checkout and download-artifact majors that run on Node 24`, () => {
+    for (const job of Object.values(workflow.jobs)) {
+      assert.equal(job.steps.find((step) => step.uses?.startsWith('actions/checkout@')).uses, 'actions/checkout@v5');
+    }
+    assert.equal(workflow.jobs.publish.steps[1].uses, 'actions/download-artifact@v7');
   });
 
   test(`${path}: both jobs run Exhibit from a fixed commit SHA or a release tag, never a branch or ./`, () => {

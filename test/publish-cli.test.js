@@ -256,6 +256,23 @@ test('--policy reads the storage settings from that file', (t) => {
   assert.match(runPublish(fixture, fixture.repo, file, ['--policy', '../x.yml']).stderr, /--policy must be the path of a file in the repo/);
 });
 
+// The review of PR 220, finding 4: with a typo in --policy, publish used the default storage, so
+// it could push to exhibit-data when the real policy says storage: local.
+test('a --policy file that is not there exits 2 and stores nothing, and with no --policy a missing evidence.yml uses the defaults', (t) => {
+  const fixture = buildFixture(t);
+  mkdirSync(join(fixture.repo, '.github'));
+  writeFileSync(join(fixture.repo, '.github', 'evidence.yml'), 'settings:\n  storage: local\n');
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  const run = runPublish(fixture, fixture.repo, file, ['--policy', '.github/evidnce.yml']);
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, /^exhibit: --policy names \.github\/evidnce\.yml, but there is no such file\. Check the path\.$/m);
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+  // With no --policy and no evidence.yml, the policy is empty, so the default storage holds.
+  const plain = runPublish(fixture, fixture.repo, file, []);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /on exhibit-data in commit/);
+});
+
 // The GitHub Action passes enforce to publish on its own, whether or not it posts a comment.
 test('--enforce without --comment is allowed, and posts nothing', (t) => {
   const fixture = buildFixture(t);
@@ -264,4 +281,66 @@ test('--enforce without --comment is allowed, and posts nothing', (t) => {
   const run = runPublish(fixture, fixture.repo, file, ['--enforce']);
   assert.equal(run.status, 0, run.stderr);
   assert.equal(run.stdout, `Wrote .exhibit/out/prs/12/${HEAD_1}.json.\n`);
+});
+
+// When the check wrote no exhibit, a failure to post the error comment still says that there was
+// no exhibit, so a person does not look for a stored one.
+test('with no evidence.json, a 403 when posting the error comment gives exit 2 and a plain message', (t) => {
+  const fixture = buildFixture(t);
+  mkdirSync(join(fixture.repo, '.exhibit'));
+  writeFileSync(join(fixture.repo, '.exhibit', 'summary.md'), '# Exhibit check: Exhibit failed\n');
+  const preload = fileURLToPath(new URL('../test-support/preload-replay-fetch.js', import.meta.url));
+  const replies = fileURLToPath(new URL('./fixtures/github/pr-comment-forbidden.json', import.meta.url));
+  const env = gitEnv(fixture.home, { ...IDENTITY, GITHUB_TOKEN: 'test-token', EXHIBIT_TEST_FIXTURE: replies });
+
+  const run = spawnSync(process.execPath, ['--import', preload, ...publishArgs('.exhibit/evidence.json', ['--comment', '--pr', '12', '--repo', 'acme/widgets'])], { cwd: fixture.repo, encoding: 'utf8', env });
+
+  assert.equal(run.status, 2, run.stderr);
+  assert.equal(run.stdout, '');
+  assert.equal(run.stderr, 'exhibit: exhibit check wrote no .exhibit/evidence.json, and the comment on PR 12 that says so was not posted: GitHub answered 403 (Resource not accessible by integration) for /repos/acme/widgets/issues/12/comments. The token may lack access, or the rate limit is used up: check the token, or wait and try again. A fine-grained GITHUB_TOKEN needs the permission "Pull requests: write" for this request.\n');
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+});
+
+// In the GitHub Action, the check job runs the PR's code, and that code can rewrite
+// .exhibit/evidence.json before the upload. Publish cannot run the check again, but it can refuse
+// an exhibit that is not for the PR event: the Action passes the event's repo, PR and head.
+test('--pr, --repo and --head must match the exhibit, or publish exits 2 and stores nothing', (t) => {
+  const fixture = buildFixture(t);
+  const event = ['--pr', '12', '--repo', 'acme/widgets', '--head', HEAD_1];
+  const refused = (value, said) => {
+    const file = fixture.writeExhibit(fixture.dir, 'evidence.json', value);
+    const run = runPublish(fixture, fixture.repo, file, event);
+    assert.equal(run.status, 2, run.stderr);
+    assert.equal(run.stdout, '');
+    assert.equal(run.stderr, `exhibit: ${file} is the exhibit for ${said}, not for PR 12 in acme/widgets at ${HEAD_1}, so nothing was stored. Its head, PR and repo must be the ones of the PR event. A push to the PR while the check ran, or a step in the check job that rewrote the file, can cause this.\n`);
+    assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
+  };
+  refused(exhibit(12, HEAD_2), `PR 12 in acme/widgets at ${HEAD_2}`);
+  refused(exhibit(13, HEAD_1), `PR 13 in acme/widgets at ${HEAD_1}`);
+  refused({ ...exhibit(12, HEAD_1), repo: 'acme/gadgets' }, `PR 12 in acme/gadgets at ${HEAD_1}`);
+  // An exhibit with no repo is not the event's exhibit when --repo names one.
+  refused({ ...exhibit(12, HEAD_1), repo: null }, `PR 12 in no named repo at ${HEAD_1}`);
+
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  // GitHub gives lowercase SHAs, but a SHA in capitals names the same commit.
+  const run = runPublish(fixture, fixture.repo, file, ['--pr', '12', '--repo', 'Acme/Widgets', '--head', HEAD_1.toUpperCase()]);
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(fixture.git(fixture.remote, 'show', `exhibit-data:prs/12/${HEAD_1}.json`), readFileSync(file, 'utf8'));
+});
+
+test('--head must be a full commit SHA', (t) => {
+  const fixture = buildFixture(t);
+  const file = fixture.writeExhibit(fixture.dir, 'evidence.json', exhibit(12, HEAD_1));
+  for (const bad of ['main', HEAD_1.slice(0, 12), '', `${HEAD_1}0`, '3'.repeat(63), '3'.repeat(65)]) {
+    const run = runPublish(fixture, fixture.repo, file, ['--head', bad]);
+    assert.equal(run.status, 2, bad);
+    assert.match(run.stderr, new RegExp(`^exhibit: --head must be a full commit SHA of 40 or 64 hex digits, not "${bad}"\\.`));
+  }
+  // A SHA-256 repo has 64-digit SHAs, so --head takes one. This one is not the exhibit's head, so
+  // publish gets past the SHA check and refuses at the match.
+  const long = '3'.repeat(64);
+  const run = runPublish(fixture, fixture.repo, file, ['--head', long]);
+  assert.equal(run.status, 2);
+  assert.match(run.stderr, new RegExp(`^exhibit: ${file} is the exhibit for PR 12 in acme/widgets at ${HEAD_1}, not for PR 12 in acme/widgets at ${long}, so nothing was stored\\.`));
+  assert.equal(fixture.git(fixture.remote, 'for-each-ref', 'refs/heads/exhibit-data'), '');
 });

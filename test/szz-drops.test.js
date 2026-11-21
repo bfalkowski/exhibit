@@ -235,7 +235,8 @@ test('whitespace: a quote mark in a regex opens no string, so the whitespace in 
 test('whitespace: a division that reads as a regex can drop a change in a later string that has a "/" in it', () => {
   // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
   // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round.
-  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';"]) {
+  // A later regex, such as /'/, does the same.
+  for (const before of ["  y = obj.of / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + 'a / b' + 'c d';", "  y = x++ / 2 + s.replace(/'/, '') + 'c d';"]) {
     const after = before.replace("'c d'", "'cd'");
     const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
     assert.deepEqual(dropped(result), [['a.js', 3, 'whitespace']], before);
@@ -561,6 +562,22 @@ test('comments: a later comment row that only names "/*" does not stop the look 
   }
 });
 
+test('comments: a JSDoc row with a glob such as **/*.js is still a comment', () => {
+  for (const deleted of [
+    [' * Old words.', ' * Matches src/**/*.js files.', ' */'],
+    ['/**', ' * Matches src/**/*.js files.', ' * Old words.', ' */']
+  ]) {
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted }] }));
+    assert.deepEqual(counted(result), [], deleted.join(' | '));
+    assert.ok(result.dropped.every((d) => d.reason === 'comment'), deleted.join(' | '));
+  }
+});
+
+test('comments: without the file, a glob with a name after "**/" still ends the block, so its row counts', () => {
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old words.', ' * Matches src/**/foo.js files.', ' */'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [6]]]);
+});
+
 test('comments: a * row before a regex that ends in "*/" with no semicolon counts', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: ['  * qty', 'const re = /a*/'], added: ['  * qty * rate', 'const re = /b*/'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);
@@ -592,6 +609,30 @@ test('comments: a // or # inside a string is code, not a comment', () => {
     { path: 'a.py', hunks: [{ at: 1, deleted: ["tag = 'a # b'", 'say = "it\\"s # 1"'], added: ["tag = 'a # c'", 'say = "it\\"s # 2"'] }] }
   ));
   assert.deepEqual(counted(result), [['a.js', [1, 2, 3]], ['a.py', [1, 2]]]);
+});
+
+test('comments: a division that reads as a regex can drop a line when a later string has a "/" in it', () => {
+  // A known limit (spec 9.2), pinned so that a change to opensRegex shows here. The regex that
+  // "/ 2" starts ends inside 'a / b', so the strings after it read the wrong way round, and the
+  // "//" in 'c // d' reads as a comment.
+  // A later regex, such as /'/, does the same.
+  const lines = [
+    "  y = x++ / 2 + 'a / b' + 'c // d';",
+    "  y = x-- / 2 + 'a / b' + 'c // d';",
+    "  y = obj.of / 2 + 'a / b' + 'c // d';",
+    "  y = x++ / 2 + s.replace(/'/, '') + 'c // d';"
+  ];
+  for (const before of lines) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(dropped(result), [['a.js', 3, 'comment']], before);
+  }
+  // A plain division reads right, so the change counts.
+  for (const before of ["  y = a / 2 + 'a / b' + 'c // d';", "  y = a / 2 + s.replace(/'/, '') + 'c // d';"]) {
+    const after = before.replace("'c // d'", "'c // e'");
+    const plain = countedLines(diff({ path: 'a.js', hunks: [{ at: 3, deleted: [before], added: [after] }] }));
+    assert.deepEqual(counted(plain), [['a.js', [3]]], before);
+  }
 });
 
 test('comments: a trailing comment pairs only with a line in the same hunk', () => {
@@ -656,6 +697,13 @@ test('comments: with the file, a JSDoc text row whose block opens and closes out
   const result = countedLines(diff({ path: 'a.js', hunks }), files({ 'a.js': before }, { 'a.js': after }));
   assert.deepEqual(counted(result), []);
   assert.deepEqual(dropped(result), [['a.js', 2, 'comment']]);
+});
+
+test('comments: with the file, a row whose block ends at a "*/" with a "/" after it counts', () => {
+  const before = '/*\n  a *//b/.test(s) && go();\nx = 1;\n';
+  const after = '/*\n*/\nx = 1;\n';
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted: ['  a *//b/.test(s) && go();'], added: ['*/'] }] }), files({ 'a.js': before }, { 'a.js': after }));
+  assert.deepEqual(counted(result), [['a.js', [2]]]);
 });
 
 test('comments: with the file, a row that starts with the * operator outside a block counts', () => {

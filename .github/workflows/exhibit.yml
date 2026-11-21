@@ -27,7 +27,7 @@ jobs:
       contents: read
     steps:
       # The whole history, so the PR's base and head commits are both in the clone.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -55,6 +55,12 @@ jobs:
     name: Exhibit publish
     needs: check
     if: ${{ !cancelled() && github.event.pull_request.head.repo.full_name == github.repository }}
+    # One publish at a time for each PR. Publish posts the comment when it finds none of its own, so
+    # two at the same time could post two comments. A second run waits. If a third comes while it
+    # waits, GitHub cancels the waiting one, and the newest run posts.
+    concurrency:
+      group: exhibit-publish-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -64,11 +70,11 @@ jobs:
       pull-requests: write
     steps:
       # The base commit, never the PR's head.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: exhibit
           path: .exhibit
