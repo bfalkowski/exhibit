@@ -553,3 +553,77 @@ test('each probe starts in a clean head worktree, so it cannot see the files of 
     if (statSync(file).isFile()) assert.doesNotMatch(readFileSync(file, 'utf8'), /secret-42/, file);
   }
 });
+
+// A base policy whose fix signal is tracker:jira, and whose src kind needs failing-before only on
+// a fix. The forge gives PR 7, whose title names the Jira issue PAY-482. Jira answers from
+// test/fixtures/jira/acme.json, where PAY-482 is a Bug, and with a 503 for PAY-503.
+const JIRA_POLICY = `version: 3
+settings:
+  fix_signals: [label:bug, tracker:jira]
+  jira:
+    site: https://acme.atlassian.net
+kinds:
+  src:
+    match: ["src/**"]
+    risk: medium
+    needs:
+      - failing-before: { when: [fix] }
+`;
+const JIRA_REPLIES = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8'));
+
+async function checkWithJira(t, { title, env, jiraStatus = null }) {
+  const fixture = buildRepo(t);
+  fixture.setBasePolicy(JIRA_POLICY);
+  const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
+  const asked = [];
+  const fetch = async (url, options) => {
+    const { origin, pathname, search } = new URL(String(url));
+    asked.push({ url: `${origin}${pathname}`, authorization: options?.headers?.authorization });
+    if (origin === 'https://api.github.com') {
+      const pull = { number: 7, title, labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+      return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (jiraStatus) return new Response('{}', { status: jiraStatus, headers: { 'content-type': 'application/json' } });
+    const reply = JIRA_REPLIES[`${pathname}${search}`];
+    if (!reply) return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(reply.body), { status: reply.status, statusText: reply.statusText, headers: { 'content-type': 'application/json' } });
+  };
+  const collectors = { 'failing-before': async () => ({ status: 'met', details: {} }) };
+  const code = await check(['--pr', '7', '--repo', 'acme/widgets'], { env: { GITHUB_TOKEN: 'test-token', ...env }, cwd: fixture.repo, fetch, stdout: { write() {} }, collectors }).catch((error) => error);
+  if (code instanceof Error) return { error: code, asked, summary: readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8') };
+  const evidence = readEvidence(fixture.repo);
+  return { code, asked, evidence, summary: readFileSync(join(fixture.repo, '.exhibit', 'summary.md'), 'utf8') };
+}
+
+test('check --pr asks Jira for tracker:jira, so a fix that only Jira shows needs failing-before', async (t) => {
+  const { code, asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
+  assert.deepEqual(asked.map((a) => a.url), ['https://api.github.com/repos/acme/widgets/pulls/7', 'https://acme.atlassian.net/rest/api/2/issue/PAY-482']);
+  assert.equal(asked[1].authorization, 'Bearer secret-jira-token');
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [true, 'jira:PAY-482']);
+  assert.deepEqual(evidence.requirements.map((r) => [r.type, r.status]), [['failing-before', 'met']]);
+  assert.equal(code, 0);
+  assert.match(summary, /^- Fix: yes, from the signal jira:PAY-482\. Feature: no\.$/m);
+  assert.doesNotMatch(summary, /secret-jira-token/);
+  assert.deepEqual(checkExhibit(evidence), []);
+});
+
+test('check --pr with tracker:jira and no JIRA_API_TOKEN asks no Jira, and summary.md says so in one line', async (t) => {
+  const { asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {} });
+  assert.deepEqual(asked.map((a) => a.url), ['https://api.github.com/repos/acme/widgets/pulls/7']);
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
+  assert.equal(evidence.requirements[0].status, 'skipped');
+  assert.match(summary, /^- JIRA_API_TOKEN is not set, so the tracker:jira fix signal matched no PR\. Set it to a Jira API token, and for Jira Cloud set JIRA_EMAIL to the email of its account\.$/m);
+});
+
+test('check --pr says in summary.md when Jira could not answer for the PR\'s issue', async (t) => {
+  const { evidence, summary } = await checkWithJira(t, { title: 'PAY-503: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
+  assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
+  assert.match(summary, /^- The tracker:jira signal could not check PAY-503, so it does not match\. Jira answered 503 /m);
+});
+
+test('check --pr stops with the verdict error when Jira refuses the token', async (t) => {
+  const { error, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' }, jiraStatus: 401 });
+  assert.match(error.message, /Jira answered 401/);
+  assert.match(summary, /^Verdict: \*\*error\*\*/m);
+  assert.doesNotMatch(summary, /secret-jira-token/);
+});

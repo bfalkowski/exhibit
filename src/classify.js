@@ -10,7 +10,9 @@ const RISKS = ['low', 'medium', 'high'];
 // It returns { classification, requirements }:
 // - classification.kinds: the kinds whose globs match a changed path, sorted by name.
 // - classification.risk: the highest risk among them, or default's risk when none matches.
-// - classification.fix, fix_signal: from the fix signals. classification.feature: a `feature`
+// - classification.fix, fix_signal: from the fix signals, or from `fixed` when the caller has
+//   classified the PR already, as classifyWithTracker does with the tracker (spec 9.1).
+//   classification.feature: a `feature`
 //   label, or an added path that matches a glob in settings.source_paths (spec 9.1).
 // - classification.merge_without_reading: `allowed` only when every matched kind says `allowed`.
 // - classification.used_default: no kind matched, so default's rules apply. has_default says
@@ -22,8 +24,8 @@ const RISKS = ['low', 'medium', 'high'];
 //   A need that two kinds share is one requirement, and `kinds` names both. A failing-before
 //   whose `when` does not fit this change stays in the list with `not_needed`, the reason in
 //   words, so the exhibit can show it as skipped (spec 8.1).
-export function classifyChange(policy, files, pr, policyPath = 'evidence.yml', added = []) {
-  const { fix, fix_signal: fixSignal } = classifyFix(pr, policy.settings.fix_signals);
+export function classifyChange(policy, files, pr, policyPath = 'evidence.yml', added = [], fixed = classifyFix(pr, policy.settings.fix_signals)) {
+  const { fix, fix_signal: fixSignal } = fixed;
   const sourcePaths = policy.settings.source_paths ?? [];
   const feature = pr.labels.some((label) => label.toLowerCase() === 'feature') || added.some((path) => sourcePaths.some((glob) => matchesGlob(path, glob)));
 
