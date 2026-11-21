@@ -27,6 +27,8 @@ A copy stays as it is:
 cp -R /path/to/exhibit/skills/review-page ~/.claude/skills/
 ```
 
+If `~/.claude/skills/review-page` is there already, for example from an earlier copy, move it away first. Otherwise `ln -s` fails, or makes a link inside the old folder.
+
 Start a new Claude Code session. The skill shows as `/review-page` in the skill list.
 
 ## Credits

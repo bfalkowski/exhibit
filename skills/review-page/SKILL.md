@@ -11,8 +11,8 @@ The pattern comes from hamelsmu/evals-skills, `build-review-interface` (MIT).
 
 ## In Exhibit
 
-- To label escaped defects, use `exhibit label --review`. It is this pattern, built into Exhibit, and it writes `.exhibit/labels.jsonl` in the right format (docs/spec.md section 8.4). Do not build a second page for labels.
-- Use this skill for the other reviews that have no command yet, such as reading a blind sample, keeping or dropping the rules that `exhibit policy suggest` drafts, or checking a list of SZZ links before a label run.
+- To label escaped defects, use `exhibit label --review`. It is this pattern, built into Exhibit, and it writes `.exhibit/labels.jsonl` in the right format (docs/spec.md section 8.4). It also asks the person to keep or reject each SZZ link, and writes the rejected ones to `rejected_prs`, which the backtest reads. Do not build a second page for labels or for SZZ links.
+- Use this skill for the other reviews that have no command yet, such as reading a blind sample, or keeping or dropping the rules that `exhibit policy suggest` drafts, when it is built.
 - Use the words from the "Words" table in docs/spec.md section 6 on the page: escaped defect, introducing PR, deferral, policy miss, verdict. Say "escaped defect", not "bug" or "issue", when you mean one.
 - The page writes `answers.jsonl` in the scratchpad, never into `.exhibit/`. Only Exhibit's own commands write `.exhibit/` files, because they check each line against its schema.
 
@@ -38,7 +38,7 @@ If you cannot write these lines, you do not understand the task well enough to a
 
 - Write a script that reads the source data and writes `items.json`: one object for each item, with an `id`, the evidence to show, and Claude's draft answer if there is one.
 - Keep picking and sorting in the script, not in the page.
-- Do not change the project's own data files to fit the page. The page reads `items.json` and writes `answers.jsonl`. When the project has its own answer format, the script converts at the end, or the page writes that format directly.
+- Do not change the project's own data files to fit the page. The page reads `items.json` and writes `answers.jsonl`. When the project has its own answer format, the script converts at the end, or the page writes that format directly. In Exhibit, do neither: see "In Exhibit" above.
 
 ## 3. Build the page
 
@@ -60,7 +60,7 @@ How it saves:
 - On load, the page reads `answers.jsonl` and starts at the first open item, so a closed tab loses nothing.
 - Never write a hidden or default answer for an item the person did not touch.
 
-At the end, show a summary: the counts by decision and by category, the items left for later, and what the answers now allow (for example "3 categories have 2 or more escaped defects, so `exhibit policy suggest` can draft a rule for each").
+At the end, show a summary: the counts by decision and by category, the items left for later, and what the answers now allow (for example "3 categories each have 2 or more labeled escaped defects, so each can become a rule").
 
 ## 4. Check it, then open it
 
