@@ -54,7 +54,7 @@ export function describeSkip(exhibit, { enforce, quote = (text) => text }) {
     return [`The PR body says why it is skipped, but the PR does not have the label ${SKIP_LABEL}. A reason with no label is not a skip, so it changes nothing. Add the label to skip.`];
   }
   const by = skip.by === null ? 'someone the forge does not name' : skip.by;
-  const lines = [`Skip: the label ${SKIP_LABEL} was added by ${by}, at head commit ${skip.head.slice(0, 7)}. Reason: ${quote(skip.reason)}`];
+  const lines = [`Skip, read at head commit ${skip.head.slice(0, 7)}: the label ${SKIP_LABEL} was added by ${by}. Reason: ${quote(skip.reason)}`];
   if (!enforce) lines.push('Shadow mode, so the skip changes nothing. It is recorded and counted.');
   else if (exhibit.verdict === 'needs_person') lines.push('The verdict stays needs_person, but the skip lets the PR through. It is recorded and counted.');
   else if (exhibit.verdict === 'error') lines.push('A skip does not let an error through: Exhibit itself failed, so the check still fails.');
