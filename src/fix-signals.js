@@ -20,11 +20,12 @@ const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE}|${NUMBER})+`);
 // "(3.4) " in "HDFS-17906. (3.4) Fix" or "[table-planner] " in "[FLINK-41350][table-planner] Fix".
 // A tag is text in square brackets or parentheses, or one word and a colon and a space. The word
 // starts with a letter and holds letters, digits, "-", "_", "." and "/", but no space.
-const TAG = /^(?:\[[^\]]+\]\s*|\([^)]+\)\s*|([a-z][a-z0-9_./-]*):\s+)/;
-// The Conventional Commits types (www.conventionalcommits.org). Before a colon, such a word says
-// what kind of change the PR is, not where, so "T-170: Docs: fix a typo" is a docs change, and
-// title_after_tag does not skip it.
-const CHANGE_TYPES = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'style', 'test']);
+const TAG = /^(?:\[([^\]]+)\]\s*|\(([^)]+)\)\s*|([a-z][a-z0-9_./-]*):\s+)/;
+// The Conventional Commits types (www.conventionalcommits.org), and "tests" as well as "test". As
+// a tag, in any form, such a word says what kind of change the PR is, not where, so
+// "T-170: Docs: fix a typo" and "T-170: [docs] fix a typo" are docs changes, and title_after_tag
+// does not skip their tag.
+const CHANGE_TYPES = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'style', 'test', 'tests']);
 
 // A Jira issue key, such as PAY-482: letters and digits, a hyphen, and digits.
 const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
@@ -126,7 +127,7 @@ function afterTagStartsWith(title, value) {
   if (keys === '') return false;
   const rest = lower.slice(keys.length);
   const tag = TAG.exec(rest);
-  if (tag === null || CHANGE_TYPES.has(tag[1])) return false;
+  if (tag === null || CHANGE_TYPES.has((tag[1] ?? tag[2] ?? tag[3]).trim())) return false;
   return startsWithWord(rest.slice(tag[0].length), value);
 }
 

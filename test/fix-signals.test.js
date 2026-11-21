@@ -146,8 +146,12 @@ test('title_after_tag: matches what title_after_key matches, also a title with n
   }
 });
 
-test('title_after_tag: "T-170: Docs: fix a typo" is not a fix, because docs: is a Conventional Commits type', () => {
-  const titles = ['T-170: Docs: fix a typo', 'T-170: chore: fix the lint', 'T-170: test: fix a flaky test', 'T-170: refactor: fix names', 'T-170: feat: fix-up mode'];
+test('title_after_tag: "T-170: Docs: fix a typo" is not a fix, because docs is a Conventional Commits type, in any form of tag', () => {
+  const titles = [
+    'T-170: Docs: fix a typo', 'T-170: chore: fix the lint', 'T-170: test: fix a flaky test', 'T-170: refactor: fix names', 'T-170: feat: fix-up mode',
+    'T-170: [docs] fix a typo', '[FLINK-1][docs] Fix typo', 'T-170: (chore) fix lint', '[FLINK-1][ Docs ] Fix typo',
+    'T-170: tests: fix a flaky test', '[FLINK-40793][tests] Fix unstable DefaultSchedulerTest', '[FLINK-1][test] Fix flaky test'
+  ];
   for (const title of titles) {
     assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), notFix, title);
   }
