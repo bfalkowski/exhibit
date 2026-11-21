@@ -8,6 +8,7 @@ import { buildExhibit } from '../src/check.js';
 import { check } from '../src/commands/check.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
 import { isTestPath } from '../src/failing-before.js';
+import { TestRunError } from '../src/test-runs.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
 
 dropGitEnv();
@@ -227,4 +228,18 @@ test('a change with no test file gives missing and runs no extra test run', asyn
 test('test files are found by name and by folder', () => {
   for (const path of ['test/a.js', 'src/a.test.js', 'src/a.spec.ts', 'pkg/tests/x.py', 'test_a.py', 'a_test.go', 'src/__tests__/a.js', 'test/fixtures/data.json']) assert.ok(isTestPath(path), path);
   for (const path of ['src/a.js', 'docs/testing.md', 'test-support/x.js', 'src/latest.js', 'contest/a.js']) assert.ok(!isTestPath(path), path);
+});
+
+test('a change with no test file gives the no-test-file gap, also when the base gives no results', async () => {
+  const policy = { settings: { fix_signals: ['branch:fix/'], test_command: 'x', test_results: 'r.xml' }, kinds: {}, default: { risk: 'low', needs: ['failing-before'] } };
+  const baseError = new TestRunError('error', 'the test command could not run on the base', 'Check settings.test_command.');
+  const runTests = async () => ({ base: null, head: new Map([['t > a', 'passed']]), baseError });
+  const runBaseWithPrTests = async () => assert.fail('no test file changed, so this must not run');
+  const exhibit = await buildExhibit({
+    policy, policyFile: { path: 'evidence.yml', sha256: null }, files: ['src/a.js'], pr: { title: '', labels: [], branch: 'fix/x' },
+    signalsFrom: 'branch', repo: null, prNumber: null, base: '1'.repeat(40), head: '2'.repeat(40)
+  }, { runTests, runBaseWithPrTests, environment: { node: '20.x', os: 'linux' }, now: () => new Date(0), clock: () => 0 });
+  assert.equal(exhibit.requirements[0].status, 'missing');
+  assert.match(exhibit.gaps[0].how_to_fix, /adds or changes no test file/);
+  assert.equal(exhibit.verdict, 'needs_person');
 });
