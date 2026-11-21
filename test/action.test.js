@@ -55,7 +55,7 @@ test('no step decides anything: the steps are install, run, summary and upload, 
   assert.deepEqual(conditions, [null, null, "${{ !cancelled() && inputs.command == 'check' }}", "${{ !cancelled() && inputs.command == 'check' }}"]);
   const upload = action.runs.steps[3];
   assert.equal(upload.uses, 'actions/upload-artifact@v4');
-  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/']);
+  assert.deepEqual(upload.with.path.trim().split('\n'), ['.exhibit/evidence.json', '.exhibit/summary.md', '.exhibit/probes/', '.exhibit/mutation/']);
   // The run step ends by handing over to the CLI, so its exit code is the step's exit code.
   assert.match(runStep.run.trimEnd(), /\nexec node "\$GITHUB_ACTION_PATH\/bin\/exhibit\.js" "\$\{args\[@\]\}"$/);
 });

@@ -97,6 +97,8 @@ settings:
     found_field: customfield_10042
     escaped_values: [Production]
   mutation_budget_seconds: 300
+  mutation_setup: "npm ci"
+  mutation_test_files: ["test/**/*.test.js"]
   probe_timeout_seconds: 600
   storage: data-branch
   data_branch: exhibit-data
@@ -133,7 +135,7 @@ Rules:
 - Exhibit checks the file against the JSON schema `schema/evidence.schema.json` and refuses to run on an invalid policy. Every command reads the policy the same way. The schema's rules:
   - The top-level keys are `version`, `settings`, `kinds` and `default`. Each one is optional, so an empty file is a valid policy. A key with nothing under it, such as `kinds:`, is the same as no key. Any other key is an error.
   - `version` must be 3, the only format this Exhibit reads.
-  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1), `source_paths` (a list of globs on file paths that mark source code, section 9.1), `jira` (the Jira site for the `tracker:jira` signal, section 9.1), `mutation_budget_seconds` (a whole number, 1 or more), `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6), `storage` (`data-branch` or `local`), `data_branch` (a branch name that does not start with `-`) and `local_path` (text). The last three say where `exhibit publish` stores an exhibit (section 9.12).
+  - `settings` may hold only `test_command` (text), `test_results` (text), `fix_signals` (a list of signals, section 9.1), `source_paths` (a list of globs on file paths that mark source code, section 9.1), `jira` (the Jira site for the `tracker:jira` signal, section 9.1), `mutation_budget_seconds` (a whole number, 1 or more), `mutation_setup` (text) and `mutation_test_files` (a list of one or more globs), which section 9.5 explains, `probe_timeout_seconds` (a whole number from 1 to 86400, one day, section 9.6), `storage` (`data-branch` or `local`), `data_branch` (a branch name that does not start with `-`) and `local_path` (text). The last three say where `exhibit publish` stores an exhibit (section 9.12).
   - Each key under `kinds` names a kind. A kind must have `match` (a list of one or more globs), `risk` and `needs`. It may have `merge_without_reading` and `source` (a list of defect IDs). It may have no other field.
   - `jira` must have `site`: the Jira site's address, starting with `https://` or `http://`, such as `https://acme.atlassian.net`. It may have `issue_types` (a list of one or more issue type names that count as a bug, `[Bug]` when left out; a list replaces the default), `found_field` (the Jira field that says where a bug was found, such as `customfield_10042`) and `escaped_values` (a list of the values of that field that mean the bug got out to users, such as `[Production]`). `found_field` and `escaped_values` go together: one without the other is an error. It may have no other field. The token is never in this file: it comes from the env (section 9.1). `tracker:jira` in `fix_signals` with no `jira` is an error.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
@@ -204,7 +206,7 @@ The fields:
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
 
-A `mutation` requirement is `skipped` until slice S6, so a policy that needs mutation does not give `meets_policy` before then. The `tests-before-after` collector is built (section 9.3), the `failing-before` collector is built (section 9.4), and a `probe` requirement runs its command (section 9.6).
+The `tests-before-after` collector is built (section 9.3), the `failing-before` collector is built (section 9.4), a `probe` requirement runs its command (section 9.6), and a `mutation` requirement runs Stryker on the changed lines (section 9.5). In the example, `killed` does not hold the timeouts, and `survived` does not hold the mutants that no test reached: the catch rate counts both, so it is 24 of 26. A `mutation` requirement is `skipped` when the change has code in a language that no mutation adapter covers yet, such as Python.
 
 A `failing-before` whose `when` does not fit the change is `skipped` too, but it is not a gap. Its `details.reason` says that the policy asks for it only on a fix or a feature, and that this change is neither. It does not stop `meets_policy`, and it does not count in `checks_by_author`.
 
@@ -478,11 +480,24 @@ The `failing-before` requirement proves that a test in the PR would have caught 
 
 ### 9.5 Mutation on changed lines
 
-- Exhibit uses adapters for existing tools. Version 1 has two adapters: Stryker for JavaScript and TypeScript, and mutmut for Python.
-- Each adapter limits the mutants to the changed lines, or filters the tool's results to those lines.
-- Timeouts count as killed. Mutants with no test coverage count as survived and are listed apart.
-- A time budget stops the run. A partial run reports its sample size and a 95% interval, and the requirement is met only if the lower bound of the interval reaches `min`.
-- Some surviving mutants are equivalent to the original code. The summary lists the survivors so a person can mark one as equivalent. Marked mutants drop out of later runs on the same code.
+- Exhibit uses adapters for existing tools. Version 1 has two adapters: Stryker for JavaScript and TypeScript, and mutmut for Python. The Stryker adapter is built. mutmut comes later. Until then a change to a Python file makes a `mutation` requirement `skipped`, and so does a change to code in a language that no adapter covers, such as Go or Java. Files with no code, such as docs and config, are not mutated.
+- The changed lines are the lines that `git diff` shows as added or changed on the head, from the merge base of the base and the head. A line that the change only removed is not on the head, so nothing is mutated for it. Stryker gets each run of changed lines as a range, such as `src/a.js:3-5`, and makes mutants only there. Exhibit never mutates a test file: a file that section 9.4 calls a test file, or one that `settings.mutation_test_files` matches.
+- When the change has no changed line of JavaScript or TypeScript outside the tests, there is nothing to mutate. The requirement is then `met`, and `details.reason` says why.
+- The Stryker adapter needs `settings.mutation_test_files`: globs of the test files, such as `["test/**/*.test.js"]`. Without it, the requirement is `missing`. Each test file must run as `node FILE` and print TAP, as a `node:test` file does.
+- Exhibit makes a clean worktree of the head, and runs `settings.mutation_setup` there with `sh`, such as `npm ci`, to install what the tests need. It has the time limit of a probe (`settings.probe_timeout_seconds`, section 9.6), and its output goes to `.exhibit/mutation/setup.log`. When it fails, the requirement is `error`.
+- Exhibit runs only the tests that can reach a changed file, in two steps:
+  1. By test file. Exhibit picks the test files that load a changed file through a chain of relative `import` and `require` calls, or that have a changed file's name in a string in that chain, as a test does that starts a server with `node relay/server.js`. When no test file reaches a changed file, it gives Stryker every test file.
+  2. Per test. Stryker runs with its tap test runner and per-test coverage. The tap runner runs each test file in a node process of its own, and records which test files ran each mutant's code. Stryker then runs each mutant against only those files, and stops at the first one that fails.
+
+  The reason is speed. Building58's whole suite takes about 47 minutes one file at a time, and Stryker's first run, which records the coverage, takes as long as all the test files it gets. Step 1 keeps that first run short, and step 2 keeps each mutant's run short. Per-test coverage sees only the code that runs in the test file's own process. A mutant whose code runs only in a child process, such as a server that the test starts, shows as not covered. It counts as survived, so this errs toward `needs_person`.
+- Timeouts count as killed. So a test that is only slow must not count as a timeout: Stryker runs a test process on half the cores, and a mutant times out after 2.5 times the normal time of its tests plus 15 seconds. With Stryker's defaults, on a busy machine, mutants that changed nothing timed out and counted as killed. Mutants with no test coverage count as survived and are listed apart. A mutant that does not compile, or that breaks the code when it loads, is not valid and does not count. Neither does a mutant that Stryker ignored.
+- `settings.mutation_budget_seconds` is the time budget of the Stryker run. It is 600 seconds when left out. When it runs out, Exhibit stops Stryker and every process it started, as it stops a probe (section 9.6). Exhibit's own Stryker reporter writes each mutant as soon as Stryker knows its status, so a stopped run still gives every mutant it finished. This is a partial run. When the budget runs out after Stryker has reported every mutant, the run is complete.
+- The catch rate is killed mutants divided by killed plus survived mutants. `details.interval_95` is its 95% interval (Clopper-Pearson, `src/interval.js`). After a complete run, every mutant on the changed lines is counted. The requirement is then `met` when the catch rate reaches `min`, and `failed` when it does not. After a partial run, the mutants are a sample. The requirement is then `met` only when the lower bound of the interval reaches `min`. It is `failed` when the upper bound is below `min`, and `missing` when the interval holds `min`, because the sample is too small to tell. A partial run that finished no mutant is `missing` too. Stryker tests the mutants file by file, in the order of the code, so a sample holds more of the first changed lines than of the last.
+- A mutant status that Exhibit does not know, which a Stryker upgrade could bring, gives `error`.
+- When Stryker exits before it is done for any other reason, for example because a test fails on the head, the requirement is `error`, never `met` (section 14). Stryker's output goes to `.exhibit/mutation/output.log`. `exhibit check` removes the old `.exhibit/mutation` folder when it starts.
+- `details` gives `killed`, `timeout`, `survived`, `no_coverage`, `not_valid`, `ignored`, `n` (the mutants that count: killed, timeouts, survived and not covered), `catch_rate`, `interval_95`, `complete`, `budget_seconds`, `mutated` (each file with its ranges of changed lines), `test_files`, `test_selection` (`reach`, or `all` when no test file reached a changed file) and `output`. It lists the surviving mutants in `survivors`, apart from them the mutants that no test reached in `no_coverage_mutants`, and the mutants killed by a timeout in `timeout_mutants`, so a person can check that each one really makes the tests hang. Each one has its `file`, `line`, `column`, `mutator`, the `original` code and its `replacement`. `summary.md` gives the catch rate with n and the interval, and lists up to 20 mutants of each list, each with its file, line and change.
+- Two runs on the same commits give the same mutants when the tests give the same results each time. A partial run can stop at a different mutant.
+- Some surviving mutants are equivalent to the original code. The summary lists the survivors so a person can mark one as equivalent. Marked mutants drop out of later runs on the same code. This part is not built yet.
 
 ### 9.6 Probes
 
@@ -629,7 +644,7 @@ The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo,
   - `enforce`: true or false, by default false. False is shadow mode: `check` gets `--shadow`, so the step succeeds whatever the verdict. True fails the check step on `needs_person` and on `error`, and `publish` gets `--enforce`, so the comment does not say shadow mode.
   - `token`: the token for `GITHUB_TOKEN`, by default the job's own token.
   - A `command`, `comment` or `enforce` that is not one of its values fails the step with exit 2, and runs nothing.
-- `check` runs `exhibit check --pr N --repo owner/name`, with the PR from the event. Then, whatever its exit code, the step writes `summary.md` to the job summary, and uploads `evidence.json`, `summary.md` and `.exhibit/probes/` as the workflow artifact `exhibit`. `summary.md` is there for a run that failed before it had a verdict too, so an error shows in shadow mode, and a broken setup is not hidden.
+- `check` runs `exhibit check --pr N --repo owner/name`, with the PR from the event. Then, whatever its exit code, the step writes `summary.md` to the job summary, and uploads `evidence.json`, `summary.md`, `.exhibit/probes/` and `.exhibit/mutation/` as the workflow artifact `exhibit`. The mutation folder holds the logs of `mutation_setup` and of Stryker (section 9.5), which a mutation gap tells the person to read. `summary.md` is there for a run that failed before it had a verdict too, so an error shows in shadow mode, and a broken setup is not hidden.
 - `publish` runs `exhibit publish --evidence .exhibit/evidence.json`, where the publish job downloads the artifact. When the check failed before it had a verdict, there is no `evidence.json`, so the publish step fails with exit 2 and posts no comment. The job then shows on the PR as failed, in shadow mode too, and the check job's summary says why.
 - Two jobs, by trust. `examples/pull-request.yml` holds them:
   - The check job runs on `pull_request`, never on `pull_request_target`, so code from a PR never runs with a write token. Its only permission is `contents: read`. It checks out the PR with its whole history, so the base and head commits are both in the clone, and runs the Action with `command: check`.
@@ -655,7 +670,7 @@ The Action is a thin wrapper over the CLI. `action.yml`, at the top of the repo,
 |---|---|
 | Node 20 or later, JavaScript ES modules, few runtime dependencies | GitHub Actions run Node natively. The office's main repo is Node. |
 | Use the GitHub GraphQL API for history's PR reads, and the REST API for SZZ, both through `fetch`, with the `gh` CLI optional | `fetch` means one less tool to install. One GraphQL query reads 50 merged PRs with their labels, files, reviews, comments and CI results. The REST API needs one request for each PR and each of those lists: about 5 for each PR. SZZ asks about one commit or one issue at a time, so GraphQL saves it little, and its REST replies use the reply cache (section 8.6). |
-| Adapters for mutation tools instead of an own engine | Stryker and mutmut are mature. Version 1 does not need its own engine. |
+| Adapters for mutation tools instead of an own engine | Stryker and mutmut are mature. Version 1 does not need its own engine. Exhibit pins Stryker 9.6.1 and its tap test runner as dependencies, because Stryker 10 needs Node 22 and Exhibit runs on Node 20. |
 | JUnit XML for test results | Most test runners can write it. |
 | Files and a data branch instead of a server or a database | Anyone can run it, and everything stays in their repo. |
 | Tests with `node:test`, and recorded API responses as fixtures | No network access in unit tests. |
@@ -704,7 +719,7 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 | S3 | `label` | A person can label all defects from S2. The `--claude` drafts are marked. Agreement with the person is recorded. |
 | S4 | Policy and `check` without mutation | It parses and validates `evidence.yml`, classifies the change, and runs tests on the base and head, the failing-before check and probes. It gives the verdict and the exit codes. The same commit checked twice gives the same `evidence.json`, apart from timings. |
 | S5 | The GitHub Action, shadow mode, the data branch, the PR comment | It runs on every PR in Building58 and edd-platform in shadow mode. |
-| S6 | Mutation adapters | Stryker first, then mutmut. Only the changed lines are mutated. The budget and the interval work. |
+| S6 | Mutation adapters | Stryker first, then mutmut. Only the changed lines are mutated. The budget and the interval work. The Stryker adapter is built (ticket 260). mutmut and marking a mutant as equivalent are still to do. |
 | S7 | `trace` and policy misses | A fix merge records its policy misses on the data branch. |
 | S8 | `backtest` and the trust ladder numbers | The leak check works. The report gives counts and intervals for each kind of change. |
 | S9 | The canary job, the field log, the stranger test | Then release version 1.0. |

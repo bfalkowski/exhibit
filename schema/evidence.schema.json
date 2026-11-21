@@ -94,7 +94,21 @@
         "mutation_budget_seconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "The time budget for one mutation run (spec 9.5)."
+          "description": "The time budget for one mutation run, in seconds (spec 9.5). Absent means 600."
+        },
+        "mutation_setup": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The command that installs what the tests need in the head worktree before Stryker runs, such as npm ci (spec 9.5)."
+        },
+        "mutation_test_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Globs of the test files that Stryker runs, such as [\"test/**/*.test.js\"] (spec 9.5). Each one runs as node FILE."
         },
         "probe_timeout_seconds": {
           "type": "integer",

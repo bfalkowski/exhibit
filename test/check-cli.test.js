@@ -87,7 +87,8 @@ test('check exits 1 for needs_person, and evidence.json passes the schema', (t) 
   assert.equal(evidence.classification.fix, true);
   assert.equal(evidence.classification.fix_signal, 'branch:fix/');
   assert.equal(evidence.classification.signals_from, 'branch');
-  assert.deepEqual(evidence.requirements.map((item) => [item.type, item.status]), [['tests-before-after', 'missing'], ['mutation', 'skipped']]);
+  // The policy has no test command and no mutation_test_files, so both are missing.
+  assert.deepEqual(evidence.requirements.map((item) => [item.type, item.status]), [['tests-before-after', 'missing'], ['mutation', 'missing']]);
   assert.deepEqual(checkExhibit(evidence), []);
 });
 

@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { buildExhibit, COLLECTORS, EXIT_CODES, renderErrorSummary, renderSummary } from '../check.js';
+import { MUTATION_DIR } from '../mutation.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { GITHUB_FORGE } from '../github.js';
 import { DEFAULT_POLICY, policyPath, readPolicy } from '../policy.js';
@@ -28,7 +29,7 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 //
 // --policy FILE reads the policy from that path in the repo, in place of evidence.yml.
 //
-// It removes the old evidence.json, summary.md and probe files first. So when the run fails before
+// It removes the old evidence.json, summary.md, probe files and mutation logs first. So when the run fails before
 // it can write them, no old file is left to be read as this run's verdict. Any failure that is not
 // a verdict then writes a summary.md that says the verdict is error and why, and throws. The CLI
 // prints it and exits 2.
@@ -39,7 +40,7 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // what went wrong.
 export async function check(argv, { env, cwd, fetch, stdout, stderr = process.stderr, collectors }) {
   // Remove the old files before anything can fail, a bad argument too.
-  await Promise.all([...Object.values(OUTPUT), PROBES].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
+  await Promise.all([...Object.values(OUTPUT), PROBES, MUTATION_DIR].map((file) => rm(join(cwd, file), { recursive: true, force: true })));
   // Read before the other arguments, so a bad argument in shadow mode gives 0 too.
   const shadow = argv.includes('--shadow');
   try {
