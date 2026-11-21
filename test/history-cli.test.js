@@ -92,6 +92,16 @@ test('a title_after_key signal is recorded in classification, and the line passe
   assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_key:rename']]);
 });
 
+test('a title_after_tag signal is recorded in classification, and the line passes the schema', (t) => {
+  const cwd = newFolder(t);
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [title_after_tag:rename]\n');
+  const run = exhibit(t, ['history', '--repo', 'acme/widgets'], { cwd });
+  assert.equal(run.status, 0, run.stderr);
+  const lines = readLines(run.historyPath);
+  for (const line of lines) assert.deepEqual(checkHistoryLine(line), [], `PR ${line.number}`);
+  assert.deepEqual(lines.filter((l) => l.classification.fix).map((l) => [l.number, l.classification.fix_signal]), [[4, 'title_after_tag:rename']]);
+});
+
 test('a pr: signal marks the PR with that number as a fix, next to the other signals', (t) => {
   const cwd = newFolder(t);
   writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\nsettings:\n  fix_signals: [label:bug, title:fix, branch:fix/, pr:3, pr:5]\n');

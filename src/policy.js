@@ -10,7 +10,7 @@ import { ToolError } from './tool-error.js';
 export const DEFAULT_POLICY = 'evidence.yml';
 const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
 const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'probe'];
-const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'branch', 'pr', 'tracker'];
+const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'title_after_tag', 'branch', 'pr', 'tracker'];
 // The trackers a tracker: signal can name (spec 9.1).
 const TRACKERS = ['jira'];
 // A PR number: digits with no leading zero, so pr:96 is the only way to write PR 96.
@@ -117,7 +117,7 @@ function checkSignals(signals, file) {
     // The revert signal is one word with no value (spec 9.1).
     if (signal === REVERT_SIGNAL) return;
     const type = signal.slice(0, signal.indexOf(':'));
-    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, branch:, pr: or tracker:, or be the word revert.`);
+    if (!signal.includes(':') || !SIGNAL_TYPES.includes(type)) throw new ToolError(`${at} is "${signal}". A signal must start with label:, title:, title_after_key:, title_after_tag:, branch:, pr: or tracker:, or be the word revert.`);
     const value = signal.slice(type.length + 1);
     if (/[\r\n]/.test(value)) throw new ToolError(`${at} is ${JSON.stringify(signal)}. A signal must be on one line.`);
     if (value.trim() === '') throw new ToolError(`${at} is "${signal}", which needs a value after the colon.`);

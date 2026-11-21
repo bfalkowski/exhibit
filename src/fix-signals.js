@@ -16,6 +16,17 @@ const BARE = `${KEY}(?:\\s*[:,]\\s*|\\.\\s+|\\s+-\\s*|\\s+)`;
 const NUMBER = '\\d+\\s*:\\s*';
 const LEADING_KEY = new RegExp(`^(?:${BRACKETED}|${BARE}|${NUMBER})+`);
 
+// One tag that title_after_tag skips after the keys, such as "s3a: " in "HADOOP-20089. S3A: Fix",
+// "(3.4) " in "HDFS-17906. (3.4) Fix" or "[table-planner] " in "[FLINK-41350][table-planner] Fix".
+// A tag is text in square brackets or parentheses, or one word and a colon and a space. The word
+// starts with a letter and holds letters, digits, "-", "_", "." and "/", but no space.
+const TAG = /^(?:\[([^\]]+)\]\s*|\(([^)]+)\)\s*|([a-z][a-z0-9_./-]*):\s+)/;
+// The Conventional Commits types (www.conventionalcommits.org) other than fix, and "tests" as
+// well as "test". As a tag, in any form, such a word says what kind of change the PR is, not
+// where, so "T-170: Docs: fix a typo" and "T-170: [docs] fix a typo" are docs changes, and
+// title_after_tag does not skip their tag. A fix tag is a fix: see afterTagStartsWith.
+const CHANGE_TYPES = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'perf', 'refactor', 'revert', 'style', 'test', 'tests']);
+
 // A Jira issue key, such as PAY-482: letters and digits, a hyphen, and digits.
 const ISSUE_KEY = /[a-z][a-z0-9_]*-\d+/;
 // A key at the start of a branch name, such as PAY-482-fix-crash or PAY-482/crash.
@@ -102,9 +113,26 @@ function matches(pr, signal, ticket) {
   if (type === 'label') return pr.labels.some((label) => label.toLowerCase() === value);
   if (type === 'title') return startsWithWord(pr.title.trim().toLowerCase(), value);
   if (type === 'title_after_key') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value);
+  if (type === 'title_after_tag') return startsWithWord(pr.title.trim().toLowerCase().replace(LEADING_KEY, ''), value) || afterTagStartsWith(pr.title, value);
   if (type === 'branch') return pr.branch.toLowerCase().startsWith(value);
   if (type === 'pr') return String(pr.number) === value;
   return false;
+}
+
+// Says whether the title, after its keys and one tag, starts with the word `value`, or the tag
+// itself does. So "T-170: [fix] crash" matches fix, as "T-170: fix: crash" does by the key rule.
+// A tag counts only after a key, so "S3A: Fix" and "[table] Fix" with no key do not match.
+function afterTagStartsWith(title, value) {
+  const lower = title.trim().toLowerCase();
+  const keys = LEADING_KEY.exec(lower)?.[0] ?? '';
+  if (keys === '') return false;
+  const rest = lower.slice(keys.length);
+  const tag = TAG.exec(rest);
+  if (tag === null) return false;
+  const text = (tag[1] ?? tag[2] ?? tag[3]).trim();
+  if (startsWithWord(text, value)) return true;
+  if (CHANGE_TYPES.has(text)) return false;
+  return startsWithWord(rest.slice(tag[0].length), value);
 }
 
 // A title prefix is a word at the start: "fix" matches "fix: x", "Fix x" and "fix(cli): x",

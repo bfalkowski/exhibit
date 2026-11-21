@@ -114,6 +114,77 @@ test('title_after_key: a word shaped like a key after a real key is skipped too,
   assert.deepEqual(classifyFix(pr({ title: 'T-170: fix-12: crash' }), ['title_after_key:fix']), notFix);
 });
 
+test('title_after_key: does not skip a tag after the key, so "HADOOP-20089. S3A: Fix" is not a fix', () => {
+  for (const title of ['HADOOP-20089. S3A: Fix documented default', 'HDFS-17906. (3.4) Fix issue', '[FLINK-41350][table-planner] Fix RESUME']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_key:fix']), notFix, title);
+  }
+});
+
+test('title_after_tag: skips one tag after the keys: a word and a colon, or text in brackets or parentheses', () => {
+  const signals = ['title_after_tag:fix'];
+  const titles = [
+    'HADOOP-20089. S3A: Fix documented default of fs.s3a.input.stream.type',
+    'HIVE-30161: Iceberg: Fix Create table failures',
+    'HADOOP-20021. hadoop-bos: fix hierarchy bucket rename',
+    'HDFS-17906. (3.4) Fix issue that DataNodes get stuck',
+    'HADOOP-19795. (Follow up) Fix Javadoc',
+    '[FLINK-41350][table-planner] Fix RESUME, ALTER and DROP',
+    '[FLINK-38534][runtime/tests] Fix flaky LocalRecoveryTest',
+    'HADOOP-19902. [ABFS] Fix small write hflush',
+    'ZOOKEEPER-4736: [ADDENDUM] Fix compilation failure',
+    'T-170: [T-171] (3.4) Fix the crash'
+  ];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), signals), { fix: true, fix_signal: 'title_after_tag:fix' }, title);
+  }
+});
+
+test('title_after_tag: matches what title_after_key matches, also a title with no key', () => {
+  const titles = ['T-170: Fix the crash', '[KEY-123] fix the parser', 'ZOOKEEPER-123. Fix the crash', '192: Fix the crash', 'fix: crash on start', 'Fix the crash', 'T-170: fix: crash'];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), { fix: true, fix_signal: 'title_after_tag:fix' }, title);
+  }
+});
+
+test('title_after_tag: "T-170: Docs: fix a typo" is not a fix, because docs is a Conventional Commits type, in any form of tag', () => {
+  const titles = [
+    'T-170: Docs: fix a typo', 'T-170: chore: fix the lint', 'T-170: test: fix a flaky test', 'T-170: refactor: fix names', 'T-170: feat: fix-up mode',
+    'T-170: [docs] fix a typo', '[FLINK-1][docs] Fix typo', 'T-170: (chore) fix lint', '[FLINK-1][ Docs ] Fix typo',
+    'T-170: tests: fix a flaky test', '[FLINK-40793][tests] Fix unstable DefaultSchedulerTest', '[FLINK-1][test] Fix flaky test'
+  ];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), notFix, title);
+  }
+});
+
+test('title_after_tag: a fix tag counts in any form, so "[FLINK-1][fix] Fix typo" is a fix, as "T-170: fix: Fix typo" is', () => {
+  const titles = ['[FLINK-1][fix] Fix typo', 'T-170: fix: Fix typo', 'T-170: [fix] crash', 'T-170: (Fix) crash', 'T-170: fix: crash', '[FLINK-1][fix-up] crash'];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), { fix: true, fix_signal: 'title_after_tag:fix' }, title);
+  }
+  for (const title of ['T-170: [hotfix] crash', 'T-170: [fixture] crash', 'T-170: [prefix fix] crash']) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), notFix, title);
+  }
+});
+
+test('title_after_tag: skips a tag only after a key, and only one tag', () => {
+  const titles = [
+    'S3A: Fix documented default',
+    '[table] Fix the planner',
+    '(3.4) Fix issue',
+    'T-170: [a] [b] Fix',
+    'T-170: S3A: [abfs] Fix',
+    'T-170: Follow-up to YARN-11937: Fix NPE',
+    'T-170: S3A: Fixture repo',
+    'T-170: S3A:Fix',
+    'T-170: Add S3A: fix',
+    'T-170: [unclosed Fix'
+  ];
+  for (const title of titles) {
+    assert.deepEqual(classifyFix(pr({ title }), ['title_after_tag:fix']), notFix, title);
+  }
+});
+
 test('branch: matches a branch that starts with the prefix, in any case', () => {
   const signals = ['branch:fix/'];
   assert.deepEqual(classifyFix(pr({ branch: 'fix/crash' }), signals), { fix: true, fix_signal: 'branch:fix/' });

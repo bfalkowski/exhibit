@@ -190,6 +190,11 @@ test('readPolicy accepts title_after_key: like the other types', async (t) => {
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_key:fix', 'branch:fix/']);
 });
 
+test('readPolicy accepts title_after_tag: like the other types', async (t) => {
+  const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, title_after_tag:fix]\n');
+  assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'title_after_tag:fix']);
+});
+
 test('readPolicy accepts revert, a signal with no value, and refuses it with a value', async (t) => {
   const cwd = folderWith(t, 'settings:\n  fix_signals: [label:bug, revert]\n');
   assert.deepEqual(await readFixSignals(cwd), ['label:bug', 'revert']);
@@ -214,10 +219,11 @@ test('readPolicy refuses a malformed fix_signals with a tool error that says wha
     ['settings:\n  fix_signals: label:bug\n', /must be a list/],
     ['settings:\n  fix_signals: []\n', /at least one signal/],
     ['settings:\n  fix_signals: [label:bug, 7]\n', /fix_signals\[1\].*not 7/],
-    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, branch:, pr: or tracker:/],
-    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, branch:, pr: or tracker:/],
+    ['settings:\n  fix_signals: [bug]\n', /"bug".*label:, title:, title_after_key:, title_after_tag:, branch:, pr: or tracker:/],
+    ['settings:\n  fix_signals: [issue:bug]\n', /"issue:bug".*label:, title:, title_after_key:, title_after_tag:, branch:, pr: or tracker:/],
     ['settings:\n  fix_signals: ["title_after_key:"]\n', /"title_after_key:".*needs a value/],
     ['settings:\n  fix_signals: ["title_after_key: fix"]\n', /"title_after_key: fix".*space/],
+    ['settings:\n  fix_signals: ["title_after_tag:"]\n', /"title_after_tag:".*needs a value/],
     ['settings:\n  fix_signals: ["label:"]\n', /"label:".*needs a value/],
     ['settings:\n  fix_signals: ["label: bug"]\n', /"label: bug".*space/],
     ['settings:\n  fix_signals: ["title:fix "]\n', /"title:fix ".*space/],
