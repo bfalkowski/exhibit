@@ -276,8 +276,9 @@ test('a merge SHA from before a default branch rename', async (t) => {
 
 // PR 2 has base_ref "master" as above, so its merge SHA needs the first-parent line. Here git
 // fails to list that line. SZZ then asks GitHub, as it did before the line was checked, and
-// GitHub lists PR 2 for its commit.
-test('when git cannot list the first-parent line of the default branch, SZZ asks GitHub', async (t) => {
+// GitHub lists PR 2 for its commit. SZZ warns once, because a PR from before a branch rename
+// that GitHub lists no PR for would lose its link, and the user must see why.
+test('when git cannot list the first-parent line of the default branch, SZZ warns once and asks GitHub', async (t) => {
   const repo = buildSzzRepo();
   t.after(() => repo.cleanup());
   const history = repo.history.map((pr) => (pr.number === 2 ? { ...pr, base_ref: 'master' } : pr));
@@ -287,7 +288,7 @@ test('when git cannot list the first-parent line of the default branch, SZZ asks
   const warnings = [];
   const lines = await addSzz(history, { dir: repo.dir, forge: createGitHubForge({ repo: REPO, token: 't', fetch }), warn: (text) => warnings.push(text) });
   const fix7 = lines.find((line) => line.number === 7);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(warnings, ['SZZ: git could not list the first-parent line of main, so GitHub is asked for each merge SHA. A PR merged before a rename of the default branch can lose its link. (git failed: git rev-list: fatal: rev-list broke)']);
   assert.deepEqual(fix7.szz.links.map((link) => link.pr), [2, 3]);
   assert.ok(fetch.calls.some((call) => call.key.includes(`/commits/${pr2Sha}/pulls`)), 'GitHub is asked about PR 2\'s commit');
   for (const line of lines.filter((l) => l.classification?.fix)) assert.notEqual(line.szz, null, `PR ${line.number}`);
