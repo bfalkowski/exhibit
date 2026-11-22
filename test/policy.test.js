@@ -83,7 +83,7 @@ test('readPolicy gives an empty policy with the default fix signals when there i
 });
 
 test('readPolicy refuses an unknown item type, and names the item', async (t) => {
-  await refuses(t, kind('    needs:\n      - tests-before-after\n      - mutaton: { min: 0.8 }\n'), /^evidence\.yml kinds\.relay-core\.needs\[1\] has the unknown item type "mutaton"\. The types are tests-before-after, failing-before, mutation and probe\.$/);
+  await refuses(t, kind('    needs:\n      - tests-before-after\n      - mutaton: { min: 0.8 }\n'), /^evidence\.yml kinds\.relay-core\.needs\[1\] has the unknown item type "mutaton"\. The types are tests-before-after, failing-before, mutation, condition-pairs and probe\.$/);
   await refuses(t, kind('    needs: [screenshots]\n'), /^evidence\.yml kinds\.relay-core\.needs\[0\] has the unknown item type "screenshots"\./);
   await refuses(t, kind('    needs: [mutation]\n'), /^evidence\.yml kinds\.relay-core\.needs\[0\] is a bare mutation, which needs a min/);
 });

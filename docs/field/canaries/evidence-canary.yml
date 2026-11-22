@@ -1,6 +1,7 @@
 # The policy that the canary runs of Exhibit ticket 258 used (docs/field/canaries.md). It is the
-# starter policy from examples/building58/evidence.yml, plus the three mutation settings and
-# mutation: { min: 0.8 } on the code kind. It is not Building58's policy: do not copy it to
+# starter policy from examples/building58/evidence.yml, plus the three mutation settings,
+# mutation: { min: 0.8 } on the code kind, and, since ticket 300, condition-pairs on a fix in the
+# code kind. It is not Building58's policy: do not copy it to
 # Building58's evidence.yml. To run the canaries again, copy it to evidence-canary.yml at the top
 # of a scratch clone of Building58 at 145143a, commit it, and apply the patches on top.
 version: 3
@@ -35,6 +36,8 @@ kinds:
       - tests-before-after
       - failing-before: { when: [fix] }
       - mutation: { min: 0.8 }
+      # Ticket 300: a fix whose tests try a new condition one way only, as canary 4 did.
+      - condition-pairs: { when: [fix] }
 
   # The manual and the other Markdown files. The probe is the manual's checks that CI runs for a
   # docs-only change: links, anchors and no em dashes.

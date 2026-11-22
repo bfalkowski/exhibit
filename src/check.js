@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { classifyChange } from './classify.js';
+import { conditionPairs, describeConditionPairs } from './condition-pairs.js';
 import { describeTests, failingBefore } from './failing-before.js';
 import { describeMutation, mutation } from './mutation.js';
 import { describeSkip, skipApplies } from './skip.js';
@@ -21,12 +22,15 @@ export function exitCode(exhibit, { shadow = false } = {}) {
 
 // A collector gets one requirement and the run's context, and gives back { status, details,
 // how_to_fix }, and `flaky_tests` when it ran tests. These are the built-in ones. The mutation
-// collector runs Stryker and mutmut in a worktree of the head of its own (src/mutation.js). The probe
+// collector runs Stryker and mutmut in a worktree of the head of its own (src/mutation.js), and the
+// condition-pairs collector runs the tests with a recorder in a worktree of its own
+// (src/condition-pairs.js). The probe
 // collector shares the head worktree of the check command, so the command adds it (src/probe.js).
 export const COLLECTORS = Object.freeze({
   'tests-before-after': testsBeforeAfter,
   'failing-before': failingBefore,
-  mutation
+  mutation,
+  'condition-pairs': conditionPairs
 });
 
 // Builds the exhibit, the content of evidence.json (spec 8.2), for one change.
@@ -243,11 +247,12 @@ export function renderSummary(exhibit, { shadow = false, notes = [] } = {}) {
 }
 
 // More words for a requirement's line in summary.md: the tests that failing-before found, why
-// a requirement was not needed, the catch rate and the surviving mutants, or that the base gave
-// no test results.
+// a requirement was not needed, the catch rate and the surviving mutants, the cases that no test
+// tries, or that the base gave no test results.
 function otherDetails(item) {
   if (item.type === 'mutation') return describeMutation(item.details);
   if (item.type === 'tests-before-after') return describeBaseError(item.details, item.status);
+  if (item.type === 'condition-pairs') return describeConditionPairs(item.details);
   if (item.type !== 'failing-before') return '';
   if (item.status === 'skipped' && typeof item.details.reason === 'string') return ` ${item.details.reason}`;
   return describeTests(item.details);

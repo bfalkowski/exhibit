@@ -9,7 +9,7 @@ import { ToolError } from './tool-error.js';
 // The policy's path in the repo when --policy does not give another one.
 export const DEFAULT_POLICY = 'evidence.yml';
 const schema = JSON.parse(readFileSync(new URL('../schema/evidence.schema.json', import.meta.url), 'utf8'));
-const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'probe'];
+const ITEM_TYPES = ['tests-before-after', 'failing-before', 'mutation', 'condition-pairs', 'probe'];
 const SIGNAL_TYPES = ['label', 'title', 'title_after_key', 'title_after_tag', 'branch', 'pr', 'tracker'];
 // The trackers a tracker: signal can name (spec 9.1).
 const TRACKERS = ['jira'];
@@ -95,7 +95,7 @@ function fieldName(path) {
 // The schema can only say that an evidence item does not match. Say which item types there are.
 function needsItemMessage(path, what) {
   if (path.at(-2) !== 'needs' || typeof path.at(-1) !== 'number') return null;
-  const types = 'The types are tests-before-after, failing-before, mutation and probe';
+  const types = 'The types are tests-before-after, failing-before, mutation, condition-pairs and probe';
   const unknownKey = /^has a field the schema does not allow: (.*)$/.exec(what);
   if (unknownKey) return `has the unknown item type ${JSON.stringify(unknownKey[1])}. ${types}`;
   const bareName = /^must be .*, not (".*")$/.exec(what);

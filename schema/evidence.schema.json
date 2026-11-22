@@ -181,14 +181,15 @@
           "needs": {
             "type": "array",
             "items": {
-              "description": "One evidence item. A bare name is tests-before-after or failing-before. An item with fields is a mapping with one key, the item type.",
+              "description": "One evidence item. A bare name is tests-before-after, failing-before or condition-pairs. An item with fields is a mapping with one key, the item type.",
               "if": {
                 "type": "string"
               },
               "then": {
                 "enum": [
                   "tests-before-after",
-                  "failing-before"
+                  "failing-before",
+                  "condition-pairs"
                 ]
               },
               "else": {
@@ -238,6 +239,27 @@
                         "type": "number",
                         "minimum": 0,
                         "maximum": 1
+                      }
+                    }
+                  },
+                  "condition-pairs": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "additionalProperties": false,
+                    "description": "No condition on the changed lines goes only one way under one outcome of an earlier condition in the same statement (spec 9.14).",
+                    "properties": {
+                      "when": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "enum": [
+                            "fix",
+                            "feature"
+                          ]
+                        },
+                        "description": "Limits the item to PRs classified as fix or feature."
                       }
                     }
                   },
@@ -316,14 +338,15 @@
         "needs": {
           "type": "array",
           "items": {
-            "description": "One evidence item. A bare name is tests-before-after or failing-before. An item with fields is a mapping with one key, the item type.",
+            "description": "One evidence item. A bare name is tests-before-after, failing-before or condition-pairs. An item with fields is a mapping with one key, the item type.",
             "if": {
               "type": "string"
             },
             "then": {
               "enum": [
                 "tests-before-after",
-                "failing-before"
+                "failing-before",
+                "condition-pairs"
               ]
             },
             "else": {
@@ -373,6 +396,27 @@
                       "type": "number",
                       "minimum": 0,
                       "maximum": 1
+                    }
+                  }
+                },
+                "condition-pairs": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "description": "No condition on the changed lines goes only one way under one outcome of an earlier condition in the same statement (spec 9.14).",
+                  "properties": {
+                    "when": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "enum": [
+                          "fix",
+                          "feature"
+                        ]
+                      },
+                      "description": "Limits the item to PRs classified as fix or feature."
                     }
                   }
                 },

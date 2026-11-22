@@ -4,7 +4,7 @@ Ticket 258. Spec sections 12 ("Planted faults") and 14.
 
 The 1.0 target is that Exhibit gives `needs_person` on 90% or more of the planted bugs (canaries). The hidden canary job of slice S9 does not exist yet. So this page records a small first try by hand: five bugs planted in Building58, each with a new test that passes but misses the bug, as a real builder PR might have. Then `exhibit check` ran on each one.
 
-**Result: 2 of 5 caught on the first try, and 4 of 5 now.** Both first catches came from mutation. The three misses show three things that mutation on the changed lines cannot see: code that was removed, a wrong answer that every test agrees with, and a wrong variable. Since then, ticket 299 catches canary 3 (lost error paths) and ticket 301 catches canary 5 (twin values), both in spec 9.5. Canary 4 is still missed (ticket 300). The table gives the first verdict and, for canaries 3 and 5, the verdict now.
+**Result: 2 of 5 caught on the first try, and 5 of 5 now.** Both first catches came from mutation. The three misses show three things that mutation on the changed lines cannot see: code that was removed, a wrong answer that every test agrees with, and a wrong variable. Since then, ticket 299 catches canary 3 (lost error paths) and ticket 301 catches canary 5 (twin values), both in spec 9.5, and ticket 300 catches canary 4 (condition pairs, spec 9.14). The table gives the first verdict and, for canaries 3, 4 and 5, the verdict now.
 
 ## How the runs were made
 
@@ -29,7 +29,7 @@ The 1.0 target is that Exhibit gives `needs_person` on 90% or more of the plante
 | 1 | `relay/ticket-twins.js`: move the "close enough" test into a helper, `closest` | `code`, a refactor | Off by one: `best.both >= MIN_WORDS` became `> MIN_WORDS`, so two tickets that share exactly 2 words are no longer twins | Calls `closest` with 4 and 1 shared words | `needs_person` | `mutation: failed`, 12 of 18 (0.67) |
 | 2 | `relay/pr-watch-plan.js`: `lateness` gets a default time | `code`, a feature | Wrong default: the comment says half an hour, the code says `30 * 1000` (30 seconds) | Late after 2 hours and at `LATE_MS`, not late at 0 | `needs_person` | `mutation: failed`, 1 of 2 (0.5) |
 | 3 | `relay/merge-hold.js`: say when `git status` fails | `code`, a feature | Missing error path: `git rev-list` is now outside the `try`, so a checkout with no commits throws | A folder that is not a checkout, which still fails at `git status` | `meets_policy`, now `needs_person` | none (mutation met, 23 of 27); now `mutation: missing`, a lost error path |
-| 4 | `relay/ticket-order.js`: a place near a ticket outside the work order goes last | `code`, a fix (`fix/` branch) | Off by one in the fix: `group.length - 1`, so "before" such a ticket lands second to last | Tries "after" only. It fails on the base | `meets_policy` (first run: `error`) | none (failing-before met, mutation met, 10 of 10) |
+| 4 | `relay/ticket-order.js`: a place near a ticket outside the work order goes last | `code`, a fix (`fix/` branch) | Off by one in the fix: `group.length - 1`, so "before" such a ticket lands second to last | Tries "after" only. It fails on the base | `meets_policy` (first run: `error`), now `needs_person` | none (failing-before met, mutation met, 10 of 10); now `condition-pairs: missing`, a case no test tries |
 | 5 | `office/holidays.js`: new `daysLeft`, the days the decorations still show | `code`, a feature | Wrong variable: `to - from + 1` where `to - today + 1` was meant | Checks the first day of a window, where `from` is today, and a day with none | `meets_policy`, now `needs_person` | none (mutation met, 9 of 9); now `mutation: missing`, twin values |
 
 `tests-before-after` was met on every run, and every test passed on every head. The planted bugs are real. A script ran the same input on `main` and on each branch:
@@ -135,6 +135,23 @@ exit 0 after 2266 s
 
 An `error` is not a catch: the spec asks for `needs_person` on each canary. The real verdict is `meets_policy`. The existing tests kill every mutant of the changed lines. The bug is a case that no test tries ("before" a ticket outside the work order), so the lines that are there are well tested, and the gap is in the inputs. Ticket 300.
 
+**Caught since ticket 300.** Ticket 300 added the `condition-pairs` requirement (spec section 9.14), and [canaries/evidence-canary.yml](canaries/evidence-canary.yml) now asks for it on a fix in the `code` kind. The canary was rebuilt from its patch as above, with the new policy in the base commit, so the commits are new (base 20469e7, head dd0a883). Exhibit at 4a94998, run from source, with the same command:
+
+```
+$ exhibit check --base main --head fix/canary-4-place-near-missing-target --policy evidence-canary.yml
+Verdict: needs_person. 1 gap, listed with how to fix it in .exhibit/summary.md.
+exit 1 after 2309 s
+
+- tests-before-after (from code): met.
+- failing-before (from code): met. Tests that fail on the base and pass on the head: relay/test/ticket-order.test.js > test > a place after a target that movable leaves out goes last in the group (fails on the base).
+- mutation (from code): met. Catch rate 1 (10 of 10 mutants killed, 0 of them by a timeout; 95% interval 0.6915 to 1).
+- condition-pairs (from code): missing. 1 case of the 2 changed conditions that no test tries.
+
+1. condition-pairs: missing. No test tries this case of the changed conditions: relay/ticket-order.js:40 `after` is always true when `i < 0` is true. No test tries `after` false with `i < 0` true. Add a test for each case, or, when a case cannot happen, say why in the PR, so a person can check it.
+```
+
+The case it names is the planted bug. `condition-pairs` ran the 28 test files that reach `relay/ticket-order.js` in 55 s. A run before this one gave `error`: `review-desk.test.js` failed in the coverage run of both Stryker runs (ticket 303), while `condition-pairs` was `missing` with the same case. Canaries 1, 2, 3 and 5 are not fixes, so the new requirement is not needed there, and their verdicts stay the same.
+
 The first run also showed two problems in Exhibit:
 
 - `failing-before` listed the `review-desk` test as the PR's, though the PR did not change its file. That test failed twice in the run on the base with the PR's test files, and passed in the plain base run, and the rule in section 9.4 takes any test whose result changed between those two runs as the PR's. Here it did no harm, because the real test qualified too. Alone, it would be a false pass. Ticket 302.
@@ -172,9 +189,9 @@ The other gap of this run is `tests-before-after`: `relay/test/review-desk.test.
 
 ## What this says
 
-- Mutation catches a weak test of a line that is there and has a wrong operator or number (canaries 1 and 2). It cannot see removed code, a case that no test tries, or a swapped variable (canaries 3 to 5).
-- Without mutation, all five would get `meets_policy`: every other requirement was met on each one.
-- 4 of 5 is still short of 90%. Five canaries are too few for a real rate: the 95% interval for 4 of 5 is 0.28 to 0.99. And each of the two new checks was made after its canary was known, so these 4 are not a blind test. The hidden canary job should plant many more, and of each kind here.
+- Mutation catches a weak test of a line that is there and has a wrong operator or number (canaries 1 and 2). It cannot see removed code, a case that no test tries, or a swapped variable (canaries 3 to 5). `condition-pairs` (ticket 300) now sees the case that no test tries in canary 4.
+- Without mutation, all five would have got `meets_policy` on the first try: every other requirement was met on each one. Now only `condition-pairs` catches canary 4, and mutation is still met there.
+- 5 of 5 meets 90%, but five canaries are too few for a real rate: the 95% interval for 5 of 5 is 0.48 to 1. And each of the three new checks was made after its canary was known, so these 5 are not a blind test. The hidden canary job should plant many more, and of each kind here.
 - A run took 21 to 38 minutes on the Mac, almost all of it the two full Building58 test runs (three for the fix). Stryker took 2 s to 3.5 minutes.
 
 ## Tickets filed
