@@ -1,4 +1,4 @@
-import { baseErrorDetails, NothingLoaded, TestRunError } from './test-runs.js';
+import { baseErrorDetails, NothingLoaded, TestRunError, TimedOut } from './test-runs.js';
 
 const LISTED = 20;
 
@@ -33,13 +33,19 @@ export function isTestPath(path) {
 //   is the PR's only when its file is a PR test file, or the plain base run does not have it.
 //   Without a file in the names (Node 20), a PR test that is not there counts only when no PR
 //   test is there: else Exhibit cannot tell which file stopped, so a person must check.
+// - when the run with the PR's test files passed the time limit (a TimedOut), a PR test with no
+//   result there had not finished: it hung, or it waited behind a PR test that hung. The plain
+//   base run finished, and only the PR's test files differ from it, so a PR test hung. It counts as
+//   failing there, as did_not_finish. A test that is not the PR's never counts this way.
 // - it passes on the head.
 // - it is not flaky in any of the three runs.
 //
 // It is `met` with the qualifying tests listed, and `missing` when no test qualifies. It is also
 // `missing` when a run on the base gives no results, for example because the PR changes the test
 // tools: then Exhibit cannot show that a test fails on the base, so a person must check. The gap
-// says why the base run failed. A head that gives no results is `error`, as for
+// says why the base run failed. It is `missing` too when the plain base run passed the time limit:
+// then Exhibit cannot tell which tests had not finished there, so it does not make the run with the
+// PR's test files. A head that gives no results is `error`, as for
 // tests-before-after.
 export async function failingBefore(requirement, context) {
   let runs;
@@ -49,6 +55,7 @@ export async function failingBefore(requirement, context) {
     runs = await context.testRuns();
     testFiles = prTestFiles(context.files, runs.head);
     if (runs.baseError && testFiles.length > 0) return cannotCheck(runs.baseError, testFiles);
+    if (runs.baseTimedOut && testFiles.length > 0) return cannotCheckTimedOut(runs.baseTimedOut, testFiles);
     if (testFiles.length > 0) {
       try {
         overlay = await context.baseWithPrTests(testFiles);
@@ -73,6 +80,8 @@ export async function failingBefore(requirement, context) {
 
   const nothingLoaded = overlay instanceof NothingLoaded ? overlay : null;
   if (nothingLoaded) overlay = nothingLoaded.tests;
+  const timedOut = overlay instanceof TimedOut ? overlay : null;
+  if (timedOut) overlay = timedOut.tests;
   const flaky = new Set([...namesWith(runs.base, 'flaky'), ...namesWith(runs.head, 'flaky'), ...namesWith(overlay, 'flaky')]);
   const fileOf = (name) => testFiles.find((file) => name.startsWith(`${file} > `));
   // With nothing loaded, a test with no file counts as not loaded only when no PR test ran. When
@@ -94,10 +103,13 @@ export async function failingBefore(requirement, context) {
     // plain base run.
     // A changed result counts only for a name that gives no file (Node 20). A name that gives a
     // file other than the PR's is in a file the PR did not change, so its result changed by chance.
-    const theirs = file !== undefined || !runs.base.has(name) || (!namesAFile(name) && !(nothingLoaded && onBase === undefined) && runs.base.get(name) !== onBase);
+    // The same holds for a test that had not finished in a run that passed the time limit.
+    const theirs = file !== undefined || !runs.base.has(name) || (!namesAFile(name) && !((nothingLoaded || timedOut) && onBase === undefined) && runs.base.get(name) !== onBase);
     if (!theirs) continue;
     if (onBase === 'failed') {
       tests.push({ name, on_base: 'failed' });
+    } else if (onBase === undefined && timedOut) {
+      tests.push({ name, on_base: 'did_not_finish' });
     } else if (onBase === undefined && didNotLoad.length > 0 && (file === undefined ? !prTestRan : didNotLoad.includes(file))) {
       // Without a file in the test's name (Node 20's reporter gives none), Exhibit cannot tell
       // which file the test is in, so it names every PR test file that did not load.
@@ -110,6 +122,7 @@ export async function failingBefore(requirement, context) {
   const flakyHere = [...flaky].sort();
   const details = { test_files: testFiles, tests, passed_on_base: passedOnBase, did_not_load_on_base: didNotLoad };
   if (nothingLoaded) details.base_with_pr_tests_error = nothingLoaded.message;
+  if (timedOut) details.base_with_pr_tests_timed_out = timedOut.message;
   if (tests.length > 0) return { status: 'met', details, flaky_tests: flakyHere };
 
   const shown = passedOnBase.slice(0, LISTED).join('; ');
@@ -132,6 +145,18 @@ function cannotCheck(error, testFiles) {
     details: { test_files: testFiles, tests: [], passed_on_base: [], did_not_load_on_base: [], base_error: baseErrorDetails(error) },
     flaky_tests: [],
     how_to_fix: `The tests gave no results on the base, so Exhibit cannot show that a test fails there and passes on the head. ${error.howToFix} If the change adds or changes the test tools, the base cannot run the tests, so a person must check that a test in the change shows the problem.`
+  };
+}
+
+// failing-before when the plain base run passed the time limit: `missing`. The tests that had not
+// finished there have no result, so Exhibit cannot tell an old test that hung from a test that the
+// PR adds.
+function cannotCheckTimedOut(timedOut, testFiles) {
+  return {
+    status: 'missing',
+    details: { test_files: testFiles, tests: [], passed_on_base: [], did_not_load_on_base: [], base_timed_out: baseErrorDetails(timedOut) },
+    flaky_tests: [],
+    how_to_fix: `The tests ran past the time limit on the base, before the change's test files were put in, so Exhibit cannot tell which tests had not finished there, or show that a test in the change fails there. ${timedOut.howToFix} A person must check that a test in the change shows the problem.`
   };
 }
 
@@ -169,9 +194,11 @@ function namesWith(tests, status) {
 export function describeTests(details) {
   const tests = details.tests ?? [];
   if (tests.length === 0) return '';
-  const words = tests.slice(0, LISTED).map((test) => test.on_base === 'failed'
-    ? `${test.name} (fails on the base)`
-    : `${test.name} (its file did not load on the base: ${test.files.join(', ')})`);
+  const words = tests.slice(0, LISTED).map((test) => {
+    if (test.on_base === 'failed') return `${test.name} (fails on the base)`;
+    if (test.on_base === 'did_not_finish') return `${test.name} (it did not finish on the base: the run passed the time limit)`;
+    return `${test.name} (its file did not load on the base: ${test.files.join(', ')})`;
+  });
   const more = tests.length > LISTED ? `, and ${tests.length - LISTED} more` : '';
   return ` Tests that fail on the base and pass on the head: ${words.join('; ')}${more}.`;
 }

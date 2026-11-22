@@ -4,7 +4,7 @@ Ticket 258. Spec sections 12 ("Planted faults") and 14.
 
 The 1.0 target is that Exhibit gives `needs_person` on 90% or more of the planted bugs (canaries). The hidden canary job of slice S9 does not exist yet. So this page records a small first try by hand: five bugs planted in Building58, each with a new test that passes but misses the bug, as a real builder PR might have. Then `exhibit check` ran on each one.
 
-**Result: 2 of 5 caught.** Both catches came from mutation. Since ticket 300, canary 4 is caught too, by `condition-pairs`, so 3 of 5. The three misses show three things that mutation on the changed lines cannot see: code that was removed, a wrong answer that every test agrees with, and a wrong variable.
+**Result: 2 of 5 caught on the first try, and 5 of 5 now.** Both first catches came from mutation. The three misses show three things that mutation on the changed lines cannot see: code that was removed, a wrong answer that every test agrees with, and a wrong variable. Since then, ticket 299 catches canary 3 (lost error paths) and ticket 301 catches canary 5 (twin values), both in spec 9.5, and ticket 300 catches canary 4 (condition pairs, spec 9.14). The table gives the first verdict and, for canaries 3, 4 and 5, the verdict now.
 
 ## How the runs were made
 
@@ -28,9 +28,9 @@ The 1.0 target is that Exhibit gives `needs_person` on 90% or more of the plante
 |---|---|---|---|---|---|---|
 | 1 | `relay/ticket-twins.js`: move the "close enough" test into a helper, `closest` | `code`, a refactor | Off by one: `best.both >= MIN_WORDS` became `> MIN_WORDS`, so two tickets that share exactly 2 words are no longer twins | Calls `closest` with 4 and 1 shared words | `needs_person` | `mutation: failed`, 12 of 18 (0.67) |
 | 2 | `relay/pr-watch-plan.js`: `lateness` gets a default time | `code`, a feature | Wrong default: the comment says half an hour, the code says `30 * 1000` (30 seconds) | Late after 2 hours and at `LATE_MS`, not late at 0 | `needs_person` | `mutation: failed`, 1 of 2 (0.5) |
-| 3 | `relay/merge-hold.js`: say when `git status` fails | `code`, a feature | Missing error path: `git rev-list` is now outside the `try`, so a checkout with no commits throws | A folder that is not a checkout, which still fails at `git status` | `meets_policy` | none (mutation met, 23 of 27) |
-| 4 | `relay/ticket-order.js`: a place near a ticket outside the work order goes last | `code`, a fix (`fix/` branch) | Off by one in the fix: `group.length - 1`, so "before" such a ticket lands second to last | Tries "after" only. It fails on the base | `meets_policy` (first run: `error`). Since ticket 300: `needs_person` | none (failing-before met, mutation met, 10 of 10). Since ticket 300: `condition-pairs: missing` |
-| 5 | `office/holidays.js`: new `daysLeft`, the days the decorations still show | `code`, a feature | Wrong variable: `to - from + 1` where `to - today + 1` was meant | Checks the first day of a window, where `from` is today, and a day with none | `meets_policy` | none (mutation met, 9 of 9) |
+| 3 | `relay/merge-hold.js`: say when `git status` fails | `code`, a feature | Missing error path: `git rev-list` is now outside the `try`, so a checkout with no commits throws | A folder that is not a checkout, which still fails at `git status` | `meets_policy`, now `needs_person` | none (mutation met, 23 of 27); now `mutation: missing`, a lost error path |
+| 4 | `relay/ticket-order.js`: a place near a ticket outside the work order goes last | `code`, a fix (`fix/` branch) | Off by one in the fix: `group.length - 1`, so "before" such a ticket lands second to last | Tries "after" only. It fails on the base | `meets_policy` (first run: `error`), now `needs_person` | none (failing-before met, mutation met, 10 of 10); now `condition-pairs: missing`, a case no test tries |
+| 5 | `office/holidays.js`: new `daysLeft`, the days the decorations still show | `code`, a feature | Wrong variable: `to - from + 1` where `to - today + 1` was meant | Checks the first day of a window, where `from` is today, and a day with none | `meets_policy`, now `needs_person` | none (mutation met, 9 of 9); now `mutation: missing`, twin values |
 
 `tests-before-after` was met on every run, and every test passed on every head. The planted bugs are real. A script ran the same input on `main` and on each branch:
 
@@ -95,6 +95,19 @@ exit 0 after 1519 s
 
 The bug is code that is not there any more: the `catch` around `git rev-list`. Mutation changes only code that is on the head, so no mutant can stand for it. The survivors are on a line that only moved. Ticket 299.
 
+After ticket 299, Exhibit names lost error paths (spec 9.5): calls that a `try` with a `catch` covered on the base, and that no `try` covers on the head. The same canary, run again with the patch on a new clone (commit 95b5d8f, the same change with another commit date):
+
+```
+$ exhibit check --base main --head canary/3-unsaved-count --policy evidence-canary.yml
+Verdict: needs_person. 1 gap, listed with how to fix it in .exhibit/summary.md.
+exit 1 after 1512 s
+
+- mutation (from code): missing. Catch rate 0.8519 (23 of 27 mutants killed, 0 of them by a timeout; 95% interval 0.6626 to 0.9582).
+  ...
+  - Calls that a try with a catch covered on the base, and no try covers on the head:
+    - relay/merge-hold.js:36 in unsavedWork: `Number(git('rev-list', '--count', 'HEAD', '--not', '--remotes'))`
+```
+
 ### Canary 4: missed
 
 The first run gave `error`, because a test that the canary does not touch failed in Stryker's first run:
@@ -156,11 +169,29 @@ exit 0 after 1290 s
 
 Stryker has no mutator that puts one variable in place of another. So no mutant puts `today` where `from` is, and each test point is the first day of a window (or a day with no decorations), where both give the same answer. Ticket 301.
 
+After ticket 301, Exhibit names twin values (spec 9.5): it runs the test files once more, records the values in scope each time a test runs a changed line, and names a value that the line reads when it was always equal to an input that the line does not read. The same canary, run again with the patch on a new clone (commit 159fff9, the same change with another commit date):
+
+```
+$ exhibit check --base main --head canary/5-days-left --policy evidence-canary.yml
+Verdict: needs_person. 2 gaps, listed with how to fix them in .exhibit/summary.md.
+exit 1 after 1319 s
+
+- mutation (from code): missing. Catch rate 1 (9 of 9 mutants killed, 0 of them by a timeout; 95% interval 0.6637 to 1).
+  - Twin values: each time a test ran the line, the value it reads was equal to a value it does not read:
+    - office/holidays.js:82 `from[1]` and `date.m` (values 11, 12): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+    - office/holidays.js:82 `from[2]` and `date.d` (values 12, 11): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+    - office/holidays.js:82 `to[1]` and `date.m` (values 11, 12): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+```
+
+On both test days, the first day of a window, `from[2]` was the same as the day of `date`, and `from[1]` the same as its month. A test on Nov 20 would tell `from[2]` and `date.d` apart, and fail on the bug.
+
+The other gap of this run is `tests-before-after`: `relay/test/review-desk.test.js` failed twice on the head. The canary does not touch that test or its code, and it is the test that failed by chance in the base runs of canary 4's first run (ticket 302, the first bullet under canary 4). An earlier run of the same canary, with the code of ticket 301 before its last change (the time budget of the twin pass), gave only the mutation gap.
+
 ## What this says
 
 - Mutation catches a weak test of a line that is there and has a wrong operator or number (canaries 1 and 2). It cannot see removed code, a case that no test tries, or a swapped variable (canaries 3 to 5). `condition-pairs` (ticket 300) now sees the case that no test tries in canary 4.
-- Without mutation, all five would get `meets_policy`: every other requirement was met on each one.
-- 2 of 5 is far from 90%. Five canaries are too few for a real rate: the 95% interval for 2 of 5 is 0.05 to 0.85. The hidden canary job should plant many more, and of each kind here.
+- Without mutation, all five would have got `meets_policy` on the first try: every other requirement was met on each one. Now only `condition-pairs` catches canary 4, and mutation is still met there.
+- 5 of 5 meets 90%, but five canaries are too few for a real rate: the 95% interval for 5 of 5 is 0.48 to 1. And each of the three new checks was made after its canary was known, so these 5 are not a blind test. The hidden canary job should plant many more, and of each kind here.
 - A run took 21 to 38 minutes on the Mac, almost all of it the two full Building58 test runs (three for the fix). Stryker took 2 s to 3.5 minutes.
 
 ## Tickets filed
