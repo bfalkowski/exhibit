@@ -100,10 +100,11 @@ function featureSignalOf(labels, added, sourcePaths) {
   return path === undefined ? null : `added:${path}`;
 }
 
-// failing-before with `when` is needed only for a change of a kind it names (spec 8.1). For any
-// other change this gives the reason in words. Otherwise it gives null.
+// failing-before or condition-pairs with `when` is needed only for a change of a kind it names
+// (spec 8.1). For any other change this gives the reason in words. Otherwise it gives null.
+const LIMITED_BY_WHEN = new Set(['failing-before', 'condition-pairs']);
 function notNeeded(requirement, { fix, feature }) {
-  if (requirement.type !== 'failing-before' || requirement.params.when === undefined) return null;
+  if (!LIMITED_BY_WHEN.has(requirement.type) || requirement.params.when === undefined) return null;
   const when = requirement.params.when;
   if ((fix && when.includes('fix')) || (feature && when.includes('feature'))) return null;
   const named = when.length === 0 ? 'no kind of change' : when.map((word) => `a ${word}`).join(' or ');

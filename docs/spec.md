@@ -59,6 +59,7 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 | Deferral | A defect that review saw and left for a later ticket. |
 | False demand | A requirement that was missing on a PR that turned out to be fine. |
 | Catch rate | Killed mutants divided by killed plus survived mutants, on the changed lines. Mutants marked as equivalent do not count. |
+| Condition | The test of an `if`, a `? :`, a `while`, a `do ... while` or a `for`, or one part of such a test that `&&` or `||` joins. Section 9.14 checks that the tests try the pairs of conditions on the changed lines. |
 | Equivalent mutant | A mutant that cannot change what the code does, so no test can kill it. A person marks one under `equivalent_mutants` in `evidence.yml` (section 9.5). |
 | Shadow mode | Exhibit gives its verdict, but nothing waits on it. |
 | Skip | A PR's record of why it was not verified: the label `exhibit-skip` and a line in the PR body that starts with `Exhibit skip:` and gives a reason. In enforce mode, it lets a `needs_person` PR through. It never changes the verdict, and it is always counted (sections 9.8 and 9.10). |
@@ -153,11 +154,11 @@ Rules:
   - `jira` must have `site`: the Jira site's address, starting with `https://` or `http://`, such as `https://acme.atlassian.net`. It may have `issue_types` (a list of one or more issue type names that count as a bug, `[Bug]` when left out; a list replaces the default), `found_field` (the Jira field that says where a bug was found, such as `customfield_10042`) and `escaped_values` (a list of the values of that field that mean the bug got out to users, such as `[Production]`). `found_field` and `escaped_values` go together: one without the other is an error. It may have no other field. The token is never in this file: it comes from the env (section 9.1). `tracker:jira` in `fix_signals` with no `jira` is an error.
   - `default` must have `risk` and `needs`. It may have `merge_without_reading` and `source`, and no other field.
   - `risk` must be `low`, `medium` or `high`. `merge_without_reading` must be `never` or `allowed`.
-  - `needs` is a list of evidence items, and it may be empty. An item is a bare name (`tests-before-after` or `failing-before`), or a mapping with one key: the item type, with its fields. `- failing-before:` with nothing after the colon is the same as the bare name.
-  - `failing-before` may have `when`: a list of `fix` and `feature`.
+  - `needs` is a list of evidence items, and it may be empty. An item is a bare name (`tests-before-after`, `failing-before` or `condition-pairs`), or a mapping with one key: the item type, with its fields. `- failing-before:` with nothing after the colon is the same as the bare name.
+  - `failing-before` may have `when`: a list of `fix` and `feature`. So may `condition-pairs`.
   - `mutation` must have `min`, a number from 0 to 1. NaN (`.nan`) and infinity (`.inf`) are not numbers here.
   - `probe` must have `name` and `run`. It may have `artifacts` (a list of paths) and `author: hidden`.
-  - An item type that is not one of the four is an error.
+  - An item type that is not one of the five is an error.
   - `equivalent_mutants` is a list of marks. Each mark must have `file`, `line_text`, `mutator`, `original`, `replacement` and `reason`, and no other field. Each one is text that is not empty. `reason` must not be empty: it says why the mutant cannot change what the code does, so a reviewer can check it.
 - An invalid policy makes the command exit 2. The message names each bad field and says what is wrong, one field on each line, for example `evidence.yml kinds.relay-core.risk must be low, medium or high, not "extreme".` A file that is not valid YAML gives exit 2 too. A bad `fix_signals` is the one exception: Exhibit checks it first, and its message shows only that problem, as it did before the whole file was checked.
 
@@ -168,6 +169,7 @@ Evidence item types in version 1:
 | `tests-before-after` | The test command ran on the base and on the head, and every test passes on the head, except tests marked flaky (section 9.3). |
 | `failing-before` | At least one test that the PR added or changed fails on the base and passes on the head (section 9.4). `when` limits it to PRs classified as fix or feature. For any other PR it is `skipped` with the reason, and this skip does not stop `meets_policy` (section 9.8). |
 | `mutation` | The catch rate on the changed lines is at least `min`. |
+| `condition-pairs` | No condition on the changed lines goes only one way under one outcome of an earlier condition in the same statement, when the tests try it both ways elsewhere (section 9.14). `when` limits it to a fix or a feature, as for `failing-before`, and the same skip does not stop `meets_policy`. |
 | `probe` | A named command exits 0 on the head and writes its declared artifacts. Screenshots, restart runs, link checks, contract tests and hidden suites are all probes. |
 
 A probe can set `author: hidden`. Exhibit then counts it as a check the builder cannot see.
@@ -222,9 +224,9 @@ The fields:
 
 `status` is one of `met`, `missing`, `failed`, `skipped` or `error`. An `error` on any requirement makes the verdict `error`, never `meets_policy`. A `skipped` requirement is not met, so it makes the verdict `needs_person` (section 9.8).
 
-The `tests-before-after` collector is built (section 9.3), the `failing-before` collector is built (section 9.4), a `probe` requirement runs its command (section 9.6), and a `mutation` requirement runs Stryker or mutmut on the changed lines (section 9.5). In the example, `killed` does not hold the timeouts, and `survived` does not hold the mutants that no test reached: the catch rate counts both, so it is 24 of 26. A mutant that a person marked as equivalent does not count at all: `details.equivalent` counts those, and `details.equivalent_mutants` lists them (section 9.5). Each mutant in the lists of `details` has a `line_text`, the text of its line, so a person can copy it into a mark. A `mutation` requirement is `skipped` when the change has code in a language that no mutation adapter covers, such as Go.
+The `tests-before-after` collector is built (section 9.3), the `failing-before` collector is built (section 9.4), a `probe` requirement runs its command (section 9.6), a `mutation` requirement runs Stryker or mutmut on the changed lines (section 9.5), and a `condition-pairs` requirement runs the tests with a recorder in the changed conditions (section 9.14). In the example, `killed` does not hold the timeouts, and `survived` does not hold the mutants that no test reached: the catch rate counts both, so it is 24 of 26. A mutant that a person marked as equivalent does not count at all: `details.equivalent` counts those, and `details.equivalent_mutants` lists them (section 9.5). Each mutant in the lists of `details` has a `line_text`, the text of its line, so a person can copy it into a mark. A `mutation` requirement is `skipped` when the change has code in a language that no mutation adapter covers, such as Go.
 
-A `failing-before` whose `when` does not fit the change is `skipped` too, but it is not a gap. Its `details.reason` says that the policy asks for it only on a fix or a feature, and that this change is neither. It does not stop `meets_policy`, and it does not count in `checks_by_author`.
+A `failing-before` or `condition-pairs` whose `when` does not fit the change is `skipped` too, but it is not a gap. Its `details.reason` says that the policy asks for it only on a fix or a feature, and that this change is neither. It does not stop `meets_policy`, and it does not count in `checks_by_author`.
 
 `flaky_tests` lists each test that failed and then passed on its second run, on the base or the head (section 9.3), and each test file that failed in Stryker's coverage run in Exhibit's first run of Stryker and passed in the second (section 9.5). A test's name is its file, relative to the repo, its classname and its name, joined by ` > `, for example `test/math.test.js > test > add sums two numbers`. A part that the JUnit file leaves out is left out of the name too. Node 20's reporter gives no file, for example.
 
@@ -608,7 +610,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 
 - `meets_policy` when every requirement is `met`, and there is no other gap. Exit code 0.
 - `needs_person` when any requirement is `missing`, `failed` or `skipped`, when the change touches the policy file (sections 8.2 and 15; the change is checked by the policy in the base commit, section 8.1), or when no rule covers the change (section 9.1). Exit code 1. A `skipped` requirement counts as not met: Exhibit did not check it, so a person must.
-- One `skipped` does not count: a `failing-before` whose `when` limits it to a fix or a feature, on a change that is neither. The policy does not need it for that change, so it is no gap, and the change can still get `meets_policy`. Its line in `summary.md` gives the reason.
+- One `skipped` does not count: a `failing-before` or `condition-pairs` whose `when` limits it to a fix or a feature, on a change that is neither. The policy does not need it for that change, so it is no gap, and the change can still get `meets_policy`. Its line in `summary.md` gives the reason.
 - `error` when Exhibit itself failed: a collector threw, or gave back no valid status, so its requirement is `error`. Exit code 2. An error never becomes `meets_policy`, and it wins over `needs_person`.
 - A failure before Exhibit can build the exhibit, such as a bad policy, a ref that is not in the clone, or any unexpected throw, also exits 2. `exhibit check` removes the old `evidence.json` and `summary.md` when it starts, so no old verdict is left behind, and it prints `verdict: error` on stderr.
 - **Skip.** In enforce mode, a `needs_person` PR that carries a skip exits 0. A skip is the PR label `exhibit-skip` plus a line in the PR body that starts with `Exhibit skip:` and gives a reason (section 8.2). The verdict stays `needs_person`: the exhibit records the skip beside it, with who added the label, the reason and the head commit, so that skips can be counted (section 9.10). So a check that cannot pass has a way out, and that way out is never silent.
@@ -860,6 +862,53 @@ On stderr it prints: `Waiting for a second defect: "Broken doc link" (D-023).`
 
 - **A disprove step.** For each drafted rule, list the clean PRs in the history that the rule would have blocked, so the person sees the cost before approving. A clean PR is one with no SZZ link to any fix, or whose every link a person rejected, as in section 9.9. A PR is blocked when it matches the rule's `match` and would get `needs_person` because a requirement of the rule is missing. The list gives each PR's number and title, and the count. The backtest's "rules that do not pay" (section 9.9) finds such a rule only after it is in the policy. This step shows the cost before.
 - **Review comments as a source.** A finding that comes back in the reviews of two or more different PRs could seed a candidate category, with the same two-PR minimum as above. A person still names the category and labels the defects. Today the history keeps only each review's `state`, `author` and `source` (section 8.3), not its text, so this cannot be built yet. For it, each entry in `reviews.list` would need the review's text, and the text of its line comments with the `path` and `line` each one is on. For a review posted as a PR comment, the comment's text is the review's text.
+
+### 9.14 Condition pairs
+
+Mutation (section 9.5) finds a weak test of code that is there: it changes the code, and a test that does not see the change lets the mutant survive. It cannot find a case that no test tries, when the code gets that case wrong and every test agrees with the code. Canary 4 on Building58 was such a case ([field/canaries.md](field/canaries.md)). Its fix said that a target outside the group puts the moving ticket last:
+
+```js
+const at = (i < 0 ? group.length - 1 : i) + (after ? 1 : 0);
+```
+
+The new test tried `i < 0` with `after` true, where the answer is right. With `after` false the ticket lands second to last. No test tried that case, and every mutant of the line was killed, so the check gave `meets_policy`.
+
+Ticket 300 named three ways to catch it. This is why Exhibit uses the third:
+
+- **A property test as a probe.** A probe that runs a property test, such as "any place in the group, before and after, gives the order the comment says", would catch it. Probes are built (section 9.6), so a policy can ask for one now, with `author: hidden` when the builder must not see it. But a person must write each property, for each part of the code, and Exhibit cannot write it. It does not help the next fix in another file.
+- **A test of each branch that the fix adds.** `failing-before` could ask that the PR's tests reach each outcome of each condition on the changed lines. In canary 4 that holds already: the old tests try `i < 0` false and `after` false, and the new test tries both true. So the rule would pass. The missing case is a pair of outcomes, not one outcome.
+- **Condition pairs.** The `condition-pairs` requirement records, for each condition on the changed lines, which way it went, and which way each earlier condition went in the same call of the function. A condition that goes both ways in the tests, but only one way under one outcome of an earlier condition in the same statement, is a case that no test tries. In canary 4, `after` was always true when `i < 0` was true. Exhibit names that case.
+
+How it works:
+
+- The changed lines are the lines of section 9.5. Test files are left out, as for mutation. A condition is the test of an `if`, a `? :`, a `while`, a `do ... while` or a `for`. When the test joins parts with `&&` or `||`, each part is a condition of its own, so `a && b` has two. Exhibit checks the conditions that start on a changed line and are inside the body of a function. A condition in a default value of a parameter is left out, because it runs before the body.
+- Exhibit can record conditions only in JavaScript files (`.js`, `.mjs` and `.cjs`). A change with code in another language, such as TypeScript, JSX or Python, makes the requirement `skipped`, and a person must judge. A change with no changed line of JavaScript outside the tests is `met`, and so is one with no condition on its changed lines. `details.reason` says why.
+- It needs `settings.mutation_test_files`, as Stryker does (section 9.5). Without it, the requirement is `missing`.
+- Exhibit makes a clean worktree of the head and runs `settings.mutation_setup` there, as in section 9.5. Its output goes to `.exhibit/condition-pairs/setup.log`. Then it reads each changed JavaScript file with `@babel/parser` and adds a recorder: each condition `c` becomes a call that records the value of `c` and gives it back as it was, so `&&` and `||` still give the same value. Each function with such a condition gets a new record at the start of each call. The recorder goes on lines that are already there, so line numbers stay the same. A file that does not parse makes the requirement `error`.
+- It runs the test files of `settings.mutation_test_files` that reach a changed file, by the rule of step 1 in section 9.5, or every test file when none does. Each test file runs as `node FILE` in the head worktree, half as many at a time as the machine has cores. The output of the Nth file goes to `.exhibit/condition-pairs/test-N.log`. A test that a test file starts, such as a server, records too, because it gets the same env. At exit, each process adds one line to `.exhibit/condition-pairs/seen.jsonl`: each condition with the ways it went, and each pair.
+- A test file that fails runs once more, alone, after the others are done, because a test that waits on a timer can fail when many files run at once. That second output goes to `test-N-again.log`. When it passes, the file is flaky (section 9.3), and it goes in `flaky_tests`. When it fails again, the requirement is `missing`: a test that fails on the head is no failure of Exhibit, as a base that gives no results is not (section 9.4), but a case that the file tries may not be recorded, so a person must check. The gap names the file and its log, and also the cases that the other runs left untried. A test that fails on the head for real also fails `tests-before-after` (section 9.3). Building58's `review-desk.test.js` waits on a timer and fails now and then even when it runs alone, so this happens there. Each test file has the time limit of a probe (`settings.probe_timeout_seconds`).
+- Exhibit then lists each case that no test tried: a condition B, and an earlier condition A in the same call, where B went only one way each time that A had last gone one way. Three rules keep out pairs that are not cases a test could try:
+  - B must be inside the statement of A, as in `(i < 0 ? a : b) + (after ? 1 : 0)` or `if (a) { if (b) ... }`. Two statements one after the other often test the same value two ways, such as `x > 5` and then `x > 3`, where `x > 3` can never be false when `x > 5` is true. And in a loop, the value of A can be from the turn before.
+  - B must not repeat the code of an earlier condition whose statement holds B, as when `v && v.posted ? ...` is written twice in one statement, or in `if (missing || await found()) log(missing ? 'a' : 'b')`. B's value comes from the earlier one: in the second example, `missing` is always false when `found()` ran, so that pair is no case a test could try.
+  - B must go both ways in some test. A condition that no test reached, or that went one way in every test, is a weak test of the code that is there, and mutation makes a mutant for it (section 9.5). So a policy should ask for `mutation` too.
+- The requirement is `met` when no case is listed, and `missing` when any case is. Its gap names up to 20 cases in words, such as "relay/ticket-order.js:40 `after` is always true when `i < 0` is true. No test tries `after` false with `i < 0` true.", and says to add a test for each case, or to say in the PR why a case cannot happen, so a person can check it.
+- `details` gives `conditions` (each with its `id`, `file`, `line`, `column` and `code`, the code cut to 80 characters), `test_files`, `test_selection` (`reach` or `all`), `seen` (the path of `seen.jsonl`) and `untried`. Each case in `untried` has the condition's `file`, `line`, `column` and `code`, the `value` it always had, and `under`: the earlier condition, with the `value` it had. `summary.md` gives the count of cases and of conditions.
+- `exhibit check` removes the old `.exhibit/condition-pairs` folder when it starts.
+- `when: [fix]` limits it to fixes, as for `failing-before` (section 8.1). A fix adds a case to code that worked for the others, so a case next to the new one that no test tries is where a fix most often goes wrong.
+
+Limits:
+
+- A case that a test tries is not a case that a test checks. A test that runs `after` false and checks nothing still counts as trying it. Mutation checks that the tests see what the code does, and this checks that they try the cases, so a policy should ask for both.
+- Exhibit looks only at pairs, only in one call of one function, only in one statement, and only at a condition that comes after the other. A case that needs three conditions, two statements, or a condition in another function, is not seen.
+- Some pairs in one statement still cannot happen, such as `v` after `v.posted` was true in `v && v.posted ? v.kind : v ? 1 : 0`, where `v` is not a repeat of `v.posted`. Exhibit lists such a pair, and a person reads that it cannot happen. There is no way yet to mark such a pair, as `equivalent_mutants` marks a mutant (section 9.5).
+- Code that runs at the top level of a file, outside any function, is not recorded.
+- `exhibit backtest --rerun` does not run it yet (section 9.9, ticket 415).
+
+What it found:
+
+- Canary 4, rebuilt from its patch on Building58 145143a with the canary policy plus `condition-pairs: { when: [fix] }`, got `needs_person`. The gap named the one case above. It ran the 28 test files that reach `relay/ticket-order.js`, in 1 to 3 minutes.
+- To see how often it asks for a person on a good change, it ran on the last 12 merged Building58 PRs that change JavaScript outside the tests (PRs 112, 121 and 140 to 155), with every PR counted, not only fixes. 9 were `met`. 1 named one case: PR 148, `relay/tickets.js:111`, where no test shows a ticket with a write error and no task. It is a real case that no test tries, but the code handles it. In 2, `review-desk.test.js` failed twice, so they are `missing` for a person to check. That test also fails alone, without the recorder, so the cause is the test.
+- An earlier rule also listed each condition that went only one way, and pairs across statements. It asked for a person on 10 of the 12. Most of those cases were conditions that no test reached, which mutation names already, or pairs that cannot happen.
 
 ## 10. GitHub Action
 
