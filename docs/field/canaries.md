@@ -127,7 +127,7 @@ The first run also showed two problems in Exhibit:
 - `failing-before` listed the `review-desk` test as the PR's, though the PR did not change its file. That test failed twice in the run on the base with the PR's test files, and passed in the plain base run, and the rule in section 9.4 takes any test whose result changed between those two runs as the PR's. Here it did no harm, because the real test qualified too. Alone, it would be a false pass. Ticket 302.
 - One test that failed by chance in Stryker's first run made the requirement `error`. The test runs in section 9.3 try a failed test again, but the mutation run does not. Ticket 303.
 
-### Canary 5: missed
+### Canary 5: missed, now caught
 
 ```
 $ exhibit check --base main --head canary/5-days-left --policy evidence-canary.yml
@@ -138,6 +138,24 @@ exit 0 after 1290 s
 ```
 
 Stryker has no mutator that puts one variable in place of another. So no mutant puts `today` where `from` is, and each test point is the first day of a window (or a day with no decorations), where both give the same answer. Ticket 301.
+
+After ticket 301, Exhibit names twin values (spec 9.5): it runs the test files once more, records the values in scope each time a test runs a changed line, and names a value that the line reads when it was always equal to an input that the line does not read. The same canary, run again with the patch on a new clone (commit 159fff9, the same change with another commit date):
+
+```
+$ exhibit check --base main --head canary/5-days-left --policy evidence-canary.yml
+Verdict: needs_person. 2 gaps, listed with how to fix them in .exhibit/summary.md.
+exit 1 after 1319 s
+
+- mutation (from code): missing. Catch rate 1 (9 of 9 mutants killed, 0 of them by a timeout; 95% interval 0.6637 to 1).
+  - Twin values: each time a test ran the line, the value it reads was equal to a value it does not read:
+    - office/holidays.js:82 `from[1]` and `date.m` (values 11, 12): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+    - office/holidays.js:82 `from[2]` and `date.d` (values 12, 11): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+    - office/holidays.js:82 `to[1]` and `date.m` (values 11, 12): `return dayNum(to[0], to[1], to[2]) - dayNum(from[0], from[1], from[2]) + 1;`
+```
+
+On both test days, the first day of a window, `from[2]` was the same as the day of `date`, and `from[1]` the same as its month. A test on Nov 20 would tell `from[2]` and `date.d` apart, and fail on the bug.
+
+The other gap of this run is `tests-before-after`: `relay/test/review-desk.test.js` failed twice on the head. The canary does not touch that test or its code, and it is the test that failed by chance in canary 4's first run (ticket 302). An earlier run of the same canary, with the code of ticket 301 before its last change (the time budget of the twin pass), gave only the mutation gap.
 
 ## What this says
 
