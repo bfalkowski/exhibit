@@ -95,6 +95,19 @@ exit 0 after 1519 s
 
 The bug is code that is not there any more: the `catch` around `git rev-list`. Mutation changes only code that is on the head, so no mutant can stand for it. The survivors are on a line that only moved. Ticket 299.
 
+After ticket 299, Exhibit names lost error paths (spec 9.5): calls that a `try` with a `catch` covered on the base, and that no `try` covers on the head. The same canary, run again with the patch on a new clone (commit 95b5d8f, the same change with another commit date):
+
+```
+$ exhibit check --base main --head canary/3-unsaved-count --policy evidence-canary.yml
+Verdict: needs_person. 1 gap, listed with how to fix it in .exhibit/summary.md.
+exit 1 after 1512 s
+
+- mutation (from code): missing. Catch rate 0.8519 (23 of 27 mutants killed, 0 of them by a timeout; 95% interval 0.6626 to 0.9582).
+  ...
+  - Calls that a try with a catch covered on the base, and no try covers on the head:
+    - relay/merge-hold.js:36 in unsavedWork: `Number(git('rev-list', '--count', 'HEAD', '--not', '--remotes'))`
+```
+
 ### Canary 4: missed
 
 The first run gave `error`, because a test that the canary does not touch failed in Stryker's first run:
@@ -127,7 +140,7 @@ The first run also showed two problems in Exhibit:
 - `failing-before` listed the `review-desk` test as the PR's, though the PR did not change its file. That test failed twice in the run on the base with the PR's test files, and passed in the plain base run, and the rule in section 9.4 takes any test whose result changed between those two runs as the PR's. Here it did no harm, because the real test qualified too. Alone, it would be a false pass. Ticket 302.
 - One test that failed by chance in Stryker's first run made the requirement `error`. The test runs in section 9.3 try a failed test again, but the mutation run does not. Ticket 303.
 
-### Canary 5: missed, now caught
+### Canary 5: missed
 
 ```
 $ exhibit check --base main --head canary/5-days-left --policy evidence-canary.yml
