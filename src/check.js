@@ -37,6 +37,8 @@ export const COLLECTORS = Object.freeze({
 // `head` SHAs, and `cwd`, the clone, and `env` for the test command. `fixed` is { fix, fix_signal }
 // when the caller asked the tracker already (spec 9.1). Without it, the fix signals classify `pr`. `skip` is the skip record
 // from src/skip.js, or null. It goes into the exhibit as it is, and never changes the verdict.
+// `unanswered` is null, or { tracker, signal, key, reason } when the tracker could not say
+// whether the PR's ticket is a bug (classifyWithTracker in src/fix-signals.js).
 //
 // Each collector gets a context: `cwd`, `env`, `base`, `head`, the changed `files`, the policy's
 // `settings` and `equivalentMutants`, and `testRuns()`, which runs the tests on the base and the
@@ -48,7 +50,10 @@ export const COLLECTORS = Object.freeze({
 //
 // A failing-before whose `when` names neither fix nor feature of this change is not needed
 // (spec 8.1). It gets `skipped` with the reason, and no collector runs. This skip is no gap, so it
-// does not stop meets_policy, and it does not count in checks_by_author.
+// does not stop meets_policy, and it does not count in checks_by_author. But when the tracker
+// could not answer (`unanswered`) and the change is no fix, the PR may be a fix that only the
+// tracker shows. So a failing-before skipped for want of a fix gives the tracker gap, and the
+// verdict is needs_person, not a silent meets_policy (spec 9.1).
 //
 // Each requirement goes to the collector for its type. A collector that throws, or gives back no
 // valid status, makes that requirement `error`, and the verdict `error`. The verdict is
@@ -87,10 +92,15 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
   const gaps = [];
   const flaky = new Set();
   const notNeeded = new Set();
+  // Skipped only because the change is no fix, while the tracker could not say if it is one.
+  const unanswered = change.unanswered ?? null;
+  const waitsOnTracker = (requirement) => unanswered !== null && !classification.fix && requirement.not_needed && requirement.params.when.includes('fix');
+  const trackerGap = requirements.some(waitsOnTracker);
   for (const requirement of requirements) {
     const started = clock();
+    const reason = waitsOnTracker(requirement) ? requirement.not_needed.replace('This does not stop meets_policy.', `But ${unanswered.tracker} could not say whether ${unanswered.key} is a bug, so the tracker gap needs a person.`) : requirement.not_needed;
     const result = requirement.not_needed
-      ? { status: 'skipped', details: { reason: requirement.not_needed }, flaky_tests: [] }
+      ? { status: 'skipped', details: { reason }, flaky_tests: [] }
       : await collect(collectors, requirement, context);
     for (const name of result.flaky_tests) flaky.add(name);
     const item = {
@@ -126,6 +136,14 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
       type: 'no-rule',
       status: 'missing',
       how_to_fix: `No kind in ${policyName} matches the changed files, and ${policyName} has no default, so the policy says nothing about this change. Add a default, or a kind that matches these files, or ask a person to review it.`
+    });
+  }
+
+  if (trackerGap) {
+    gaps.push({
+      type: 'tracker',
+      status: 'missing',
+      how_to_fix: `${unanswered.tracker} could not say whether ${unanswered.key} is a bug, so Exhibit cannot tell whether this PR is a fix, and the failing-before for fixes did not run. ${unanswered.reason} Fix the cause, such as a missing token, and run exhibit check again, or ask a person to check whether the PR fixes a bug and, if it does, that a test in it fails before the change.`
     });
   }
 

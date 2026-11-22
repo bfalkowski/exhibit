@@ -125,6 +125,7 @@ export function createJiraTracker({ settings, token, email, fetch }) {
   return {
     name: JIRA_TRACKER.name,
     displayName: JIRA_TRACKER.displayName,
+    tokenEnv: JIRA_TRACKER.tokenEnv,
     canAsk: authorization !== null,
     counts: () => ({ ...counts }),
 

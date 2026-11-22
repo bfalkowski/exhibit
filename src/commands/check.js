@@ -9,7 +9,7 @@ import { TESTS_DIR } from '../test-runs.js';
 import { checkExhibit } from '../exhibit-schema.js';
 import { classifyWithTracker, withOldNames } from '../fix-signals.js';
 import { GITHUB_FORGE } from '../github.js';
-import { connectTracker } from '../jira.js';
+import { connectTracker, JIRA_TRACKER } from '../jira.js';
 import { DEFAULT_POLICY, missingPolicy, parsePolicy, policyPath } from '../policy.js';
 import { DEFAULT_PROBE_TIMEOUT_SECONDS, runProbe, stopAllGroups, stopped } from '../probe.js';
 import { readSkip, SKIP_LABEL, skipApplies } from '../skip.js';
@@ -33,8 +33,10 @@ const USAGE = 'Usage: exhibit check --base REF [--head REF] [--repo owner/name] 
 // labels and branch for the fix signals. Without it, only the local branch name is known.
 // With --pr and tracker:jira in the fix signals, it asks Jira whether the PR's ticket is a bug
 // (spec 9.1), with the token in JIRA_API_TOKEN. With no token, or when Jira could not answer for
-// that ticket, the signal does not match, and summary.md says why in one line. A refused token
-// or a rate limit stops the run with the verdict error.
+// that ticket, the signal does not match, and summary.md says why in one line. Then the PR may
+// still be a fix, so a failing-before with `when: [fix]` that this left out gives the tracker
+// gap, and the verdict is needs_person. A refused token or a rate limit stops the run with the
+// verdict error.
 //
 // The policy comes from the base commit, not from the files on disk (spec 8.1). --policy FILE
 // reads it from that path in the repo, in place of evidence.yml.
@@ -111,13 +113,17 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   // Only with --pr: without it, the title is unknown, and the branch alone is no PR (spec 9.1).
   const notes = [];
   let fixed;
+  let unanswered = null;
   if (options.pr !== null) {
-    const { tracker, note } = connectTracker(policy.settings, { env, fetch });
+    const { tracker: connected, note } = connectTracker(policy.settings, { env, fetch });
     if (note) notes.push(note);
+    // With no token, a tracker that cannot ask, so the classifier can say which key it could not check.
+    const tracker = connected ?? (note ? JIRA_TRACKER.connect({ settings: policy.settings.jira, fetch }) : null);
     const pr = await refs.withOldNames(refs.pr, policy.settings.fix_signals);
-    const { classification, problem } = await classifyWithTracker(pr, policy.settings.fix_signals, tracker);
-    if (problem) notes.push(problem);
-    fixed = classification;
+    const result = await classifyWithTracker(pr, policy.settings.fix_signals, tracker);
+    if (result.problem) notes.push(result.problem);
+    fixed = result.classification;
+    if (result.unanswered) unanswered = { ...result.unanswered, tracker: tracker.displayName };
   }
 
   // The head worktree for probes is made only when a probe asks for it, and removed at the end.
@@ -127,7 +133,7 @@ async function runCheck(argv, { env, cwd, fetch, stdout, collectors, shadow }) {
   try {
     const timeoutSeconds = policy.settings.probe_timeout_seconds ?? DEFAULT_PROBE_TIMEOUT_SECONDS;
     const all = collectors ?? { ...COLLECTORS, probe: probeCollector({ cwd, headWorktree, timeoutSeconds }) };
-    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, fixed, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head, skip }, { collectors: all });
+    exhibit = await buildExhibit({ cwd, env, policy, policyFile, files, added, pr: refs.pr, fixed, signalsFrom: refs.signalsFrom, repo: options.repo, prNumber: options.pr, base, head, skip, unanswered }, { collectors: all });
   } finally {
     stopOnSignal.off();
     await headWorktree.remove();

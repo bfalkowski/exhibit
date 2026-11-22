@@ -699,16 +699,16 @@ kinds:
 `;
 const JIRA_REPLIES = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/jira/acme.json', import.meta.url)), 'utf8'));
 
-async function checkWithJira(t, { title, env, jiraStatus = null }) {
+async function checkWithJira(t, { title, env, jiraStatus = null, labels = [], policy = JIRA_POLICY }) {
   const fixture = buildRepo(t);
-  fixture.setBasePolicy(JIRA_POLICY);
+  fixture.setBasePolicy(policy);
   const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
   const asked = [];
   const fetch = async (url, options) => {
     const { origin, pathname, search } = new URL(String(url));
     asked.push({ url: `${origin}${pathname}`, authorization: options?.headers?.authorization });
     if (origin === 'https://api.github.com') {
-      const pull = { number: 7, title, labels: [], base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
+      const pull = { number: 7, title, labels, base: { sha: sha('start'), ref: 'main' }, head: { sha: sha('fix/src'), ref: 'task/app' } };
       return new Response(JSON.stringify(pull), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     if (jiraStatus) return new Response('{}', { status: jiraStatus, headers: { 'content-type': 'application/json' } });
@@ -735,18 +735,49 @@ test('check --pr asks Jira for tracker:jira, so a fix that only Jira shows needs
   assert.deepEqual(checkExhibit(evidence), []);
 });
 
-test('check --pr with tracker:jira and no JIRA_API_TOKEN asks no Jira, and summary.md says so in one line', async (t) => {
-  const { asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {} });
+// Ticket 342: a PR whose fix only Jira could show must not pass when Jira cannot answer. The
+// skipped failing-before gives the tracker gap in evidence.json, so the verdict is needs_person.
+test('check --pr with tracker:jira and no JIRA_API_TOKEN asks no Jira, says so in summary.md, and needs a person', async (t) => {
+  const { code, asked, evidence, summary } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {} });
   assert.deepEqual(asked.map((a) => a.url), ['https://api.github.com/repos/acme/widgets/pulls/7']);
   assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
   assert.equal(evidence.requirements[0].status, 'skipped');
   assert.match(summary, /^- JIRA_API_TOKEN is not set, so the tracker:jira fix signal matched no PR\. Set it to a Jira API token, and for Jira Cloud set JIRA_EMAIL to the email of its account\.$/m);
+  assert.equal(evidence.verdict, 'needs_person');
+  assert.equal(code, 1);
+  assert.deepEqual(evidence.gaps.map((gap) => [gap.type, gap.status]), [['tracker', 'missing']]);
+  assert.match(evidence.gaps[0].how_to_fix, /^Jira could not say whether PAY-482 is a bug, so Exhibit cannot tell whether this PR is a fix, and the failing-before for fixes did not run\. JIRA_API_TOKEN is not set\. /);
+  assert.match(summary, /^1\. tracker: missing\. Jira could not say whether PAY-482 is a bug/m);
+  assert.match(evidence.requirements[0].details.reason, /so it is not needed\. But Jira could not say whether PAY-482 is a bug, so the tracker gap needs a person\.$/);
+  assert.doesNotMatch(summary, /does not stop meets_policy/);
+  assert.deepEqual(checkExhibit(evidence), []);
 });
 
-test('check --pr says in summary.md when Jira could not answer for the PR\'s issue', async (t) => {
-  const { evidence, summary } = await checkWithJira(t, { title: 'PAY-503: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
+test('check --pr with a 503 or a 400 from Jira for the PR\'s issue says so in summary.md, and needs a person', async (t) => {
+  const { code, evidence, summary } = await checkWithJira(t, { title: 'PAY-503: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' } });
   assert.deepEqual([evidence.classification.fix, evidence.classification.fix_signal], [false, null]);
   assert.match(summary, /^- The tracker:jira signal could not check PAY-503, so it does not match\. Jira answered 503 /m);
+  assert.equal(code, 1);
+  assert.deepEqual(evidence.gaps.map((gap) => gap.type), ['tracker']);
+  assert.match(evidence.gaps[0].how_to_fix, /Jira could not say whether PAY-503 is a bug.* Jira answered 503 /);
+  assert.deepEqual(checkExhibit(evidence), []);
+
+  const bad = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' }, jiraStatus: 400 });
+  assert.equal(bad.code, 1);
+  assert.equal(bad.evidence.verdict, 'needs_person');
+  assert.match(bad.evidence.gaps[0].how_to_fix, /Jira answered 400 /);
+});
+
+test('check --pr gives no tracker gap when Jira cannot answer but the PR is a fix by an earlier signal, or names no issue', async (t) => {
+  const labeled = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {}, labels: [{ name: 'bug' }] });
+  assert.deepEqual([labeled.evidence.classification.fix_signal, labeled.evidence.verdict, labeled.code], ['label:bug', 'meets_policy', 0]);
+  const noKey = await checkWithJira(t, { title: 'Change the app', env: {} });
+  assert.deepEqual([noKey.evidence.verdict, noKey.evidence.gaps, noKey.code], ['meets_policy', [], 0]);
+});
+
+test('check --pr gives no tracker gap when Jira cannot answer and no rule needs a fix', async (t) => {
+  const { code, evidence } = await checkWithJira(t, { title: 'PAY-482: Change the app', env: {}, policy: JIRA_POLICY.replace('failing-before: { when: [fix] }', 'failing-before: {}') });
+  assert.deepEqual([evidence.requirements[0].status, evidence.verdict, evidence.gaps, code], ['met', 'meets_policy', [], 0]);
 });
 
 test('check --pr stops with the verdict error when Jira refuses the token', async (t) => {

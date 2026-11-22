@@ -40,7 +40,7 @@ test('settings.jira.issue_types replaces the default list of bug types', async (
 test('an unknown key (404) does not match and gives no problem', async () => {
   const { tracker } = jira();
   const result = await classifyWithTracker(pr('PAY-404: Something'), SIGNALS, tracker);
-  assert.deepEqual(result, { classification: { fix: false, fix_signal: null }, problem: null, ticket: { issue: 'jira:PAY-404', type: null } });
+  assert.deepEqual(result, { classification: { fix: false, fix_signal: null }, problem: null, ticket: { issue: 'jira:PAY-404', type: null }, unanswered: null });
   assert.deepEqual(tracker.counts(), { requests: 1, not_found: 1 });
 });
 
@@ -55,7 +55,7 @@ test('the answer gives the record that a history line saves, with what Jira said
 test('a kept line with a saved record for the same issue is classified from it, with no request', async () => {
   const { tracker } = jira();
   const result = await classifyWithTracker(pr('PAY-482: Crash'), SIGNALS, tracker, { saved: SAVED_BUG, reuse: true });
-  assert.deepEqual(result, { classification: { fix: true, fix_signal: 'jira:PAY-482' }, problem: null, ticket: SAVED_BUG });
+  assert.deepEqual(result, { classification: { fix: true, fix_signal: 'jira:PAY-482' }, problem: null, ticket: SAVED_BUG, unanswered: null });
   assert.equal(tracker.counts().requests, 0);
   // The record says what Jira said, so a change to issue_types reaches it with no request.
   const defect = await classifyWithTracker(pr('PAY-482: Crash'), SIGNALS, jira({ issue_types: ['Defect'] }).tracker, { saved: SAVED_BUG, reuse: true });
@@ -82,21 +82,23 @@ test('a line that is read asks Jira, and keeps its saved record when Jira answer
   assert.deepEqual(result.classification, { fix: true, fix_signal: 'jira:PAY-503' });
   assert.deepEqual(result.ticket, saved);
   assert.match(result.problem, /^the tracker:jira signal could not check PAY-503, so the PR keeps the answer saved in the history file \(jira:PAY-503\)\. Jira answered 503/);
+  // The saved answer stands in, so the tracker did answer for this PR.
+  assert.equal(result.unanswered, null);
 });
 
 test('with no token, a saved record answers with no problem, and a PR with none does not match', async () => {
   const tracker = createJiraTracker({ settings: { site: SITE }, token: undefined, fetch: () => assert.fail('no request') });
   assert.equal(tracker.canAsk, false);
   const kept = await classifyWithTracker(pr('PAY-482: Crash'), SIGNALS, tracker, { saved: SAVED_BUG });
-  assert.deepEqual(kept, { classification: { fix: true, fix_signal: 'jira:PAY-482' }, problem: null, ticket: SAVED_BUG });
+  assert.deepEqual(kept, { classification: { fix: true, fix_signal: 'jira:PAY-482' }, problem: null, ticket: SAVED_BUG, unanswered: null });
   const none = await classifyWithTracker(pr('PAY-483: x'), SIGNALS, tracker, { saved: SAVED_BUG });
-  assert.deepEqual(none, { classification: { fix: false, fix_signal: null }, problem: null, ticket: null });
+  assert.deepEqual(none, { classification: { fix: false, fix_signal: null }, problem: null, ticket: null, unanswered: { signal: 'tracker:jira', key: 'PAY-483', reason: 'JIRA_API_TOKEN is not set.' } });
 });
 
 test('when a signal before tracker:jira matches, Jira is not asked and the saved record stays', async () => {
   const { tracker } = jira();
   const result = await classifyWithTracker(pr('PAY-482: Crash', { labels: ['bug'] }), SIGNALS, tracker, { saved: SAVED_BUG });
-  assert.deepEqual(result, { classification: { fix: true, fix_signal: 'label:bug' }, problem: null, ticket: SAVED_BUG });
+  assert.deepEqual(result, { classification: { fix: true, fix_signal: 'label:bug' }, problem: null, ticket: SAVED_BUG, unanswered: null });
   assert.equal(tracker.counts().requests, 0);
 });
 
@@ -104,6 +106,7 @@ test('a Jira 5xx does not match and gives a problem for that PR, as a GitHub 5xx
   const result = await classifyWithTracker(pr('PAY-503: Something'), SIGNALS, jira().tracker);
   assert.deepEqual(result.classification, { fix: false, fix_signal: null });
   assert.equal(result.problem, 'the tracker:jira signal could not check PAY-503, so it does not match. Jira answered 503 (Service Unavailable) for /rest/api/2/issue/PAY-503. Jira had a problem: try again later.');
+  assert.deepEqual(result.unanswered, { signal: 'tracker:jira', key: 'PAY-503', reason: 'Jira answered 503 (Service Unavailable) for /rest/api/2/issue/PAY-503. Jira had a problem: try again later.' });
 });
 
 test('a refused Jira token stops the run, and the message holds no token', async () => {
