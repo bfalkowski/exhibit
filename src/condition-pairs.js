@@ -163,7 +163,7 @@ function order(a, b) {
 // "A=true>B=false" means that, in one call of a function, B was false after A was last true.
 // The prelude must not change line numbers, so it is one line.
 function prelude() {
-  return `var ${RECORDER} = globalThis.${RECORDER} ??= (() => { const seen = new Set(); const out = globalThis.process?.env?.EXHIBIT_PAIRS_OUT; if (out) { const fs = globalThis.process.getBuiltinModule ? globalThis.process.getBuiltinModule('node:fs') : (typeof require === 'function' ? require('node:fs') : null); globalThis.process.on('exit', () => { if (fs && seen.size > 0) fs.appendFileSync(out, JSON.stringify([...seen]) + '\\n'); }); } return { enter: () => new Map(), d: (frame, id, value) => { const v = Boolean(value); seen.add(id + '=' + v); for (const [other, was] of frame) if (other !== id) seen.add(other + '=' + was + '>' + id + '=' + v); frame.set(id, v); return value; } }; })();`.replace(/\n/g, ' ');
+  return `var ${RECORDER} = globalThis.${RECORDER} ??= (() => { const seen = new Set(); const out = globalThis.process?.env?.EXHIBIT_PAIRS_OUT; if (out) { const fs = globalThis.process.getBuiltinModule ? globalThis.process.getBuiltinModule('node:fs') : (typeof require === 'function' ? require('node:fs') : null); if (!fs) throw new Error('Exhibit condition-pairs: this Node has no process.getBuiltinModule, so the recorder cannot write ' + out + '. Use Node 20.16 or later.'); globalThis.process.on('exit', () => { if (seen.size > 0) fs.appendFileSync(out, JSON.stringify([...seen]) + '\\n'); }); } return { enter: () => new Map(), d: (frame, id, value) => { const v = Boolean(value); seen.add(id + '=' + v); for (const [other, was] of frame) if (other !== id) seen.add(other + '=' + was + '>' + id + '=' + v); frame.set(id, v); return value; } }; })();`.replace(/\n/g, ' ');
 }
 
 // Reads the lines that the recorder wrote, one JSON list for each process, into one Set.
@@ -185,8 +185,9 @@ export function readSeen(text) {
 //
 // - `condition` must be inside the statement of `first`, as in `(i < 0 ? a : b) + (after ? 1 : 0)`
 //   or `if (a) { if (b) ... }`. Two statements one after the other often test the same value two
-//   ways, as `x > 5` and then `x > 3`, and in a loop the value of `first` can be from the turn
-//   before.
+//   ways, as `x > 5` and then `x > 3`. And `condition` must come after `first` in the code. In a
+//   loop, a condition before `first`, such as the `if` in `do { if (k % 2 === 0) ... } while (k < n)`,
+//   runs after `first` only on the next turn, so its pair with `first` mixes two turns.
 // - `condition` must not repeat the code of an earlier condition whose statement holds it, as
 //   `v && v.posted ? ...` written twice, or `if (missing || await found()) log(missing ? ...)`.
 //   Its value comes from the earlier one: in the second, `missing` is always false when
@@ -203,7 +204,7 @@ export function untried(conditions, seen) {
     const match = /^(.*)=(true|false)>(.*)=(true|false)$/.exec(entry);
     if (!match || !byId.has(match[1]) || !byId.has(match[3])) continue;
     const first = byId.get(match[1]), second = byId.get(match[3]);
-    if (repeats.has(second.id) || !bothWays(second) || !holds(first, second)) continue;
+    if (repeats.has(second.id) || !bothWays(second) || !holds(first, second) || second.at <= first.at) continue;
     const key = `${match[1]}=${match[2]}>${match[3]}`;
     if (!under.has(key)) under.set(key, { first, firstValue: match[2] === 'true', second, values: new Set() });
     under.get(key).values.add(match[4] === 'true');
@@ -408,8 +409,13 @@ export function describeConditionPairs(details) {
   if (typeof details.reason === 'string' && !Array.isArray(details.untried)) return ` ${details.reason}`;
   const cases = details.untried ?? [];
   const count = (details.conditions ?? []).length;
-  if (cases.length === 0) return ` No pair of the ${count} changed conditions leaves a case that no test tries.`;
-  return ` ${cases.length} ${cases.length === 1 ? 'case' : 'cases'} of the ${count} changed conditions that no test tries.`;
+  // A test file that failed twice means that a case may be missing from the record, so the line
+  // says so, also when the other runs left no case untried.
+  const failed = Array.isArray(details.failed) && details.failed.length > 0
+    ? ` These test files failed twice, so a case may not be recorded: ${details.failed.map((failure) => failure.test).join(', ')}.`
+    : '';
+  if (cases.length === 0) return failed === '' ? ` No pair of the ${count} changed conditions leaves a case that no test tries.` : `${failed}`;
+  return ` ${cases.length} ${cases.length === 1 ? 'case' : 'cases'} of the ${count} changed conditions that no test tries.${failed}`;
 }
 
 export const conditionPairs = conditionPairsCollector();

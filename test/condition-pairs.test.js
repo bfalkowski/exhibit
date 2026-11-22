@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyChange } from '../src/classify.js';
-import { addRecorder, conditionPairsCollector, describeCase, readSeen, runTestFileProcess, untried } from '../src/condition-pairs.js';
+import { addRecorder, conditionPairsCollector, describeCase, describeConditionPairs, readSeen, runTestFileProcess, untried } from '../src/condition-pairs.js';
 import { checkExhibit } from '../src/exhibit-schema.js';
 import { parsePolicy } from '../src/policy.js';
 import { dropGitEnv, gitEnv } from './fixtures/git-env.js';
@@ -142,6 +142,35 @@ test('untried names a pair that went one way, but not a pair of two statements, 
   assert.deepEqual(untried(repeat, repeatSeen), []);
   assert.equal(describeCase(cases[0]), 'a.js:3 `after` is always true when `i < 0` is true. No test tries `after` false with `i < 0` true.');
   assert.equal(describeCase({ ...cases[0], first: { ...cases[0].first, line: 2 } }), 'a.js:3 `after` is always true when `i < 0` (line 2) is true. No test tries `after` false with `i < 0` true.');
+});
+
+test('a pair from the turn before in a loop does not count: the if in a do-while body runs before the test', async () => {
+  const code = `export function run(n) {
+  let k = 0, even = 0;
+  do { if (k % 2 === 0) even += 1; k = k * 2 + 1; } while (k < n);
+  return even;
+}
+`;
+  const { text, conditions } = addRecorder(code, 'src/run.js', [[3, 3]]);
+  assert.deepEqual(conditions.map((condition) => condition.code), ['k % 2 === 0', 'k < n']);
+  const out = join(mkdtempSync(join(tmpdir(), 'exhibit-pairs-loop-')), 'seen.jsonl');
+  const file = join(dirname(out), 'run.mjs');
+  writeFileSync(file, `${text}\nrun(5);\n`);
+  execFileSync(process.execPath, [file], { env: { PATH: process.env.PATH, EXHIBIT_PAIRS_OUT: out } });
+  const seen = readSeen(readFileSync(out, 'utf8'));
+  // k goes 0, 1, 3, 7: the if is true only on the first turn, before the loop test ran. So after
+  // `k < n` was true, the if was always false on the next turn. That pair mixes two turns, and it
+  // is not a case to try.
+  assert.ok(seen.has('src/run.js#2=true>src/run.js#1=false') && !seen.has('src/run.js#2=true>src/run.js#1=true'), JSON.stringify([...seen]));
+  assert.deepEqual(untried(conditions, seen), []);
+  rmSync(dirname(out), { recursive: true, force: true });
+});
+
+test('the summary line names the test files that failed twice, also when no case is left untried', () => {
+  const failed = [{ test: 'test/a.test.js', log: '.exhibit/condition-pairs/test-1-again.log' }];
+  const conditions = [{ id: 'a', file: 'a.js', line: 1, column: 1, code: 'x' }];
+  assert.equal(describeConditionPairs({ conditions, untried: [], failed, reason: 'A test file failed twice.' }), ' These test files failed twice, so a case may not be recorded: test/a.test.js.');
+  assert.equal(describeConditionPairs({ conditions, untried: [] }), ' No pair of the 1 changed conditions leaves a case that no test tries.');
 });
 
 test('readSeen joins the lines of many processes', () => {
