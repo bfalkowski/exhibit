@@ -130,6 +130,8 @@ test('a need that two kinds share gives each kind the whole catch, and a kind wi
   assert.match(markdown, /\| ops \| 1 \| 0 \| 1 \| 0, 0 \| does not pay \|/);
   assert.match(markdown, /\| tooling \| 0 \| 0 \| 1 \| 0, 0 \| does not pay\. No defect of the test set matched it, so it had no chance to catch one\. \|/);
   assert.match(markdown, /\| relay \| 1 \| 1 \| 1 \| 0, 1 \| +\|$/m);
+  // tooling has no introducing PR, so it has no size-matched set, and the note says why.
+  assert.match(markdown, /\| tooling \| 0 \| 1 of 1, 100% \([^)]*\) \| none \| No introducing PR in the test set, so no size-matched set\. Only the rate over all clean PRs is shown\. \|/);
 });
 
 test("a defect in a kind's own source does not count for that kind, but does for a kind that shares the need", () => {
@@ -154,6 +156,15 @@ kinds:
   const pays = Object.fromEntries(result.counts.kinds.filter((row) => row.pays).map((row) => [row.kind, row.pays]));
   assert.deepEqual([pays.relay.defects, pays.relay.caught], [0, 0]);
   assert.deepEqual([pays.docs.defects, pays.docs.caught], [1, 1]);
+
+  // relay leaks, so the trust ladder numbers come again without it. Then PR 19 is only docs.
+  const { markdown } = buildBacktestReport(result, { repo: 'acme/widgets' });
+  const ladder = markdown.slice(markdown.indexOf('## Numbers for the trust ladder'), markdown.indexOf('## Each defect'));
+  const [withAll, withoutLeaks] = ladder.split('Without the rules that leak:');
+  assert.match(withAll, /\| relay \| 1 \| 0 of 1 \| 0 \| 100% \|/);
+  assert.ok(withoutLeaks !== undefined, 'no ladder table without the rules that leak');
+  assert.doesNotMatch(withoutLeaks, /\| relay \|/);
+  assert.match(withoutLeaks, /\| docs \| 1 \| 0 of 1 \| 0 \| 100% \|/);
 });
 
 test('the trust ladder numbers: misses, skips and the upper bound of the miss rate (spec 9.10)', () => {

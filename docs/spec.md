@@ -58,6 +58,8 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 | Policy miss | An escaped defect whose introducing PR got `meets_policy`. A deferral is never a policy miss. |
 | Deferral | A defect that review saw and left for a later ticket. |
 | False demand | A requirement that was missing on a PR that turned out to be fine. |
+| Size-matched | The clean PRs whose changed lines are closest to those of the PRs that brought bugs: 3 for each such PR, in the same kind of change. Small PRs are easy to pass, so a false-demand rate on this set is fairer than one on all clean PRs (section 9.9, measure 1). |
+| Does not pay | The mark on a kind of change whose own requirements caught no defect in the backtest but made at least one false demand. A person reads it and decides whether to change or remove the kind (section 9.9, measure 4). |
 | Catch rate | Killed mutants divided by killed plus survived mutants, on the changed lines. Mutants marked as equivalent do not count. |
 | Equivalent mutant | A mutant that cannot change what the code does, so no test can kill it. A person marks one under `equivalent_mutants` in `evidence.yml` (section 9.5). |
 | Twin values | Two values in scope on a changed line that were equal each time the tests ran the line, though the line reads only one of them. No test can tell them apart there (section 9.5). |
