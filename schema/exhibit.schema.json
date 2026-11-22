@@ -67,7 +67,7 @@
         "additionalProperties": false,
         "required": ["type", "status", "how_to_fix"],
         "properties": {
-          "type": { "enum": ["tests-before-after", "failing-before", "mutation", "probe", "policy-change", "no-rule"] },
+          "type": { "enum": ["tests-before-after", "failing-before", "mutation", "probe", "policy-change", "no-rule", "tracker"] },
           "name": { "type": "string", "minLength": 1 },
           "status": { "enum": ["missing", "failed", "skipped", "error"] },
           "how_to_fix": { "type": "string", "minLength": 1 }

@@ -57,34 +57,37 @@ export function classifyFix(pr, signals, ticket = null) {
 // (spec 8.3). It counts only when it names the same issue that the PR names now. With `reuse`
 // true, as for a line the run keeps, a saved record answers, and the tracker is not asked. Else
 // the tracker is asked, and the saved record answers only when the tracker cannot.
-// Returns { classification, problem, ticket }. ticket is the record for the PR's line to save:
+// Returns { classification, problem, ticket, unanswered }. ticket is the record for the PR's line to save:
 // the new answer, the saved one, or null when there is none. problem is null, or a text that
 // says why the tracker could not answer for one request, such as a 503. Then the saved record
 // answers, or else the tracker signal does not match this PR, and the caller warns and goes on.
 // No token gives no problem: the history command says so in one note. An error that stops every
-// later request, such as a refused token, is thrown.
+// later request, such as a refused token, is thrown. unanswered is null, or { signal, key,
+// reason } when the tracker had to answer for the PR's key and could not, with no token or for
+// one request, and no saved answer stood in. Then the PR may be a fix that the signals do not
+// show, so exhibit check makes it a gap (spec 9.1).
 export async function classifyWithTracker(pr, signals, tracker, { saved, reuse = false } = {}) {
-  const none = { classification: classifyFix(pr, signals), problem: null, ticket: null };
+  const none = { classification: classifyFix(pr, signals), problem: null, ticket: null, unanswered: null };
   const at = signals.findIndex((signal) => signalType(signal) === 'tracker');
   if (!tracker || at === -1 || signals[at] !== `tracker:${tracker.name}`) return none;
   const key = ticketKey(pr);
   if (key === null) return none;
   const old = saved?.issue === `${tracker.name}:${key}` ? saved : null;
   const oldAnswer = old ? tracker.saved(old) : undefined;
-  const fromOld = () => ({ classification: classifyFix(pr, signals, ticketOf(tracker, oldAnswer)), ticket: old });
+  const fromOld = () => ({ classification: classifyFix(pr, signals, ticketOf(tracker, oldAnswer)), ticket: old, unanswered: null });
   // The signal before tracker:jira matched, so the tracker is not asked, and an old record stays.
   if (signals.slice(0, at).some((signal) => matches(pr, signal, null))) return { ...none, ticket: old };
   if (oldAnswer !== undefined && (reuse || !tracker.canAsk)) return { ...fromOld(), problem: null };
-  if (!tracker.canAsk) return none;
+  if (!tracker.canAsk) return { ...none, unanswered: { signal: signals[at], key, reason: `${tracker.tokenEnv} is not set.` } };
   let found;
   try {
     found = await tracker.ticket(key);
   } catch (error) {
     if (error.stopsRun !== false) throw error;
     if (oldAnswer !== undefined) return { ...fromOld(), problem: `the ${signals[at]} signal could not check ${key}, so the PR keeps the answer saved in the history file (${old.issue}). ${error.message}` };
-    return { ...none, problem: `the ${signals[at]} signal could not check ${key}, so it does not match. ${error.message}` };
+    return { ...none, problem: `the ${signals[at]} signal could not check ${key}, so it does not match. ${error.message}`, unanswered: { signal: signals[at], key, reason: error.message } };
   }
-  return { classification: classifyFix(pr, signals, ticketOf(tracker, found)), problem: null, ticket: tracker.record(key, found) };
+  return { classification: classifyFix(pr, signals, ticketOf(tracker, found)), problem: null, ticket: tracker.record(key, found), unanswered: null };
 }
 
 // The tracker's answer as classifyFix takes it, or null when the tracker does not know the issue.
