@@ -830,6 +830,23 @@ test('comments: without the file, a non-* row between a * row and the row that c
   assert.deepEqual(dropped(result), [['a.js', 2, 'comment'], ['a.js', 3, 'comment'], ['a.js', 4, 'comment']]);
 });
 
+test('comments: without the file, a row between a * row and the block end that the hunk adds back as code counts', () => {
+  // The fix takes the comment off "x = 2;": a line that the fix makes code again counts.
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * Old', 'x = 2;', ' */'], added: ['x = 2;'] }] }));
+  assert.deepEqual(counted(result), [['a.js', [6]]]);
+});
+
+test('comments: without the file, a row between a * row and the block end that the hunk does not add back is comment', () => {
+  // As with the file: "x = 2;" was inside the block, and the fix does not make it code again.
+  const deleted = [' * Old', 'x = 2;', ' */'];
+  const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted, added: ['x = 3;'] }] }));
+  assert.deepEqual(counted(result), []);
+  assert.deepEqual(dropped(result), [['a.js', 5, 'comment'], ['a.js', 6, 'comment'], ['a.js', 7, 'comment']]);
+  const before = '/*\n * Old\nx = 2;\n */\n';
+  const withFile = countedLines(diff({ path: 'a.js', hunks: [{ at: 2, deleted, added: ['x = 3;'] }] }), files({ 'a.js': before }, { 'a.js': 'x = 3;\n' }));
+  assert.deepEqual(counted(withFile), []);
+});
+
 test('comments: code rows after a * code row are not swept in when a later row opens a block first', () => {
   const result = countedLines(diff({ path: 'a.js', hunks: [{ at: 5, deleted: [' * qty;', 'total += 1;', '/* a', ' * b */'] }] }));
   assert.deepEqual(counted(result), [['a.js', [5, 6]]]);

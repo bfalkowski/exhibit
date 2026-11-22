@@ -496,8 +496,8 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
     if (!facts.has(id)) facts.set(id, files.has(path) ? lineFacts(files.get(path), path) : []);
     return facts.get(id);
   };
-  const side = (rows, path, lineFact) => {
-    const comments = markComments(rows.map((row) => row.text), path, rows.map((row) => lineFact[row.line]?.inBlock));
+  const side = (rows, path, lineFact, addedBack = []) => {
+    const comments = markComments(rows.map((row) => row.text), path, rows.map((row) => lineFact[row.line]?.inBlock), addedBack);
     return rows.map((row, i) => {
       const level = lineFact[row.line]?.level;
       const codeKey = squash(stripComments(row.text, path), path, level);
@@ -510,7 +510,7 @@ export function countedLines(diff, { before = new Map(), after = new Map() } = {
   }).map((row, place) => ({ ...row, place }));
   const deleted = hunks.flatMap((hunk, at) => {
     const rows = hunk.deleted.map((row) => ({ at, path: hunk.oldPath, ...row, reason: null, movedInFile: false }));
-    return side(rows, hunk.oldPath, factsOf('before', before, hunk.oldPath));
+    return side(rows, hunk.oldPath, factsOf('before', before, hunk.oldPath), hunk.added);
   });
   const index = indexByKey(added);
   const sameFile = (deletedAt, addedAt) => hunks[deletedAt].newPath !== null && hunks[deletedAt].newPath === hunks[addedAt].newPath;
@@ -1071,19 +1071,23 @@ function blockEnd(rest) {
 // "* @param". Code can start with "*" too, such as "* qty;" after a line that ends in "price".
 // When a later row closes the block, the rows between the "*" row and that row are inside the
 // block too, so they are comment, even when they do not start with "*", such as
-// "x = 1; // see /*" between " * Old words." and " */".
-function markComments(texts, path, starts = []) {
+// "x = 1; // see /*" between " * Old words." and " */". But a row between them that the same
+// hunk adds back, with at most whitespace changed, stays code: the fix may take the comment off
+// that line, and a line that the fix makes code again counts. `addedBack` holds the texts that
+// the hunk adds.
+function markComments(texts, path, starts = [], addedBack = []) {
   const style = commentStyle(path);
   if (style === 'hash') return texts.map((text) => text.trim().startsWith('#'));
   if (style !== 'slash') return texts.map(() => false);
   let inBlock = false;
   // The index of the row that closes a block from before the hunk. Rows before it are comment.
   let guessedEnd = -1;
+  const back = new Set(addedBack.map((text) => text.replace(/\s+/g, '')));
   return texts.map((text, i) => {
     let rest = text.trim();
     if (starts[i] !== undefined) inBlock = starts[i];
     if (!inBlock) {
-      if (starts[i] === undefined && i < guessedEnd) return true;
+      if (starts[i] === undefined && i < guessedEnd && !back.has(text.replace(/\s+/g, ''))) return true;
       if (rest.startsWith('//')) return true;
       if (starts[i] === undefined && /^\*(\s|\/|$)/.test(rest)) {
         const end = blockEnd(rest);
