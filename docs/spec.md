@@ -58,6 +58,8 @@ Exhibit decides what evidence a pull request needs, collects that evidence, chec
 | Policy miss | An escaped defect whose introducing PR got `meets_policy`. A deferral is never a policy miss. |
 | Deferral | A defect that review saw and left for a later ticket. |
 | False demand | A requirement that was missing on a PR that turned out to be fine. |
+| Size-matched | The clean PRs whose changed lines are closest to those of the PRs that brought bugs: 3 for each such PR, in the same kind of change. Small PRs are easy to pass, so a false-demand rate on this set is fairer than one on all clean PRs (section 9.9, measure 1). |
+| Does not pay | The mark on a kind of change whose own requirements caught no defect in the backtest but made at least one false demand. A person reads it and decides whether to change or remove the kind (section 9.9, measure 4). |
 | Catch rate | Killed mutants divided by killed plus survived mutants, on the changed lines. Mutants marked as equivalent do not count. |
 | Equivalent mutant | A mutant that cannot change what the code does, so no test can kill it. A person marks one under `equivalent_mutants` in `evidence.yml` (section 9.5). |
 | Twin values | Two values in scope on a changed line that were equal each time the tests ran the line, though the line reads only one of them. No test can tell them apart there (section 9.5). |
@@ -701,7 +703,7 @@ A probe runs its command in the head worktree with a time limit. Its status come
 - **The leak check.** A test-set defect is a defect that the counts use: labeled, no deferral, with a kept introducing PR in the test set. A kind or `default` whose `source` names one leaks. When one leaks, the counts and each replayed defect are also given without every rule that leaks: a kind that leaks is taken out, so its PRs fall to the other kinds they match, or to `default`, and a `default` that leaks keeps its risk but asks for nothing, so a PR that matches no kind does not get the `no-rule` gap.
 - **The funnel** covers all the history, not only the test set. Step 3 leaves out the defects not labeled yet, the defects whose every link was rejected, and the deferrals. Step 5 judges each kept introducing PR that is in the history, and a defect whose kept introducing PRs are all outside the history is lost there, with its own reason.
 - `--json` gives `from`, `test_set`, `deferrals`, `funnel`, `leaks`, `counts` (with `kinds` and `all`), `counts_without_leaks` (null with no leak), `replayed`, `evidence_from` (`exhibit`, `body` and `none`), `labels` (`read` or `none`) and `report`. Each share is `{ k, n, rate, low, high }`, or null when n is 0. With `--rerun`, `evidence_from` also has `rerun`, and the output also has `counts_before_rerun` (the counts as without `--rerun`) and `rerun` (below).
-- Measures 1 and 4 below, and the numbers in section 9.10, are not built yet.
+- **Measures 1 and 4, and the numbers of section 9.10 (ticket 352),** are in each row of `counts` and `counts_without_leaks`, and in the report under "False demands on size-matched clean PRs", "Rules that do not pay" and "Numbers for the trust ladder". The code is in `src/backtest.js` (`sizeMatched`, `paysOf` and `missUpper`). Each row has `size_matched` (`introducing`, the number of introducing PRs that picked, `prs`, the clean PRs in the set in the order they were taken, `false_demands`, a share or null, and `short`, true when the set holds every clean PR), `pays` (`defects`, `caught`, `false_demands`, `caught_unknown_only`, `false_demands_unknown_only` and `does_not_pay`, or null in the row for all PRs), `skipped` and `miss_upper` (a number from 0 to 1, or null with no defect). The introducing PRs of measure 1 are the PRs of the row's defect pairs, and its clean PRs are the row's clean PRs, so a PR whose commits are not in the clone is in neither. In measure 4, the defects that matched a kind are its defect pairs less the ones in its own `source`. `exhibit backtest` also prints both false-demand rates for each kind, and each kind marked "does not pay".
 
 The report also gives four measures. Each one comes from "How the Claude Code team thinks about verification" (section 17.2).
 
@@ -784,7 +786,7 @@ For each kind of change, Exhibit reports:
 - Skipped PRs: the PRs whose exhibit has a skip with `status` `recorded` (section 9.8), next to the policy misses. A kind of change with many skips is a kind whose policy asks for what its PRs cannot show, or one that builders skip too often. A person reads it before they turn a rung on.
 - The upper bound of the miss rate: 3/n when there are zero misses, and a Clopper-Pearson bound otherwise.
 - The false-demand rate over the size-matched set of clean PRs (section 9.9), with its n. Small PRs are easy to pass, so this is the rate that a rung uses. Next to it, the rate over all clean PRs, with its n. When a kind has no size-matched set, only the second rate is shown, and the report says why.
-- Results from the blind sample, when the person has recorded them.
+- Results from the blind sample, when the person has recorded them. Exhibit has no file for these results yet (ticket 423), so the backtest report says that it does not show them.
 
 Exhibit only reports these numbers. It never changes a rung.
 
@@ -999,7 +1001,7 @@ Each slice is one or more tickets. A slice is done when its checks pass in CI.
 | S5 | The GitHub Action, shadow mode, the data branch, the PR comment | It runs on every PR in Building58 and edd-platform in shadow mode. |
 | S6 | Mutation adapters | Stryker first, then mutmut. Only the changed lines are mutated. The budget and the interval work. The Stryker adapter is built (ticket 260), the mutmut adapter is built (ticket 261), and so is marking a mutant as equivalent (ticket 274). |
 | S7 | `trace` and policy misses | A fix merge records its policy misses on the data branch. |
-| S8 | `backtest` and the trust ladder numbers | The leak check works. The report gives counts and intervals for each kind of change. `exhibit backtest` is built with the counts, the leak check, measure 2 and the funnel (ticket 350). `--rerun` is built (ticket 351). Measures 1 and 4, and the numbers in section 9.10, are still to do. |
+| S8 | `backtest` and the trust ladder numbers | The leak check works. The report gives counts and intervals for each kind of change. `exhibit backtest` is built with the counts, the leak check, measure 2 and the funnel (ticket 350). `--rerun` is built (ticket 351). For each kind, the report gives the false-demand rate over the size-matched clean PRs next to the rate over all clean PRs, the funnel, and the "does not pay" mark, with the numbers of section 9.10 (ticket 352). |
 | S9 | The canary job, the field log, the stranger test | Then release version 1.0. |
 
 ## 14. What success looks like for version 1.0

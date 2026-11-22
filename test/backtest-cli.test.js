@@ -108,3 +108,20 @@ test('exhibit backtest exits 2 with a plain message for a bad --from, a bad --bu
   const budget = exhibit(cwd, ['backtest', '--rerun', '--budget', 'soon']);
   assert.equal(budget.stderr, 'exhibit: --budget must be a whole number of minutes, 1 or more, not "soon".\n');
 });
+
+test('exhibit backtest prints both false-demand rates for each kind, and the kinds that do not pay (ticket 352)', (t) => {
+  const cwd = newFolder(t);
+  assert.equal(exhibit(cwd, ['history', '--repo', 'acme/widgets']).status, 0);
+  // No body runs this probe, and no defect is labeled. So every clean PR is a false demand of
+  // default, and default catches nothing.
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\ndefault:\n  risk: medium\n  needs:\n    - probe: { name: never, run: "never-run-this" }\n');
+  const run = exhibit(cwd, ['backtest']);
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /\n {2}default: \d+ PRs?\. Caught none\. Missed none\. False demands (\d+) of \1, 100% \([^)]*\), size-matched none, no introducing PR\.\n/);
+  assert.match(run.stdout, /\nDoes not pay: default \(0 caught, \d+ false demands?, 0 matching defects\)\.\n/);
+
+  writeFileSync(join(cwd, 'evidence.yml'), 'version: 3\ndefault:\n  risk: medium\n  needs: []\n');
+  const none = exhibit(cwd, ['backtest']);
+  assert.equal(none.status, 0, none.stderr);
+  assert.match(none.stdout, /\nNo kind is marked "does not pay"\.\n/);
+});

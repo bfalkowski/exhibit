@@ -70,8 +70,13 @@ export async function backtestCommand(argv, { cwd, env = process.env, stdout, st
   if (result.leaks.length > 0) out.push(`Rules that leak: ${result.leaks.map((leak) => `${leak.rule} (${leak.defects.join(', ')})`).join(', ')}. The report gives the counts with and without them.`);
   out.push('For each kind of change:');
   for (const row of [...result.counts.kinds, { ...result.counts.all, kind: 'all PRs' }]) {
-    out.push(`  ${row.kind}: ${row.prs} ${row.prs === 1 ? 'PR' : 'PRs'}. Caught ${shareText(row.caught)}. Missed ${shareText(row.missed)}. False demands ${shareText(row.false_demands)}.`);
+    const matched = row.size_matched.introducing === 0 ? 'none, no introducing PR' : shareText(row.size_matched.false_demands);
+    out.push(`  ${row.kind}: ${row.prs} ${row.prs === 1 ? 'PR' : 'PRs'}. Caught ${shareText(row.caught)}. Missed ${shareText(row.missed)}. False demands ${shareText(row.false_demands)}, size-matched ${matched}.`);
   }
+  const unpaid = result.counts.kinds.filter((row) => row.pays?.does_not_pay);
+  out.push(unpaid.length === 0
+    ? 'No kind is marked "does not pay".'
+    : `Does not pay: ${unpaid.map((row) => `${row.kind} (0 caught, ${row.pays.false_demands} false ${row.pays.false_demands === 1 ? 'demand' : 'demands'}, ${row.pays.defects} matching ${row.pays.defects === 1 ? 'defect' : 'defects'})`).join(', ')}.`);
   if (options.rerun) {
     const all = before.counts.all;
     out.push(`  all PRs before the rerun: Caught ${shareText(all.caught)}. Missed ${shareText(all.missed)}. False demands ${shareText(all.false_demands)}.`);
