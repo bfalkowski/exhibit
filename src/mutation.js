@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { matchesGlob } from './classify.js';
+import { lostErrorPaths } from './error-paths.js';
 import { isTestPath } from './failing-before.js';
 import { clopperPearson } from './interval.js';
 import { DEFAULT_MUTATION_PYTHON, MUTMUT_VERSION, PYTHON_FILE, pythonProjects, runMutmutProcess } from './mutmut.js';
@@ -42,16 +43,61 @@ const COUNTED = { Killed: 'killed', Timeout: 'timeout', Survived: 'survived', No
 // survived ones.
 //
 // One run serves every mutation requirement of a check, because only `min` differs between them.
+//
+// A change that takes a call out of a `try` with a `catch` makes no mutant for the lost error path,
+// so Exhibit looks for such calls apart from Stryker (src/error-paths.js). When it finds one, a
+// requirement that would be met is missing: a person must read the call.
 export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = runMutmutProcess } = {}) {
   const runs = new WeakMap();
+  const lost = new WeakMap();
   return async (requirement, context) => {
     if (!runs.has(context)) runs.set(context, mutationRun(context, { runStryker, runMutmut }));
+    if (!lost.has(context)) lost.set(context, lostInChange(context));
     const runResult = await runs.get(context);
-    const result = judge(runResult, requirement.params.min, context.equivalentMutants ?? []);
+    const judged = judge(runResult, requirement.params.min, context.equivalentMutants ?? []);
+    const result = withLostErrorPaths(judged, await lost.get(context));
     // A test that failed in the coverage run of Exhibit's first Stryker run, and passed in the
     // coverage run of the second, is flaky (spec 9.3 and 9.5).
     return passedInSecondCoverageRun(result.details) ? { ...result, flaky_tests: runResult.failedInFirstRun.map((failure) => failure.test) } : result;
   };
+}
+
+// True for a path that Exhibit never mutates: a test file (spec 9.4), or one that
+// settings.mutation_test_files matches.
+function testFileMatcher(settings) {
+  const testGlobs = settings.mutation_test_files ?? [];
+  return (path) => isTestPath(path) || testGlobs.some((glob) => matchesGlob(path, glob));
+}
+
+// The lost error paths of the change (spec 9.5): for each JavaScript or TypeScript file outside the
+// tests that is on both the merge base and the head, the calls that a try with a catch covered on
+// the merge base and that no try covers on the head. It reads the files from git, not from
+// changedLines, so a change that only deletes the try and catch lines is read too.
+async function lostInChange({ cwd, base, head, settings }) {
+  const isTest = testFileMatcher(settings);
+  const mergeBase = (await gitText(cwd, ['merge-base', base, head])).trim();
+  const status = await gitText(cwd, ['diff', '--name-status', '--no-renames', '--no-color', '--no-ext-diff', '-z', mergeBase, head]);
+  const fields = status.split('\0');
+  const lost = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [kind, path] = [fields[i], fields[i + 1]];
+    if (kind !== 'M' || !STRYKER_FILE.test(path) || isTest(path)) continue;
+    const [before, after] = await Promise.all([gitText(cwd, ['show', `${mergeBase}:${path}`]), gitText(cwd, ['show', `${head}:${path}`])]);
+    lost.push(...lostErrorPaths(path, before, after));
+  }
+  return lost;
+}
+
+// Adds the lost error paths to a requirement's result. A result that would be met is missing,
+// because no mutant can stand for a removed catch, so a person must read each call. A result that
+// already has a gap keeps its status, and its how_to_fix names the calls too.
+export function withLostErrorPaths(result, lost) {
+  if (lost.length === 0) return result;
+  const named = lost.map((path) => `${path.file}:${path.line} (\`${path.call}\` in ${path.function})`).join('; ');
+  const help = `On the base a try with a catch covered these calls, and on the head no try covers them: ${named}. When such a call throws, the head may now throw where the base gave a handled result, and no mutant can show it, because the catch is code that the change removed. Add a test that makes each call throw and checks what the code does then, and ask a person to read the change: the catch may have moved to a caller on purpose.`;
+  const details = { ...result.details, lost_error_paths: lost };
+  if (result.status === 'met') return { ...result, status: 'missing', details, how_to_fix: help };
+  return { ...result, details, how_to_fix: result.how_to_fix ? `${result.how_to_fix} ${help}` : help };
 }
 
 // Does the run for one check, and gives back either `{ fixed }`, a result that does not depend on
@@ -71,7 +117,7 @@ export function mutationCollector({ runStryker = runStrykerProcess, runMutmut = 
 // 5. The mutants of both count together.
 async function mutationRun({ cwd, base, head, settings, env }, { runStryker, runMutmut }) {
   const testGlobs = settings.mutation_test_files ?? [];
-  const isTest = (path) => isTestPath(path) || testGlobs.some((glob) => matchesGlob(path, glob));
+  const isTest = testFileMatcher(settings);
   const mutated = [];
   const noAdapter = [];
   for (const [path, ranges] of await changedLines(cwd, base, head)) {
@@ -511,7 +557,10 @@ async function isFile(path) {
 // mutants it finished. Gives back { mutants, complete, timedOut, code, signal, failedInFirstRun }.
 // `complete` is true when Stryker exited 0 and wrote its done line. `failedInFirstRun` lists the
 // tests that failed in Stryker's coverage run, from its log.
-export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, seed, logFile, env }) {
+//
+// `concurrency` is how many test processes Stryker runs at once. It is half the cores unless a
+// caller sets it. A test that needs the test processes to start in Stryker's order sets it to 1.
+export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds, seed, logFile, env, concurrency = '50%' }) {
   const dir = await mkdtemp(join(tmpdir(), 'exhibit-stryker-'));
   try {
     const resultsFile = join(dir, 'mutants.jsonl');
@@ -536,7 +585,7 @@ export async function runStrykerProcess({ root, mutate, testFiles, budgetSeconds
       // on each core but one) made mutants that change nothing time out. Half the cores, and 2.5
       // times the normal time plus 15 seconds, leave room for a busy machine. A real endless
       // loop still ends as a timeout, only later.
-      concurrency: '50%',
+      concurrency,
       timeoutFactor: 2.5,
       timeoutMS: 15000,
       fileLogLevel: 'off',
@@ -626,6 +675,12 @@ async function gitLines(cwd, args) {
 // interval, and each surviving mutant with its file, line and change. Mutants that no test reached
 // are listed apart.
 export function describeMutation(details) {
+  const lost = details.lost_error_paths ?? [];
+  const lostLines = lost.length === 0 ? [] : ['  - Calls that a try with a catch covered on the base, and no try covers on the head:', ...lost.map((path) => `    - ${path.file}:${path.line} in ${path.function}: \`${path.call}\``)];
+  return [describeCounts(details), ...lostLines].join('\n');
+}
+
+function describeCounts(details) {
   if (typeof details.reason === 'string' && details.n === undefined) return ` ${details.reason}`;
   if (details.n === undefined) return '';
   const parts = [];

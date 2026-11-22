@@ -97,7 +97,7 @@ ${extra}default:
 
 // A repo with the old code on main (tag start), and one branch for each head. Each branch makes
 // the fix and adds a test. Dates and names are fixed, so the SHAs are the same each time.
-function buildRepo(t, { policyText = policy(), heads }) {
+function buildRepo(t, { policyText = policy(), heads, startFiles = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'exhibit-mutation-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const home = join(dir, 'home');
@@ -121,7 +121,7 @@ function buildRepo(t, { policyText = policy(), heads }) {
     git('commit', '-q', '-m', message);
   };
   git('init', '-q', '-b', 'main');
-  commit({ 'evidence.yml': policyText, 'package.json': '{ "type": "module", "private": true }\n', 'src/inside.js': OLD_CODE, 'src/twice.js': OLD_CODE, 'README.md': 'hi\n' }, 'start');
+  commit({ 'evidence.yml': policyText, 'package.json': '{ "type": "module", "private": true }\n', 'src/inside.js': OLD_CODE, 'src/twice.js': OLD_CODE, 'README.md': 'hi\n', ...startFiles }, 'start');
   git('tag', 'start');
   for (const [name, files] of Object.entries(heads)) {
     git('checkout', '-q', '-b', name, 'start');
@@ -282,7 +282,9 @@ const eightLines = (name) => Array.from({ length: 8 }, (_, i) => `export const $
 // in the folder RUN_DIR. Its first run is Stryker's coverage run. After that run and LIMIT more, it
 // waits far past the budget, so only the next LIMIT mutants are killed, the same ones each time.
 // The mutants whose test file waits can time out near the end of the budget, and count too. With
-// the order of the code, the killed ones would all come from src/a.js.
+// the order of the code, the killed ones would all come from src/a.js. Stryker runs one test
+// process at a time here: with several at once, a busy machine can start them out of order, so
+// another mutant takes one of the first LIMIT numbers, and the killed ones differ between runs.
 const CUT_SHORT_TEST = `import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
@@ -307,7 +309,7 @@ test('a partial run tests mutants from every changed file, in an order that the 
   execFileSync('git', ['checkout', '-q', 'both'], { cwd: fixture.repo, env: gitEnv(fixture.home) });
   const sample = async (seed) => {
     const runs = mkdtempSync(join(fixture.home, 'runs-'));
-    const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }) });
+    const outcome = await runStrykerProcess({ root: fixture.repo, mutate: ['src/a.js:1-8', 'src/b.js:1-8'], testFiles: ['test/both.test.js'], budgetSeconds: 20, seed, logFile: join(runs, 'output.log'), env: gitEnv(fixture.home, { RUN_DIR: runs, LIMIT: '6' }), concurrency: 1 });
     assert.equal(outcome.complete, false, JSON.stringify(outcome));
     // Only the killed mutants are the same each time. The waiting test files time out about when
     // the budget runs out, so the timeouts in the sample depend on the speed of the machine.
@@ -427,8 +429,8 @@ test('summary.md lists the marked mutants apart, with the reason', () => {
 });
 
 // A repo for the collector with a stand-in for Stryker. Gives the context buildExhibit makes.
-function collectorRepo(t, headFiles, settings = { mutation_test_files: ['test/*.test.js'] }) {
-  const fixture = buildRepo(t, { heads: { change: headFiles } });
+function collectorRepo(t, headFiles, settings = { mutation_test_files: ['test/*.test.js'] }, startFiles = {}) {
+  const fixture = buildRepo(t, { heads: { change: headFiles }, startFiles });
   const sha = (ref) => execFileSync('git', ['rev-parse', ref], { cwd: fixture.repo, encoding: 'utf8', env: gitEnv(fixture.home) }).trim();
   return { cwd: fixture.repo, base: sha('start'), head: sha('change'), settings, env: gitEnv(fixture.home) };
 }
@@ -666,4 +668,57 @@ test('a run is complete when the done line is there and Stryker exited 0, or the
 
 test('a status that Exhibit does not know throws, so an upgrade cannot count mutants wrong', () => {
   assert.throws(() => judge(ran(mutants('Exploded', 1), true), 0.5), /status "Exploded"/);
+});
+
+// Canary 3 of ticket 258 (docs/field/canaries.md), made small. The change moves `git rev-list` out
+// of the try, so a checkout with no commits throws where it gave a message. Every mutant on the
+// changed lines is killed, so the catch rate alone would meet the policy.
+const HOLD_BASE = `export function unsavedWork(git) {
+  try {
+    if (git('status')) return 'uncommitted changes';
+    const n = Number(git('rev-list'));
+    return n ? n + ' not pushed' : null;
+  } catch (e) { return 'git could not say'; }
+}
+`;
+const HOLD_HEAD = `export function unsavedWork(git) {
+  let status;
+  try { status = git('status'); } catch (e) { return 'git status failed'; }
+  if (status) return 'uncommitted changes';
+  const n = Number(git('rev-list'));
+  return n ? n + ' not pushed' : null;
+}
+`;
+
+test('a change that takes a call out of a try with a catch needs a person, though every mutant is killed', async (t) => {
+  const killAll = mutationCollector({
+    runStryker: async ({ root }) => ({ mutants: [{ fileName: join(root, 'src/hold.js'), location: { start: { line: 3, column: 9 }, end: { line: 3, column: 22 } }, mutatorName: 'BlockStatement', replacement: '{}', status: 'Killed' }], complete: true, timedOut: false })
+  });
+  const context = collectorRepo(t, { 'src/hold.js': HOLD_HEAD, 'test/hold.test.js': WEAK_TEST }, undefined, { 'src/hold.js': HOLD_BASE });
+  const result = await killAll({ params: { min: 0.8 } }, context);
+  assert.equal(result.status, 'missing');
+  assert.equal(result.details.catch_rate, 1);
+  assert.deepEqual(result.details.lost_error_paths, [{ file: 'src/hold.js', line: 5, function: 'unsavedWork', call: "Number(git('rev-list'))" }]);
+  assert.match(result.how_to_fix, /src\/hold\.js:5/);
+  assert.match(result.how_to_fix, /throw/);
+  const words = describeMutation(result.details);
+  assert.match(words, / {2}- Calls that a try with a catch covered on the base, and no try covers on the head:\n {4}- src\/hold\.js:5 in unsavedWork: `Number\(git\('rev-list'\)\)`/);
+
+  // A change that only deletes the try and catch lines has no changed line to mutate, and is still
+  // named.
+  const flat = 'export function f(g) {\ntry {\nreturn g();\n} catch { return 0; }\n}\n';
+  const removed = collectorRepo(t, { 'src/flat.js': 'export function f(g) {\nreturn g();\n}\n' }, undefined, { 'src/flat.js': flat });
+  const never = mutationCollector({ runStryker: async () => assert.fail('Stryker should not run') });
+  const onlyRemoved = await never({ params: { min: 0.8 } }, removed);
+  assert.equal(onlyRemoved.status, 'missing');
+  assert.deepEqual(onlyRemoved.details.lost_error_paths, [{ file: 'src/flat.js', line: 2, function: 'f', call: 'g()' }]);
+  assert.match(describeMutation(onlyRemoved.details), /nothing to mutate\.\n {2}- Calls that a try/);
+
+  // A test file is never read, and a requirement that already has a gap keeps its status.
+  const inTests = collectorRepo(t, { 'test/flat.test.js': 'export function f(g) {\nreturn g();\n}\n' }, undefined, { 'test/flat.test.js': flat });
+  assert.equal((await never({ params: { min: 0.8 } }, inTests)).status, 'met');
+  const noGlobs = collectorRepo(t, { 'src/flat.js': 'export function f(g) {\n  return g();\n}\n' }, {}, { 'src/flat.js': flat });
+  const stillMissing = await never({ params: { min: 0.8 } }, noGlobs);
+  assert.equal(stillMissing.status, 'missing');
+  assert.match(stillMissing.how_to_fix, /mutation_test_files[\s\S]*src\/flat\.js:2/);
 });
