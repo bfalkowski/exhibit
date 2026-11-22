@@ -41,7 +41,7 @@ export function backtest({ lines, labels, policy, exhibits = new Map(), from = n
 
   const run = (rules) => {
     const verdicts = new Map(lines.map((line) => [line.number, judge(line, rules, exhibits.get(line.number) ?? null, reruns?.get(line.number) ?? null)]));
-    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories, noCommits) };
+    return { verdicts, counts: countByKind(testSet, verdicts, roles, rules, categories, noCommits, exhibits) };
   };
   const withAll = run(policy);
   const withoutLeaks = without === null ? null : run(without);
@@ -233,8 +233,14 @@ function isStrong(verdict, defect, rules, categories) {
  * - unknown_only: needs_person verdicts that rest only on unknown requirements.
  * - no_commits: PRs that --rerun could not run, because a commit is not in the clone. They are
  *   in no rate: not in defects, and not in clean.
+ * - size_matched: false demands on the clean PRs whose size is close to the introducing PRs'
+ *   (measure 1, sizeMatched below).
+ * - pays: caught and false demands from this kind's own requirements (measure 4, paysOf below),
+ *   or null in the row for all PRs.
+ * - skipped: PRs whose exhibit has a skip with status recorded (spec 9.10).
+ * - miss_upper: the upper bound of the miss rate (spec 9.10), or null with no defect.
  */
-function countByKind(testSet, verdicts, roles, rules, categories, noCommits = new Set()) {
+function countByKind(testSet, verdicts, roles, rules, categories, noCommits = new Set(), exhibits = new Map()) {
   const pairs = [];
   for (const defect of roles.defects) {
     for (const pr of defect.introducing_prs) if (!noCommits.has(pr) && testSet.some((line) => line.number === pr)) pairs.push({ defect, pr });
@@ -246,19 +252,25 @@ function countByKind(testSet, verdicts, roles, rules, categories, noCommits = ne
     const strong = caught.filter((pair) => isStrong(verdicts.get(pair.pr), pair.defect, rules, categories));
     const clean = prs.filter((line) => roles.roleOf(line.number) === 'clean' && !noCommits.has(line.number));
     const demands = clean.filter((line) => verdicts.get(line.number).verdict === 'needs_person');
+    const missed = mine.length - caught.length;
+    const introducing = testSet.filter((line) => mine.some((pair) => pair.pr === line.number));
     return {
       kind,
       prs: prs.length,
       defects: mine.length,
       caught: share(caught.length, mine.length),
       strong: share(strong.length, mine.length),
-      missed: share(mine.length - caught.length, mine.length),
+      missed: share(missed, mine.length),
       clean: clean.length,
       false_demands: share(demands.length, clean.length),
       unlabeled: prs.filter((line) => roles.roleOf(line.number) === 'unlabeled').length,
       deferral_prs: prs.filter((line) => roles.roleOf(line.number) === 'deferral').length,
       unknown_only: prs.filter((line) => verdicts.get(line.number).unknown_only).length,
-      no_commits: prs.filter((line) => noCommits.has(line.number)).length
+      no_commits: prs.filter((line) => noCommits.has(line.number)).length,
+      size_matched: sizeMatched(introducing, clean, verdicts),
+      pays: kind === 'all' ? null : paysOf(kind, mine, clean, verdicts, rules),
+      skipped: prs.filter((line) => exhibits.get(line.number)?.skip?.status === 'recorded').length,
+      miss_upper: missUpper(missed, mine.length)
     };
   };
   const kinds = [...new Set(testSet.flatMap((line) => verdicts.get(line.number).kinds))].sort((a, b) => (a === DEFAULT_KIND) - (b === DEFAULT_KIND) || a.localeCompare(b));
@@ -266,6 +278,87 @@ function countByKind(testSet, verdicts, roles, rules, categories, noCommits = ne
     kinds: kinds.map((kind) => row(kind, (pr) => verdicts.get(pr).kinds.includes(kind))),
     all: row('all', () => true)
   };
+}
+
+// The clean PRs that each introducing PR picks for the size-matched set (spec 9.9, measure 1).
+export const MATCHES_PER_INTRODUCING_PR = 3;
+
+// A PR's size: its changed lines, the sum of additions and deletions over its files.
+export function prSize(line) {
+  return line.files.reduce((sum, file) => sum + (file.additions ?? 0) + (file.deletions ?? 0), 0);
+}
+
+/**
+ * Measure 1 (spec 9.9): false demands on the clean PRs whose size is close to the size of the
+ * introducing PRs. Small PRs are easy to pass, and most clean PRs are small, so the rate over all
+ * clean PRs looks better than it is. Each introducing PR, lowest number first, takes the 3 clean
+ * PRs closest in size that no PR took before it. On a tie it takes the PR with fewer changed
+ * files, then the one merged nearer in time to it, then the lower number. Returns:
+ * - introducing: how many introducing PRs picked.
+ * - prs: the numbers of the clean PRs in the set, in the order they were taken.
+ * - false_demands: the share of the set that would have been needs_person, or null with no set.
+ * - short: true when there were fewer than 3 clean PRs for each introducing PR, so the set holds
+ *   every clean PR.
+ */
+export function sizeMatched(introducing, clean, verdicts) {
+  const left = [...clean];
+  const taken = [];
+  for (const pr of [...introducing].sort(byNumber)) {
+    const size = prSize(pr);
+    const time = Date.parse(pr.merged_at);
+    const key = (line) => [Math.abs(prSize(line) - size), line.files.length, Math.abs(Date.parse(line.merged_at) - time), line.number];
+    left.sort((a, b) => compareKeys(key(a), key(b)));
+    taken.push(...left.splice(0, MATCHES_PER_INTRODUCING_PR));
+  }
+  const demands = taken.filter((line) => verdicts.get(line.number).verdict === 'needs_person').length;
+  return {
+    introducing: introducing.length,
+    prs: taken.map((line) => line.number),
+    false_demands: share(demands, taken.length),
+    short: introducing.length > 0 && clean.length < MATCHES_PER_INTRODUCING_PR * introducing.length
+  };
+}
+
+function compareKeys(a, b) {
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+/**
+ * Measure 4 (spec 9.9): does this kind's own needs ever stop a bug? A requirement is this kind's
+ * when its `kinds` names the kind, so a need that two kinds share gives each kind the whole count
+ * (ticket 267). Not met is missing or unknown, as for the verdict. Returns:
+ * - defects: the defect pairs of this kind, less the defects in the kind's own source (a leak).
+ * - caught: those pairs where a requirement of this kind was not met.
+ * - false_demands: the clean PRs of this kind where a requirement of this kind was not met.
+ * - caught_unknown_only, false_demands_unknown_only: how many of each rest only on unknown
+ *   requirements of this kind.
+ * - does_not_pay: 0 caught and at least 1 false demand.
+ */
+function paysOf(kind, pairs, clean, verdicts, rules) {
+  const body = kind === DEFAULT_KIND ? rules.default : rules.kinds[kind];
+  const source = new Set(body?.source ?? []);
+  const notMet = (pr) => verdicts.get(pr).requirements.filter((requirement) => requirement.kinds.includes(kind) && requirement.status !== 'met');
+  const onlyUnknown = (pr) => notMet(pr).every((requirement) => requirement.status === 'unknown');
+  const defects = pairs.filter((pair) => !source.has(pair.defect.id));
+  const caught = defects.filter((pair) => notMet(pair.pr).length > 0);
+  const demands = clean.filter((line) => notMet(line.number).length > 0);
+  return {
+    defects: defects.length,
+    caught: caught.length,
+    false_demands: demands.length,
+    caught_unknown_only: caught.filter((pair) => onlyUnknown(pair.pr)).length,
+    false_demands_unknown_only: demands.filter((line) => onlyUnknown(line.number)).length,
+    does_not_pay: caught.length === 0 && demands.length > 0
+  };
+}
+
+// The upper bound of the miss rate (spec 9.10): 3/n when there are no misses (the rule of three,
+// at most 1), and the high end of the Clopper-Pearson interval otherwise. Null when n is 0.
+export function missUpper(misses, n) {
+  if (n === 0) return null;
+  if (misses === 0) return Math.min(1, 3 / n);
+  return clopperPearson(misses, n).high;
 }
 
 // k of n with its 95% interval (src/interval.js), or null when n is 0.

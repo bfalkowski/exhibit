@@ -1,6 +1,7 @@
 // Builds the backtest report (spec 8.5 and 9.9) from what src/backtest.js returns. The first
 // screen shows the funnel. src/report.js renders the blocks, so backtest.md and backtest.html hold
 // the same facts.
+import { MATCHES_PER_INTRODUCING_PR } from './backtest.js';
 import { heading, item, list, paragraph, renderReport, table } from './report.js';
 
 /**
@@ -31,6 +32,9 @@ export function buildBacktestReport(result, { repo, fromText = null }) {
   if (result.deferrals.length > 0) {
     blocks.push(paragraph(`${plural(result.deferrals.length, 'deferral')} left out: ${result.deferrals.join(', ')}. Review saw each one and left it for a later ticket, so it is never a policy miss, and its introducing PR is not a clean PR either.`));
   }
+  blocks.push(...sizeMatchedBlocks(result.counts));
+  blocks.push(...paysBlocks(result.counts));
+  blocks.push(...ladderBlocks(result));
   blocks.push(...replayBlocks(result));
   if (result.rerun) blocks.push(...rerunBlocks(result));
   blocks.push(...basisBlocks(result.prs, result.rerun !== undefined));
@@ -100,6 +104,71 @@ function countsTable(counts) {
 export function shareText(share) {
   if (share === null) return 'none';
   return `${share.k} of ${share.n}, ${percent(share.rate)} (${percent(share.low)} to ${percent(share.high)})`;
+}
+
+// Measure 1 (spec 9.9): false demands over all clean PRs, and over the size-matched set.
+function sizeMatchedBlocks(counts) {
+  const rows = [...counts.kinds, { ...counts.all, kind: 'all PRs' }];
+  return [
+    heading(2, 'False demands on size-matched clean PRs'),
+    paragraph(
+      'Small PRs are easy to pass, and most clean PRs are small, so a false-demand rate over all clean PRs looks better than it is. ' +
+      `So for each introducing PR of a kind, lowest number first, Exhibit takes the ${MATCHES_PER_INTRODUCING_PR} clean PRs of that kind whose changed lines are closest, each clean PR at most once. ` +
+      'A tie goes to the PR with fewer changed files, then the one merged nearer in time, then the lower number.'
+    ),
+    table(['Kind', 'Introducing PRs', 'False demands, all clean PRs', 'False demands, size-matched', 'Note'],
+      rows.map((row) => [row.kind, String(row.size_matched.introducing), shareText(row.false_demands), shareText(row.size_matched.false_demands), sizeMatchedNote(row.size_matched)]))
+  ];
+}
+
+function sizeMatchedNote(matched) {
+  if (matched.introducing === 0) return 'No introducing PR in the test set, so no size-matched set. Only the rate over all clean PRs is shown.';
+  if (matched.short) return `Fewer than ${MATCHES_PER_INTRODUCING_PR} clean PRs for each introducing PR, so the set holds every clean PR.`;
+  return '';
+}
+
+// Measure 4 (spec 9.9): for each kind and default, the catches and the false demands that come
+// from its own requirements. A need that two kinds share counts whole for each of them.
+function paysBlocks(counts) {
+  const rows = counts.kinds.filter((row) => row.pays);
+  const blocks = [heading(2, 'Rules that do not pay')];
+  blocks.push(paragraph(
+    "For each kind, caught counts the defects of the kind that a requirement of this kind did not meet, and false demands counts the clean PRs of the kind that a requirement of this kind did not meet. " +
+    "A requirement that two kinds share counts whole for each of them. A defect in the kind's own source is a leak, so it is not counted. " +
+    'Not met is missing or unknown. A kind with 0 caught and at least 1 false demand does not pay. Exhibit never removes or changes a rule: a person reads the mark and decides.'
+  ));
+  blocks.push(table(['Kind', 'Defects of the kind', 'Caught', 'False demands', 'Only unknown (caught, false demands)', 'Mark'],
+    rows.map((row) => [row.kind, String(row.pays.defects), String(row.pays.caught), String(row.pays.false_demands), `${row.pays.caught_unknown_only}, ${row.pays.false_demands_unknown_only}`, paysMark(row.pays)])));
+  return blocks;
+}
+
+function paysMark(pays) {
+  if (pays.does_not_pay) return pays.defects === 0 ? 'does not pay. No defect of the test set matched it, so it had no chance to catch one.' : 'does not pay';
+  if (pays.defects === 0) return 'No defect of the test set matched it, so it had no chance to catch one.';
+  return '';
+}
+
+// The numbers for the trust ladder (spec 9.10). Exhibit only reports them. It never changes a rung.
+function ladderBlocks(result) {
+  const blocks = [heading(2, 'Numbers for the trust ladder')];
+  blocks.push(paragraph(
+    'For each kind of change: its PRs, its policy misses (a deferral is never one), the PRs whose exhibit has a recorded skip, the upper bound of the miss rate (3/n with no miss, the Clopper-Pearson bound otherwise), ' +
+    'and the false-demand rate over the size-matched clean PRs, which is the rate a rung uses, with the rate over all clean PRs next to it. Exhibit only reports these numbers. It never changes a rung. ' +
+    'Exhibit has no record of blind sample results yet, so they are not shown.'
+  ));
+  blocks.push(ladderTable(result.counts));
+  if (result.counts_without_leaks) {
+    blocks.push(paragraph('Without the rules that leak:'));
+    blocks.push(ladderTable(result.counts_without_leaks));
+  }
+  return blocks;
+}
+
+function ladderTable(counts) {
+  const rows = [...counts.kinds, { ...counts.all, kind: 'all PRs' }];
+  return table(['Kind', 'PRs', 'Policy misses', 'Skipped PRs', 'Miss rate at most', 'False demands, size-matched', 'False demands, all clean PRs'],
+    rows.map((row) => [row.kind, String(row.prs), row.missed === null ? 'none' : `${row.missed.k} of ${row.missed.n}`, String(row.skipped), row.miss_upper === null ? 'none' : percent(row.miss_upper),
+      row.size_matched.introducing === 0 ? 'no set: no introducing PR' : shareText(row.size_matched.false_demands), shareText(row.false_demands)]));
 }
 
 function replayBlocks(result) {
