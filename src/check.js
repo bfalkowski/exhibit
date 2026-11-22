@@ -143,7 +143,7 @@ export async function buildExhibit(change, { collectors = COLLECTORS, runTests =
     gaps.push({
       type: 'tracker',
       status: 'missing',
-      how_to_fix: `${unanswered.tracker} could not say whether ${unanswered.key} is a bug, so Exhibit cannot tell whether this PR is a fix, and the failing-before for fixes did not run. ${unanswered.reason} Fix the cause, such as a missing token, and run exhibit check again, or ask a person to check whether the PR fixes a bug and, if it does, that a test in it fails before the change.`
+      how_to_fix: `${unanswered.tracker} could not say whether ${unanswered.key} is a bug, so Exhibit cannot tell whether this PR is a fix, and the failing-before for fixes did not run. ${unanswered.reason} Fix the cause named above, and run exhibit check again, or ask a person to check whether the PR fixes a bug and, if it does, that a test in it fails before the change.`
     });
   }
 
