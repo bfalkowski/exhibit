@@ -760,6 +760,8 @@ test('check --pr with a 503 or a 400 from Jira for the PR\'s issue says so in su
   assert.equal(code, 1);
   assert.deepEqual(evidence.gaps.map((gap) => gap.type), ['tracker']);
   assert.match(evidence.gaps[0].how_to_fix, /Jira could not say whether PAY-503 is a bug.* Jira answered 503 /);
+  assert.match(evidence.gaps[0].how_to_fix, /Fix the cause named above, and run exhibit check again/);
+  assert.doesNotMatch(evidence.gaps[0].how_to_fix, /such as a missing token/);
   assert.deepEqual(checkExhibit(evidence), []);
 
   const bad = await checkWithJira(t, { title: 'PAY-482: Change the app', env: { JIRA_API_TOKEN: 'secret-jira-token' }, jiraStatus: 400 });
