@@ -64,6 +64,11 @@ function writeLine(w) {
   assert.deepEqual(keepTwins([{ used: 'ms', twins: ['w.inMs'], values: [900, 5] }], inWrite), []);
   assert.deepEqual([...inWrite.copies.get('k')], ['Object', 'w']);
   assert.deepEqual([...inWrite.copies.get('v')], ['Object', 'w']);
+  // Only the field after a dot is not a name: b alone is still read, so x is a copy of b.
+  const both = inputsAndCopies('function f(a, b) {\n  const x = a.b + b, y = { b: a.c };\n  return x + y;\n}\n', 3);
+  assert.deepEqual([...both.copies.get('x')].sort(), ['a', 'b']);
+  assert.deepEqual([...both.copies.get('y')], ['a']);
+  assert.deepEqual(keepTwins([{ used: 'x', twins: ['b'], values: [1, 2] }], both), []);
   // A file that does not parse leaves every twin in.
   assert.equal(inputsAndCopies('function (', 1), null);
   assert.deepEqual(keepTwins([twin], null), [twin]);

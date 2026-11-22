@@ -138,14 +138,17 @@ function patternNames(node) {
   }
 }
 
-// The names that an expression reads. A field name after a dot is not a name.
+// The names that an expression reads. A field name after a dot, and the key of an object
+// literal, are not names: only those nodes are left out, so `b` in `a.b + b` is still read.
 function namesIn(node) {
+  const fields = new Set();
+  walk(node, (inner) => {
+    if ((inner.type === 'MemberExpression' || inner.type === 'OptionalMemberExpression') && !inner.computed) fields.add(inner.property);
+    if ((inner.type === 'ObjectProperty' || inner.type === 'ObjectMethod') && !inner.computed && !inner.shorthand) fields.add(inner.key);
+  });
   const names = new Set();
   walk(node, (inner) => {
-    if (inner.type === 'Identifier') names.add(inner.name);
-  });
-  walk(node, (inner) => {
-    if ((inner.type === 'MemberExpression' || inner.type === 'OptionalMemberExpression') && !inner.computed && inner.property.type === 'Identifier' && !(inner.object.type === 'Identifier' && inner.object.name === inner.property.name)) names.delete(inner.property.name);
+    if (inner.type === 'Identifier' && !fields.has(inner)) names.add(inner.name);
   });
   return names;
 }
